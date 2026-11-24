@@ -17,7 +17,7 @@ public enum TrapLifecycleEngine {
         guard lastIdx >= 15 else { return [] }
 
         let atrSeries = TrendMomentumDetector.computeATR(candles: Array(candles[0...lastIdx]), period: 14)
-        let ema20Series = TrendMomentumDetector.computeEMA(values: (0...lastIdx).map(\.close), period: 20)
+        let ema20Series = TrendMomentumDetector.computeEMA(values: candles[0...lastIdx].map(\.close), period: 20)
         let lifetimeSeconds = lifetimeHours * 3_600.0
 
         var traps: [BehavioralTrap] = []
