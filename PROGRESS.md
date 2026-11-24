@@ -32,4 +32,9 @@
 
 ## Phase 5–7 — Institutional Liquid Glass UI, XcodeGen, Integration Tests & CI IPA Build (Completed)
 - Built `ConfluenceTheme` (Obsidian Terminal, AMOLED Vault, Porcelain Desk), 120Hz `MiniCandlestickCanvas`, lazy `FullScreenChartSheet` (`LightweightChartsIOS` 5.2.0), `SignalCardView` (`Pow` `.shine`/`.pulse`), 5 tabs (Signals, News & Macro, Markets & Scanner, Calibration Stats, 7-section Settings with `Developer : Bilal` & GitHub links), `ConfluenceRootView` (`PopupView`), `project.yml`, `ConfluenceTests`, and `.github/workflows/build-ipa.yml`.
-- Next: Push branch to GitHub and verify the real `macos-latest` CI workflow run end-to-end (unit tests, simulator tests, Release build, and unsigned `Confluence.ipa` artifact)!
+- **CI Verification (`macos-latest`, Run `45509159987`, commit `e398c38`) — PASSED 100%:**
+  - `afinfo` validated all 5 generated `.caf` alerts (`terminal_chime`, `sonar_pulse`, `vault_lock`, `trap_warning`, `news_release_ping`).
+  - `SignalEnginePackageTests`: **17/17 passed** (0 failures, 0.233s) covering prefix-invariance causality, closed-bar hygiene, OTC `nil` volume, crisis regime risk-reduce, 4-stage trap lifecycle, OKX `1Dutc` short-squeeze, CFTC COT Friday lag, `biquote.io` null-actual & non-exact timeMode guards, simultaneous macro clustering, 40-slot notification cap, Reflex AI code rule, Brier score, and walk-forward replay net of fees/slippage.
+  - `ConfluenceTests` (iOS Simulator, Swift 6 strict concurrency + `SWIFT_TREAT_WARNINGS_AS_ERRORS=YES`): **6/6 passed** (0 failures, 0.132s).
+  - Release `iphoneos` (`CODE_SIGNING_ALLOWED=NO`) compiled with zero warnings; verified `CFBundleIdentifier == com.bilal.confluence`, all 5 root `.caf` alerts, and `LightweightCharts_LightweightCharts.bundle/lightweight-charts.js`.
+  - Uploaded unsigned **`Confluence-unsigned-ipa`** (`3.3 MB`, Artifact ID `14974658207`, SHA256 `72bcd0fd6d20ffd42c8222777104410d39b6d1bb57c374ce3d1eaf1e8e450827`).
