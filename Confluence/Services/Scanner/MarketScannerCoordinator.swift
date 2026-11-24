@@ -30,7 +30,7 @@ public struct FeedHealthEntry: Identifiable, Sendable {
 public final class MarketScannerCoordinator {
     public static let backgroundTaskIdentifier = "com.bilal.confluence.refresh"
 
-    public let settings: AppSettingsStore
+    public var settings: AppSettingsStore
     public let store: ConfluenceDataStore
 
     private let http: URLSessionHTTPClient
