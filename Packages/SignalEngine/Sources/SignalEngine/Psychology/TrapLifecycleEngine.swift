@@ -34,7 +34,7 @@ public enum TrapLifecycleEngine {
 
             // 1. Transition all existing traps on bar `i` (strictly close-through invalidation)
             for idx in traps.indices {
-                var t = traps[idx]
+                let t = traps[idx]
                 guard t.state != .invalid else { continue }
                 guard i > t.triggerBarIndex else { continue }
 

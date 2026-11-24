@@ -93,7 +93,7 @@ private struct LightweightChartContainer: UIViewRepresentable {
         let gridHex: UInt32 = isDark ? 0x1B2230 : 0xE5E7EB
 
         let options = ChartOptions(
-            layout: LayoutOptions(
+            layout: LightweightCharts.LayoutOptions(
                 background: .solid(color: ChartColor(hex: bgHex)),
                 textColor: ChartColor(hex: textHex)
             ),
