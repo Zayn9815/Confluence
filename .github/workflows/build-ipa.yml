@@ -1,0 +1,108 @@
+name: Build Unsigned Confluence IPA
+
+on:
+  push:
+    branches: ["main", "feat/**"]
+    tags: ["v*"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-ipa:
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Verify Xcode & Generate Deterministic Assets/Sounds
+        run: |
+          xcodebuild -version
+          swift --version
+          python3 scripts/generate_sounds.py
+          python3 scripts/generate_assets.py
+          for f in Confluence/Resources/Sounds/*.caf; do
+            echo "Validating audio container: $f"
+            afinfo "$f"
+          done
+
+      - name: Run Pure Swift SignalEngine Unit & Walk-Forward Tests
+        run: |
+          swift test --package-path Packages/SignalEngine --enable-test-discovery
+
+      - name: Install XcodeGen & Generate Confluence.xcodeproj
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec project.yml
+
+      - name: Resolve SPM Dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Confluence.xcodeproj \
+            -scheme Confluence
+
+      - name: Run iOS App Integration Tests on Simulator
+        run: |
+          SIM_UDID=$(xcrun simctl list devices available iPhone --json | jq -r '[.devices[] | .[] | select(.isAvailable==true)] | first.udid')
+          echo "Using Simulator UDID: $SIM_UDID"
+          xcodebuild test \
+            -project Confluence.xcodeproj \
+            -scheme Confluence \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM=""
+
+      - name: Build Unsigned Release iphoneos App
+        run: |
+          xcodebuild build \
+            -project Confluence.xcodeproj \
+            -scheme Confluence \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM=""
+
+      - name: Verify App Bundle Integrity & Package Unsigned Confluence.ipa
+        run: |
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/Confluence.app"
+          test -d "$APP_PATH"
+          test -f "$APP_PATH/Confluence"
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist")
+          echo "Verified CFBundleIdentifier: $BUNDLE_ID"
+          test "$BUNDLE_ID" = "com.bilal.confluence"
+
+          for caf in terminal_chime.caf sonar_pulse.caf vault_lock.caf trap_warning.caf news_release_ping.caf; do
+            test -f "$APP_PATH/$caf" || { echo "Missing $caf in Confluence.app root!"; exit 1; }
+          done
+
+          echo "Checking LightweightCharts resources inside app bundle..."
+          find "$APP_PATH" -maxdepth 3 -iname "*lightweight*" -print
+
+          rm -rf build/Payload Confluence.ipa
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/Confluence.app
+          (cd build && zip -qry ../Confluence.ipa Payload)
+          ls -lh Confluence.ipa
+
+      - name: Upload Unsigned Confluence.ipa Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Confluence-unsigned-ipa
+          path: Confluence.ipa
+          retention-days: 30
+
+      - name: Attach Confluence.ipa to GitHub Release on Tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Confluence.ipa

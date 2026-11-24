@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://confluence.bilal/schemas/signal.schema.json",
+  "title": "TradeSignal",
+  "description": "Deterministic signal output with code-owned levels, confidence calibration, and behavioral psychology report.",
+  "type": "object",
+  "required": [
+    "id", "fingerprint", "symbol", "marketClass", "timeframe", "htfTimeframe",
+    "category", "direction", "tier", "confidencePercent", "regime", "riskState",
+    "generatedAtEpochSeconds", "barCloseEpochSeconds", "alignedStrategies",
+    "psychologyReport"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "fingerprint": { "type": "string" },
+    "symbol": { "type": "string" },
+    "marketClass": { "enum": ["crypto", "forex", "metals", "indices", "stocks"] },
+    "timeframe": { "enum": ["15m", "1h", "4h", "1d"] },
+    "htfTimeframe": { "enum": ["15m", "1h", "4h", "1d"] },
+    "category": { "enum": ["STRONG_SIGNAL", "WEAK_SIGNAL", "TRAP_ALERT"] },
+    "direction": { "enum": ["long", "short", "neutral"] },
+    "tier": { "enum": ["aPlusInstitutional", "highConviction", "aligned", "weakFiltered", "trapWarning"] },
+    "confidencePercent": { "type": "number", "minimum": 0, "maximum": 99 },
+    "regime": { "enum": ["trending", "meanReverting", "highVol", "crisis"] },
+    "riskState": { "enum": ["safe", "nearLimit", "reduce"] },
+    "killzone": { "enum": ["london", "newYork", "londonClose", "asian", "offSession"] },
+    "generatedAtEpochSeconds": { "type": "number" },
+    "barCloseEpochSeconds": { "type": "number" },
+    "levels": {
+      "type": ["object", "null"],
+      "required": ["entryLow", "entryHigh", "entryMid", "stopLoss", "tp1", "tp2", "riskPercent", "reward1Percent", "reward2Percent", "riskRewardRatio"],
+      "properties": {
+        "entryLow": { "type": "number" },
+        "entryHigh": { "type": "number" },
+        "entryMid": { "type": "number" },
+        "stopLoss": { "type": "number" },
+        "tp1": { "type": "number" },
+        "tp2": { "type": "number" },
+        "riskPercent": { "type": "number" },
+        "reward1Percent": { "type": "number" },
+        "reward2Percent": { "type": "number" },
+        "riskRewardRatio": { "type": "number" }
+      }
+    },
+    "alignedStrategies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "group", "direction", "weight", "historicalWinRate", "detail"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "group": { "enum": ["ictSmc", "candlestick", "trendMomentum", "behavioralTrap", "macroCatalyst"] },
+          "direction": { "enum": ["long", "short", "neutral"] },
+          "weight": { "type": "number" },
+          "historicalWinRate": { "type": "number" },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "rejectionReasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "psychologyReport": {
+      "type": "object",
+      "required": [
+        "signalCategory", "proDirection", "retailCrowdDirection",
+        "provenanceBadge", "whatHappened", "beginnerPsychology",
+        "proPsychology", "behavioralBadges"
+      ],
+      "properties": {
+        "signalCategory": { "enum": ["STRONG_SIGNAL", "WEAK_SIGNAL", "TRAP_ALERT"] },
+        "proDirection": { "enum": ["long", "short", "neutral"] },
+        "retailCrowdDirection": { "enum": ["long", "short", "neutral"] },
+        "provenanceBadge": { "type": "string" },
+        "whatHappened": { "type": "string" },
+        "beginnerPsychology": { "type": "string" },
+        "proPsychology": { "type": "string" },
+        "behavioralBadges": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://confluence.bilal/schemas/economic_event.schema.json",
+  "title": "EconomicEvent",
+  "description": "Causal macroeconomic release model with null-safe actuals and timeMode guards.",
+  "type": "object",
+  "required": ["semanticKey", "source", "countryCode", "currency", "name", "importance", "timeMode", "scheduledEpochSeconds", "supportsActualRelease"],
+  "properties": {
+    "semanticKey": { "type": "string" },
+    "source": { "enum": ["biquote", "forexFactory"] },
+    "eventId": { "type": ["string", "null"] },
+    "countryCode": { "type": "string" },
+    "currency": { "type": "string" },
+    "name": { "type": "string" },
+    "canonicalKey": { "type": ["string", "null"] },
+    "importance": { "enum": ["low", "medium", "high"] },
+    "timeMode": { "enum": ["exact", "date", "notime", "tentative"] },
+    "scheduledEpochSeconds": { "type": "number" },
+    "unit": { "type": ["string", "null"] },
+    "multiplier": { "type": ["string", "null"] },
+    "actual": { "type": ["number", "null"] },
+    "forecast": { "type": ["number", "null"] },
+    "previous": { "type": ["number", "null"] },
+    "revisedPrevious": { "type": ["number", "null"] },
+    "supportsActualRelease": { "type": "boolean" }
+  }
+}

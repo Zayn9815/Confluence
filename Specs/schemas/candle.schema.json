@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://confluence.bilal/schemas/candle.schema.json",
+  "title": "Candle",
+  "description": "Strictly causal, closed OHLCV bar shared between Swift SignalEngine and future Kotlin engine.",
+  "type": "object",
+  "required": ["openTimeEpochSeconds", "closeTimeEpochSeconds", "open", "high", "low", "close", "isClosed"],
+  "properties": {
+    "openTimeEpochSeconds": { "type": "number" },
+    "closeTimeEpochSeconds": { "type": "number" },
+    "open": { "type": "number", "exclusiveMinimum": 0 },
+    "high": { "type": "number", "exclusiveMinimum": 0 },
+    "low": { "type": "number", "exclusiveMinimum": 0 },
+    "close": { "type": "number", "exclusiveMinimum": 0 },
+    "volume": { "type": ["number", "null"], "minimum": 0 },
+    "isClosed": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

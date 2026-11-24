@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://confluence.bilal/schemas/reflex_judgment.schema.json",
+  "title": "ReflexJudgment",
+  "description": "Strict JSON schema returned by optional Gemini 4 Hydrogen second-opinion judge.",
+  "type": "object",
+  "required": ["regime", "direction", "setup_quality", "confidence", "risk_state", "agree", "catalyst_bias", "invalidation_check"],
+  "properties": {
+    "regime": { "enum": ["trending", "mean_reverting", "high_vol", "crisis"] },
+    "direction": { "enum": ["long", "short", "neutral"] },
+    "setup_quality": { "type": "integer", "minimum": 0, "maximum": 3 },
+    "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "risk_state": { "enum": ["safe", "near_limit", "reduce"] },
+    "agree": { "type": "boolean" },
+    "catalyst_bias": { "enum": ["bullish", "bearish", "neutral", "none"] },
+    "invalidation_check": { "type": "string", "maxLength": 220 }
+  },
+  "additionalProperties": false
+}
