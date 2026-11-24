@@ -114,7 +114,7 @@ public final class SignalSoundEngine {
                 let tap1 = CHHapticEvent(eventType: .hapticTransient, parameters: [intensity1, sharpness1], relativeTime: 0.0)
                 let tap2 = CHHapticEvent(eventType: .hapticTransient, parameters: [intensity2, sharpness2], relativeTime: 0.11)
                 let pattern = try CHHapticPattern(events: [tap1, tap2], parameters: [])
-                let player = try hapticEngine?.makePlayer(withPattern: pattern)
+                let player = try hapticEngine?.makePlayer(with: pattern)
                 try player?.start(atTime: 0)
                 return
             } catch {
