@@ -323,8 +323,8 @@ public actor LivePriceEngine {
             while !Task.isCancelled {
                 guard let self else { return }
                 let connectedAt = Date().timeIntervalSince1970
-                let ws = self.openBinanceSocket(url: url)
-                self.startBinancePingLoop(ws: ws)
+                let ws = await self.openBinanceSocket(url: url)
+                await self.startBinancePingLoop(ws: ws)
 
                 var failed = false
                 while !Task.isCancelled {
