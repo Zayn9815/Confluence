@@ -385,9 +385,11 @@ public actor OpenAICompatibleJudgeClient: AIJudgeClient {
         throw AIProviderError.blankResponse(provider: provider.displayName)
     }
 
-    private func sendHandling429(_ req: URLRequest) async throws -> HTTPResponse {
+    private func sendHandling429(_ req: URLRequest) async throws -> HTTPResponseData {
         do {
             return try await http.send(req, maxRetries: 1)
+        } catch NetworkAdapterError.rateLimited {
+            throw AIProviderError.rateLimited(provider: provider.displayName)
         } catch NetworkAdapterError.httpStatus(let code, _) where code == 429 {
             throw AIProviderError.rateLimited(provider: provider.displayName)
         }
