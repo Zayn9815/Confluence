@@ -54,8 +54,11 @@ public final class MarketScannerCoordinator {
     public var calendarSourceLabel: String = "Not Scanned Yet"
     public var breakingNews: [BreakingNewsItem] = []
     public var fearGreed: FearGreedSnapshot?
+    public var headlineCalibrationSummary: CalibrationSummary = PassiveOutcomeEvaluator.summarize(records: [], filter: .headlineFixed)
     public var calibrationSummary: CalibrationSummary = PassiveOutcomeEvaluator.summarize(records: [])
+    public var confidenceCalibrator: ConfidenceCalibrator = .inactive
     public var outcomeRecords: [SignalOutcomeRecord] = []
+    public var outcomeBySignalId: [String: SignalOutcomeRecord] = [:]
     public var strategyBreakdowns: [StrategyDiagnosticBreakdown] = []
     public var tradeLedger: [TradeLedgerSnapshot] = []
     public var trapLogs: [TrapLogSnapshot] = []
@@ -137,7 +140,8 @@ public final class MarketScannerCoordinator {
         }
     }
 
-    /// Recomputes Calibration KPIs & per-strategy rankings immediately using active Settings calibration rules.
+    /// Recomputes Calibration KPIs (fixed headline + active custom filter), display-only Platt calibrator,
+    /// and per-strategy rankings immediately.
     public func recomputeCalibration() {
         let filter = settings.buildCalibrationFilterConfig()
         let signalsByFP = store.fetchSignalsByFingerprint(limit: 500)
@@ -164,11 +168,18 @@ public final class MarketScannerCoordinator {
                 timeframe: rec.timeframe ?? sig?.timeframe,
                 dataProvider: rec.dataProvider ?? sig?.dataProvider,
                 riskRewardRatio: rec.riskRewardRatio ?? sig?.levels?.riskRewardRatio,
-                entryBarCloseEpochSeconds: rec.entryBarCloseEpochSeconds ?? sig?.barCloseEpochSeconds
+                entryBarCloseEpochSeconds: rec.entryBarCloseEpochSeconds ?? sig?.barCloseEpochSeconds,
+                lifecycleStatus: rec.lifecycleStatus,
+                filledAtEpochSeconds: rec.filledAtEpochSeconds,
+                fillWindowBars: rec.fillWindowBars,
+                isLegacyImmediateFill: rec.isLegacyImmediateFill
             )
         }
+        self.confidenceCalibrator = ConfidenceCalibrator.fit(records: enriched, filter: .headlineFixed)
+        self.headlineCalibrationSummary = PassiveOutcomeEvaluator.summarize(records: enriched, filter: .headlineFixed)
         self.calibrationSummary = PassiveOutcomeEvaluator.summarize(records: enriched, filter: filter)
         self.strategyBreakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: enriched, filter: filter)
+        self.outcomeBySignalId = Dictionary(uniqueKeysWithValues: enriched.map { ($0.signalId, $0) })
     }
 
     // MARK: - Notification Bell Inbox
@@ -282,7 +293,7 @@ public final class MarketScannerCoordinator {
         }
 
         let assets = settings.activeWatchlistAssets
-        let twelveKey = await KeychainStore.shared.readEffectiveTwelveDataKey()
+        let twelveKey = await KeychainStore.shared.read(.twelveDataAPIKey)
         let finnhubKey = await KeychainStore.shared.read(.finnhubAPIKey)
         let geminiKey = await KeychainStore.shared.read(.geminiAPIKey)
 
@@ -516,6 +527,12 @@ public final class MarketScannerCoordinator {
                             continue
                         }
 
+                        // Display-only Platt probability (never alters raw confidencePercent or gating!)
+                        if confidenceCalibrator.isActive,
+                           let calProb = confidenceCalibrator.calibratedProbability(forRawScore: signal.confidencePercent) {
+                            signal = signal.withCalibratedProbability(calProb, sampleCount: confidenceCalibrator.sampleCount)
+                        }
+
                         let isNew = !ConfluenceScorer.shouldSuppressDuplicate(
                             fingerprint: signal.fingerprint,
                             symbol: signal.symbol,
@@ -563,8 +580,12 @@ public final class MarketScannerCoordinator {
         }
 
         // 4. Passively evaluate prior signals strictly against sanitized closed candles (zero lookahead)
+        let existingOutcomesById = Dictionary(uniqueKeysWithValues: store.fetchOutcomeRecords().map { ($0.signalId, $0) })
         let persisted = store.fetchSignals(limit: 200)
         for prior in persisted where prior.category == .strongSignal || prior.category == .trapAlert {
+            if let existing = existingOutcomesById[prior.fingerprint], existing.isTerminal {
+                continue
+            }
             guard let freshBars = sanitizedClosedBySymbol[prior.symbol], !freshBars.isEmpty else { continue }
             let outcome = PassiveOutcomeEvaluator.evaluate(signal: prior, subsequentClosedCandles: freshBars)
             if outcome.status != .pending {
@@ -659,7 +680,7 @@ public final class MarketScannerCoordinator {
 
         let entryTF = settings.payload.entryTimeframe
         let htfTF = settings.payload.htfTimeframe
-        let twelveKey = await KeychainStore.shared.readEffectiveTwelveDataKey()
+        let twelveKey = await KeychainStore.shared.read(.twelveDataAPIKey)
 
         var entryCandles: [Candle] = []
         var htfCandles: [Candle] = []
@@ -834,12 +855,15 @@ public final class MarketScannerCoordinator {
                 case .hitTP1: status = .tp1Win
                 case .hitSL: status = .slLoss
                 case .expired: status = .expired
-                case .pending: status = .open
+                case .notFilled: status = .notFilled
+                case .invalidated: status = .invalidated
+                case .open: status = .open
+                case .pending: status = .pending
                 }
             } else if let l = ledger {
                 status = l.status
             } else {
-                status = .open
+                status = .pending
             }
 
             let symbol = sig?.symbol ?? ledger?.symbol ?? outcome?.symbol ?? ""
@@ -936,7 +960,7 @@ public final class MarketScannerCoordinator {
         guard let asset = WatchlistDefaults.descriptor(for: symbol) else {
             throw NetworkAdapterError.decodingFailed("Unknown symbol \(symbol)")
         }
-        let twelveKey = await KeychainStore.shared.readEffectiveTwelveDataKey()
+        let twelveKey = await KeychainStore.shared.read(.twelveDataAPIKey)
         let logHook: ProviderLogHook = { [weak self] sev, cat, msg in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -1022,7 +1046,7 @@ public final class MarketScannerCoordinator {
         twelveDataTestMessage = nil
         defer { isTestingTwelveData = false }
 
-        guard let key = await KeychainStore.shared.readEffectiveTwelveDataKey(), !key.isEmpty else {
+        guard let key = await KeychainStore.shared.read(.twelveDataAPIKey), !key.isEmpty else {
             twelveDataTestMessage = "No Twelve Data API key saved."
             return
         }
@@ -1050,7 +1074,7 @@ public final class MarketScannerCoordinator {
         var results: [FeedHealthEntry] = []
         let btc = WatchlistDefaults.descriptor(for: "BTC/USDT")!
         let gold = WatchlistDefaults.descriptor(for: "XAU/USD")!
-        let twelveKey = await KeychainStore.shared.readEffectiveTwelveDataKey()
+        let twelveKey = await KeychainStore.shared.read(.twelveDataAPIKey)
 
         // 1. Crypto OHLCV
         do {

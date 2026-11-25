@@ -34,6 +34,19 @@
   - Respect iOS's 64-notification queue limit by capping pre-news notifications at a strict 40-slot budget (`confluence.prenews.*`).
 - **OKX OI UTC Alignment:** Always request `period=1Dutc` (never `1D`) for daily OI bars; respect 1,440-point cap.
 - **CFTC COT Lookahead Guard:** COT Tuesday snapshots are only observable after Friday 20:30 UTC release.
+- **Zero Build-Time Secret Injection:** Never inject API keys into `Info.plist` or the `.ipa` bundle. All optional user keys (Twelve Data, Gemini, Finnhub) come exclusively from user entry in `KeychainStore`. CI (`build-ipa.yml`) and Simulator tests fail if built `Info.plist` contains `ConfluenceDefaultTwelveDataKey` or any key-like string.
+- **DST-Correct Sessions & Algorithmic Market Holidays (`MarketHolidayCalendar`):**
+  - Killzones anchor strictly to `Europe/London` (London `07:00–10:00`), `America/New_York` (NY `07:00–10:00`, London Close `10:00–12:00`), and `UTC` (Asian `00:00–07:00`, yielding `06:00 UTC` to London during BST).
+  - Algorithmic NYSE full holidays + 13:00 ET early closes (Gregorian Easter / Good Friday + weekend observance rules). Index CFDs (`US500`, `NAS100`) and Metals (`XAU/USD`) treat Good Friday, Christmas, and New Year's Day as closed, and US early closes as closed/limited after 13:00 ET.
+- **Signal Fill Lifecycle & Pessimistic Same-Bar Resolution (`PassiveOutcomeEvaluator`):**
+  - Signals start `.pending` and must intersect `[entryLow, entryHigh]` within the timeframe fill window (`15m: 16`, `1H: 12`, `4H: 6`, `1D: 3` bars). Pre-fill close beyond SL or TP1 touch without fill marks `.invalidated`; fill-window expiry marks `.notFilled`. Both are excluded from the headline Win Rate denominator.
+  - **Fill-Bar Rule:** On the fill bar itself, check **SL only** (pessimistic). TP1/TP2 checks begin strictly on the **next closed bar**.
+  - **Same-Bar Post-Fill Rule:** If a subsequent bar touches both SL and TP, resolve pessimistically as **SL first** (unless TP1 was already hit on a strictly earlier bar).
+  - Pre-v1.4 records lacking `lifecycleStatus` decode as `legacy-immediate-fill` and are excluded from the fixed v1.4 headline Win Rate (`CalibrationFilterConfig.headlineFixed`).
+- **Score Honesty & Display-Only Calibration (`ConfidenceCalibrator`):**
+  - Raw confluence scores (`0–100`) are labeled `Score` (not win probability) until `N >= 100` resolved filled trades activate walk-forward Platt scaling.
+  - The `minimumConfidencePercent` gate ALWAYS evaluates the **RAW score**; calibrated probability is strictly display-only.
+  - Every Win Rate displays sample size `n` and exact **Wilson 95% CI**.
 
 ## 4. Swift 6, Dependencies & Battery Discipline
 - Enable Swift 6 strict concurrency and warnings-as-errors on `SignalEngine` and `Confluence` app targets.

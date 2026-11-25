@@ -143,6 +143,7 @@ public struct SignalsTabView: View {
                                     let isRowSelected = selectedFingerprints.contains(sig.fingerprint)
                                     SignalCardView(
                                         signal: sig,
+                                        outcome: coordinator.outcomeBySignalId[sig.fingerprint],
                                         palette: palette,
                                         density: coordinator.settings.payload.cardDensity,
                                         showMiniChart: coordinator.settings.payload.showMiniCharts,

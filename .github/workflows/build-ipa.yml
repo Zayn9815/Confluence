@@ -60,13 +60,7 @@ jobs:
             DEVELOPMENT_TEAM=""
 
       - name: Build Unsigned Release iphoneos App
-        env:
-          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
         run: |
-          if [ -n "$TWELVE_DATA_API_KEY" ]; then
-            /usr/libexec/PlistBuddy -c "Delete :ConfluenceDefaultTwelveDataKey" Confluence/Resources/Info.plist 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add :ConfluenceDefaultTwelveDataKey string $TWELVE_DATA_API_KEY" Confluence/Resources/Info.plist
-          fi
           xcodebuild build \
             -project Confluence.xcodeproj \
             -scheme Confluence \
@@ -86,6 +80,18 @@ jobs:
           BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist")
           echo "Verified CFBundleIdentifier: $BUNDLE_ID"
           test "$BUNDLE_ID" = "com.bilal.confluence"
+
+          echo "Running built Info.plist secret leak guard..."
+          PLIST_XML=$(plutil -convert xml1 -o - "$APP_PATH/Info.plist")
+          if echo "$PLIST_XML" | grep -q "ConfluenceDefaultTwelveDataKey"; then
+            echo "FAIL: Built Info.plist contains forbidden ConfluenceDefaultTwelveDataKey!"
+            exit 1
+          fi
+          if echo "$PLIST_XML" | grep -Eq "<string>(AIza[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z_-]{20,}|[0-9a-fA-F]{32,})</string>"; then
+            echo "FAIL: Built Info.plist contains a secret/API-key-like string!"
+            exit 1
+          fi
+          echo "Verified built Info.plist contains zero embedded API keys."
 
           for caf in terminal_chime.caf sonar_pulse.caf vault_lock.caf trap_warning.caf news_release_ping.caf; do
             test -f "$APP_PATH/$caf" || { echo "Missing $caf in Confluence.app root!"; exit 1; }

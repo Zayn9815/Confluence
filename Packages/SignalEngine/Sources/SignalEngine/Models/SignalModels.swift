@@ -258,7 +258,12 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
     public let aiConfirmed: Bool
     public let dataProvider: String
     public let isMarketClosedSnapshot: Bool
+    public let marketClosedReason: String?
     public let strengthBreakdown: SignalStrengthBreakdown?
+    /// Display-only Platt-calibrated win probability (nil until >= 100 resolved filled trades).
+    /// NEVER replaces `confidencePercent` in the `minimumConfidencePercent` gate.
+    public let calibratedProbability: Double?
+    public let calibrationSampleCount: Int?
 
     public init(
         id: String,
@@ -291,7 +296,10 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         aiConfirmed: Bool = false,
         dataProvider: String,
         isMarketClosedSnapshot: Bool = false,
-        strengthBreakdown: SignalStrengthBreakdown? = nil
+        marketClosedReason: String? = nil,
+        strengthBreakdown: SignalStrengthBreakdown? = nil,
+        calibratedProbability: Double? = nil,
+        calibrationSampleCount: Int? = nil
     ) {
         self.id = id
         self.fingerprint = fingerprint
@@ -323,7 +331,58 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         self.aiConfirmed = aiConfirmed
         self.dataProvider = dataProvider
         self.isMarketClosedSnapshot = isMarketClosedSnapshot
+        self.marketClosedReason = marketClosedReason
         self.strengthBreakdown = strengthBreakdown
+        self.calibratedProbability = calibratedProbability
+        self.calibrationSampleCount = calibrationSampleCount
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, fingerprint, symbol, displayName, marketClass, timeframe, htfTimeframe
+        case category, direction, trapDirection, tier, confidencePercent, regime, riskState
+        case killzone, htfBias, generatedAtEpochSeconds, barCloseEpochSeconds, levels
+        case alignedStrategies, rejectionReasons, psychologyReport, preNewsBadge
+        case postNewsCatalystBadge, overlays, recentCandles, aiJudgment, aiConfirmed
+        case dataProvider, isMarketClosedSnapshot, marketClosedReason, strengthBreakdown
+        case calibratedProbability, calibrationSampleCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        fingerprint = try c.decode(String.self, forKey: .fingerprint)
+        symbol = try c.decode(String.self, forKey: .symbol)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        marketClass = try c.decode(MarketClass.self, forKey: .marketClass)
+        timeframe = try c.decode(Timeframe.self, forKey: .timeframe)
+        htfTimeframe = try c.decode(Timeframe.self, forKey: .htfTimeframe)
+        category = try c.decode(SignalCategory.self, forKey: .category)
+        direction = try c.decode(TradeDirection.self, forKey: .direction)
+        trapDirection = try c.decodeIfPresent(TrapDirection.self, forKey: .trapDirection)
+        tier = try c.decode(SignalTier.self, forKey: .tier)
+        confidencePercent = try c.decode(Double.self, forKey: .confidencePercent)
+        regime = try c.decode(MarketRegime.self, forKey: .regime)
+        riskState = try c.decode(RiskState.self, forKey: .riskState)
+        killzone = try c.decode(KillzoneSession.self, forKey: .killzone)
+        htfBias = try c.decode(TradeDirection.self, forKey: .htfBias)
+        generatedAtEpochSeconds = try c.decode(TimeInterval.self, forKey: .generatedAtEpochSeconds)
+        barCloseEpochSeconds = try c.decode(TimeInterval.self, forKey: .barCloseEpochSeconds)
+        levels = try c.decodeIfPresent(TradeLevels.self, forKey: .levels)
+        alignedStrategies = (try? c.decodeIfPresent([StrategyContribution].self, forKey: .alignedStrategies)) ?? []
+        rejectionReasons = (try? c.decodeIfPresent([String].self, forKey: .rejectionReasons)) ?? []
+        psychologyReport = try c.decode(PsychologyReport.self, forKey: .psychologyReport)
+        preNewsBadge = try c.decodeIfPresent(String.self, forKey: .preNewsBadge)
+        postNewsCatalystBadge = try c.decodeIfPresent(String.self, forKey: .postNewsCatalystBadge)
+        overlays = (try? c.decodeIfPresent(ChartOverlayData.self, forKey: .overlays)) ?? ChartOverlayData()
+        recentCandles = (try? c.decodeIfPresent([Candle].self, forKey: .recentCandles)) ?? []
+        aiJudgment = try c.decodeIfPresent(ReflexJudgment.self, forKey: .aiJudgment)
+        aiConfirmed = (try? c.decodeIfPresent(Bool.self, forKey: .aiConfirmed)) ?? false
+        dataProvider = try c.decode(String.self, forKey: .dataProvider)
+        isMarketClosedSnapshot = (try? c.decodeIfPresent(Bool.self, forKey: .isMarketClosedSnapshot)) ?? false
+        marketClosedReason = try c.decodeIfPresent(String.self, forKey: .marketClosedReason)
+        strengthBreakdown = try c.decodeIfPresent(SignalStrengthBreakdown.self, forKey: .strengthBreakdown)
+        calibratedProbability = try c.decodeIfPresent(Double.self, forKey: .calibratedProbability)
+        calibrationSampleCount = try c.decodeIfPresent(Int.self, forKey: .calibrationSampleCount)
     }
 
     public func withAIJudgment(_ judgment: ReflexJudgment, threshold: Double) -> TradeSignal {
@@ -358,7 +417,50 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             aiConfirmed: judgment.isConfirmedByCodeRule(minimumConfidence: threshold),
             dataProvider: dataProvider,
             isMarketClosedSnapshot: isMarketClosedSnapshot,
-            strengthBreakdown: strengthBreakdown
+            marketClosedReason: marketClosedReason,
+            strengthBreakdown: strengthBreakdown,
+            calibratedProbability: calibratedProbability,
+            calibrationSampleCount: calibrationSampleCount
+        )
+    }
+
+    /// Attaches display-only calibrated probability without altering raw `confidencePercent`, `category`, or gating.
+    public func withCalibratedProbability(_ probability: Double?, sampleCount: Int?) -> TradeSignal {
+        TradeSignal(
+            id: id,
+            fingerprint: fingerprint,
+            symbol: symbol,
+            displayName: displayName,
+            marketClass: marketClass,
+            timeframe: timeframe,
+            htfTimeframe: htfTimeframe,
+            category: category,
+            direction: direction,
+            trapDirection: trapDirection,
+            tier: tier,
+            confidencePercent: confidencePercent,
+            regime: regime,
+            riskState: riskState,
+            killzone: killzone,
+            htfBias: htfBias,
+            generatedAtEpochSeconds: generatedAtEpochSeconds,
+            barCloseEpochSeconds: barCloseEpochSeconds,
+            levels: levels,
+            alignedStrategies: alignedStrategies,
+            rejectionReasons: rejectionReasons,
+            psychologyReport: psychologyReport,
+            preNewsBadge: preNewsBadge,
+            postNewsCatalystBadge: postNewsCatalystBadge,
+            overlays: overlays,
+            recentCandles: recentCandles,
+            aiJudgment: aiJudgment,
+            aiConfirmed: aiConfirmed,
+            dataProvider: dataProvider,
+            isMarketClosedSnapshot: isMarketClosedSnapshot,
+            marketClosedReason: marketClosedReason,
+            strengthBreakdown: strengthBreakdown,
+            calibratedProbability: probability,
+            calibrationSampleCount: sampleCount
         )
     }
 

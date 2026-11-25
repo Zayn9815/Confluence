@@ -45,7 +45,7 @@ public struct StrategyTradesView: View {
             case .all: return true
             case .wins: return trade.status.isWin
             case .losses: return trade.status.isLoss
-            case .open: return trade.status == .open
+            case .open: return trade.status.isActive
             }
         }
     }
@@ -128,14 +128,21 @@ public struct StrategyTradesView: View {
         case .all: return allTrades.count
         case .wins: return allTrades.filter { $0.status.isWin }.count
         case .losses: return allTrades.filter { $0.status.isLoss }.count
-        case .open: return allTrades.filter { $0.status == .open }.count
+        case .open: return allTrades.filter { $0.status.isActive }.count
         }
     }
 
     private func strategySummaryHeader(_ s: StrategyDiagnosticBreakdown) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                statPill("WIN RATE", "\(Int((s.winRate * 100).rounded()))%", s.winRate >= 0.5 ? palette.longEmerald : palette.shortCrimson)
+                let wrText: String = {
+                    let pct = "\(Int((s.winRate * 100).rounded()))%"
+                    if let ci = s.winRateCI {
+                        return "\(pct) (\(ci.percentRangeLabel))"
+                    }
+                    return pct
+                }()
+                statPill("WIN RATE (95% CI)", wrText, s.winRate >= 0.5 ? palette.longEmerald : palette.shortCrimson)
                 statPill("EXPECTANCY", String(format: "%+.2fR", s.expectancyR), s.expectancyR >= 0 ? palette.champagneGold : palette.shortCrimson)
                 statPill("RECORD", "\(s.wins)W / \(s.losses)L", palette.primaryInk)
                 statPill("BRIER", String(format: "%.3f", s.brierContribution), palette.macroIceBlue)
@@ -167,6 +174,8 @@ public struct StrategyTradesView: View {
             Text(value)
                 .font(.caption.weight(.bold).monospacedDigit())
                 .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -223,12 +232,12 @@ public struct StrategyTradesView: View {
                     }
                 }
 
-                // Footer: Net R, Confidence %, Entry/Exit UTC, Replay cue
+                // Footer: Net R, Score, Entry/Exit UTC, Replay cue
                 HStack(spacing: 8) {
                     Text(String(format: "%+.2fR", trade.netRMultiple))
                         .font(.caption.weight(.bold).monospacedDigit())
                         .foregroundStyle(trade.netRMultiple >= 0 ? palette.longEmerald : palette.shortCrimson)
-                    Text("· \(Int(trade.confidencePercent.rounded()))%")
+                    Text("· Score \(Int(trade.confidencePercent.rounded()))")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(palette.secondaryInk)
                     Text("· In \(formatUTC(trade.entryEpochSeconds))")
@@ -272,7 +281,9 @@ public struct StrategyTradesView: View {
         case .tp1Win, .tp2Win: return palette.longEmerald
         case .slLoss: return palette.shortCrimson
         case .open: return palette.champagneGold
-        case .expired: return palette.tertiaryInk
+        case .pending: return palette.macroIceBlue
+        case .invalidated: return palette.trapAmber
+        case .notFilled, .expired: return palette.tertiaryInk
         }
     }
 

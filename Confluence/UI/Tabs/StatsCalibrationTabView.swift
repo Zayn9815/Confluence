@@ -11,48 +11,124 @@ public struct StatsCalibrationTabView: View {
     }
 
     public var body: some View {
-        let stats = coordinator.calibrationSummary
+        let headline = coordinator.headlineCalibrationSummary
+        let custom = coordinator.calibrationSummary
         let filterConfig = coordinator.settings.buildCalibrationFilterConfig()
+        let hasCustomFilterDiff = (
+            filterConfig.winDefinition != CalibrationFilterConfig.headlineFixed.winDefinition ||
+            filterConfig.categoryScope != CalibrationFilterConfig.headlineFixed.categoryScope ||
+            filterConfig.minimumConfidencePercent > 0 ||
+            filterConfig.minimumRiskReward > 0
+        )
 
-        let winBreakdownSub: String = {
+        let headlineBreakdownSub = "\(headline.tp1Hits) TP1 · \(headline.tp2Hits) TP2 · \(headline.slHits) SL"
+        let customBreakdownSub: String = {
             if filterConfig.winDefinition == .tp2Only {
-                if stats.tp1PartialsExcluded > 0 {
-                    return "\(stats.tp2Hits) TP2 · \(stats.slHits) SL (\(stats.tp1PartialsExcluded) TP1 Partial)"
+                if custom.tp1PartialsExcluded > 0 {
+                    return "\(custom.tp2Hits) TP2 · \(custom.slHits) SL (\(custom.tp1PartialsExcluded) TP1 Partial)"
                 }
-                return "\(stats.tp2Hits) TP2 · \(stats.slHits) SL"
+                return "\(custom.tp2Hits) TP2 · \(custom.slHits) SL"
             }
-            return "\(stats.tp1Hits) TP1 · \(stats.tp2Hits) TP2 · \(stats.slHits) SL"
+            return "\(custom.tp1Hits) TP1 · \(custom.tp2Hits) TP2 · \(custom.slHits) SL"
         }()
 
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
-                    // 1. Headline Calibration KPI Grid (strictly real passive outcomes — zero fabricated numbers)
+                    // 1. Fixed Un-Cherry-Pickable Headline Calibration KPI Grid (Strong · TP1/TP2 · Filled v1.4+)
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                        winRateKPICard(
-                            value: stats.resolvedSignals > 0 ? "\(Int((stats.winRate * 100).rounded()))%" : "—",
-                            breakdown: winBreakdownSub,
-                            filterSummary: filterConfig.summarySubtitle,
-                            accent: stats.winRate >= 0.5 ? palette.longEmerald : palette.champagneGold
+                        headlineWinRateKPICard(
+                            summary: headline,
+                            breakdown: headlineBreakdownSub,
+                            accent: headline.winRate >= 0.5 ? palette.longEmerald : palette.champagneGold
                         )
                         kpiCard(
                             title: "BRIER SCORE",
-                            value: stats.resolvedSignals > 0 ? String(format: "%.3f", stats.brierScore) : "—",
-                            sub: "Lower is better (<0.20 calibrated)",
+                            value: headline.resolvedSignals > 0 ? String(format: "%.3f", headline.brierScore) : "—",
+                            sub: headline.isCalibrationActive
+                                ? "Platt active (n=\(headline.calibrationSampleCount))"
+                                : "Raw score (\(headline.calibrationSampleCount)/\(ConfidenceCalibrator.minimumSamples) to calibrate)",
                             accent: palette.macroIceBlue
                         )
                         kpiCard(
                             title: "EXPECTANCY (NET R)",
-                            value: stats.resolvedSignals > 0 ? String(format: "%+.2fR", stats.expectancyR) : "—",
-                            sub: "Net of asset-class cost bps",
-                            accent: stats.expectancyR >= 0 ? palette.longEmerald : palette.shortCrimson
+                            value: headline.resolvedSignals > 0 ? String(format: "%+.2fR", headline.expectancyR) : "—",
+                            sub: "Filled Strong · net of cost bps",
+                            accent: headline.expectancyR >= 0 ? palette.longEmerald : palette.shortCrimson
                         )
                         kpiCard(
                             title: "TRAP / MACRO HIT",
-                            value: stats.trapAccuracy.map { "\(Int(($0 * 100).rounded()))%" } ?? "—",
-                            sub: "Macro: \(stats.macroCatalystHitRate.map { "\(Int(($0 * 100).rounded()))%" } ?? "N/A")",
+                            value: headline.trapAccuracy.map { "\(Int(($0 * 100).rounded()))%" } ?? "—",
+                            sub: "Macro: \(headline.macroCatalystHitRate.map { "\(Int(($0 * 100).rounded()))%" } ?? "N/A")",
                             accent: palette.trapAmber
                         )
+                    }
+
+                    // Lifecycle & Legacy Transparency Strip
+                    if headline.notFilledCount > 0 || headline.invalidatedCount > 0 || headline.openCount > 0 || headline.legacyExcludedCount > 0 {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "checkmark.shield")
+                                    .font(.caption)
+                                    .foregroundStyle(palette.macroIceBlue)
+                                Text("Fill Lifecycle Transparency")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(palette.primaryInk)
+                                Spacer()
+                                if headline.openCount > 0 {
+                                    Text("\(headline.openCount) Open")
+                                        .font(.caption2.weight(.semibold).monospacedDigit())
+                                        .foregroundStyle(palette.champagneGold)
+                                }
+                            }
+                            Text("Not filled: \(headline.notFilledCount) · Invalidated before fill: \(headline.invalidatedCount) (excluded from Win Rate denominator)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(palette.secondaryInk)
+                            if headline.legacyExcludedCount > 0 {
+                                Text("Excludes \(headline.legacyExcludedCount) pre-v1.4 legacy-immediate-fill trade(s) from the headline Win Rate.")
+                                    .font(.caption2)
+                                    .foregroundStyle(palette.trapAmber)
+                            }
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .institutionalCard(palette: palette)
+                    }
+
+                    // Optional Custom View (Filtered) card when user configured non-headline custom rules
+                    if hasCustomFilterDiff {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("CUSTOM VIEW (FILTERED)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(palette.champagneGold)
+                                Spacer()
+                                Text(filterConfig.summarySubtitle)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(palette.secondaryInk)
+                                    .lineLimit(1)
+                            }
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(custom.resolvedSignals > 0 ? "\(Int((custom.winRate * 100).rounded()))%" : "—")
+                                    .font(.title3.weight(.bold).monospacedDigit())
+                                    .foregroundStyle(custom.winRate >= 0.5 ? palette.longEmerald : palette.shortCrimson)
+                                if let ci = custom.winRateCI {
+                                    Text("95% CI \(ci.formattedSummary)")
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(palette.secondaryInk)
+                                }
+                                Spacer()
+                                Text(custom.resolvedSignals > 0 ? String(format: "%+.2fR", custom.expectancyR) : "—")
+                                    .font(.caption.weight(.bold).monospacedDigit())
+                                    .foregroundStyle(custom.expectancyR >= 0 ? palette.champagneGold : palette.shortCrimson)
+                            }
+                            Text("\(customBreakdownSub) · Headline record above remains fixed to Strong · TP1/TP2 · Filled v1.4+.")
+                                .font(.caption2)
+                                .foregroundStyle(palette.tertiaryInk)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .institutionalCard(palette: palette, accentBorder: palette.champagneGold.opacity(0.45))
                     }
 
                     // 2. Interactive Per-Strategy Reliability Ranking -> Strategy Trades -> Chart Replay
@@ -62,19 +138,19 @@ public struct StatsCalibrationTabView: View {
                                 .font(.subheadline.weight(.bold))
                                 .foregroundStyle(palette.primaryInk)
                             Spacer()
-                            if !stats.strategyRankings.isEmpty {
+                            if !custom.strategyRankings.isEmpty {
                                 Text("Tap to replay")
                                     .font(.caption2.weight(.medium))
                                     .foregroundStyle(palette.tertiaryInk)
                             }
                         }
 
-                        if stats.strategyRankings.isEmpty {
-                            Text("No resolved passive outcomes match your active Win-Rate rules yet. As subsequent closed candles hit TP1, TP2, or SL on recorded signals, tap any strategy here to inspect and replay its trades.")
+                        if custom.strategyRankings.isEmpty {
+                            Text("No resolved passive outcomes match yet. Signals must first touch their Entry Zone within the fill window, then hit TP1, TP2, or SL on subsequent closed bars.")
                                 .font(.caption)
                                 .foregroundStyle(palette.secondaryInk)
                         } else {
-                            ForEach(stats.strategyRankings) { item in
+                            ForEach(custom.strategyRankings) { item in
                                 let prettyName = item.strategyId.replacingOccurrences(of: "_", with: " ").capitalized
                                 NavigationLink {
                                     StrategyTradesView(
@@ -90,9 +166,11 @@ public struct StatsCalibrationTabView: View {
                                                 .font(.caption.weight(.semibold))
                                                 .foregroundStyle(palette.primaryInk)
                                                 .lineLimit(1)
-                                            Text("\(item.wins)/\(item.totalResolved) wins")
+                                            let ciText = item.winRateCI.map { " · CI \($0.percentRangeLabel)" } ?? ""
+                                            Text("\(item.wins)/\(item.totalResolved) wins (n=\(item.totalResolved))\(ciText)")
                                                 .font(.caption2.monospacedDigit())
                                                 .foregroundStyle(palette.tertiaryInk)
+                                                .lineLimit(1)
                                         }
                                         Spacer()
                                         VStack(alignment: .trailing, spacing: 2) {
@@ -117,22 +195,29 @@ public struct StatsCalibrationTabView: View {
                     .padding(14)
                     .institutionalCard(palette: palette)
 
-                    // 3. Per-Market Breakdown
+                    // 3. Per-Market Breakdown (Headline Filled Outcomes + Wilson 95% CI)
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Per-Market Breakdown")
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(palette.primaryInk)
 
                         ForEach(MarketClass.allCases, id: \.self) { market in
-                            let rate = stats.marketBreakdown[market]
+                            let mStat = headline.marketStats[market]
                             HStack {
                                 Text(market.displayName)
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(palette.primaryInk)
                                 Spacer()
-                                Text(rate.map { "\(Int(($0 * 100).rounded()))% Win Rate" } ?? "Awaiting Closed Outcomes")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(rate != nil ? palette.longEmerald : palette.tertiaryInk)
+                                if let stat = mStat {
+                                    let ciText = stat.winRateCI.map { " \($0.formattedSummary)" } ?? " (n=\(stat.resolvedCount))"
+                                    Text("\(Int((stat.winRate * 100).rounded()))%\(ciText)")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(stat.winRate >= 0.5 ? palette.longEmerald : palette.shortCrimson)
+                                } else {
+                                    Text("Awaiting Filled Outcomes")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(palette.tertiaryInk)
+                                }
                             }
                             .padding(.vertical, 4)
                         }
@@ -169,19 +254,28 @@ public struct StatsCalibrationTabView: View {
         }
     }
 
-    private func winRateKPICard(value: String, breakdown: String, filterSummary: String, accent: Color) -> some View {
+    private func headlineWinRateKPICard(summary: CalibrationSummary, breakdown: String, accent: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("RESOLVED WIN RATE")
+            Text("HEADLINE WIN RATE")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(palette.tertiaryInk)
-            Text(value)
-                .font(.title2.weight(.bold).monospacedDigit())
-                .foregroundStyle(accent)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(summary.resolvedSignals > 0 ? "\(Int((summary.winRate * 100).rounded()))%" : "—")
+                    .font(.title2.weight(.bold).monospacedDigit())
+                    .foregroundStyle(accent)
+                if let ci = summary.winRateCI {
+                    Text(ci.formattedSummary)
+                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(palette.secondaryInk)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
             Text(breakdown)
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(palette.secondaryInk)
                 .lineLimit(2)
-            Text(filterSummary)
+            Text("Fixed: Strong · TP1/TP2 · Filled")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(palette.champagneGold)
                 .lineLimit(1)

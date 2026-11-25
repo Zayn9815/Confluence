@@ -59,7 +59,7 @@ public enum TradeReplayMarkerBuilder {
         }
 
         if let exitTS = trade.exitEpochSeconds,
-           trade.status != .open,
+           !trade.status.isActive,
            let exitBar = snapCandle(forCloseEpoch: exitTS) {
             hasExit = true
             let isLong = (trade.direction == .long)
@@ -106,14 +106,34 @@ public enum TradeReplayMarkerBuilder {
                     text: "EXPIRED",
                     size: 1.2
                 )
-            case .open:
+            case .notFilled:
+                exitMarker = SeriesMarker(
+                    time: .utc(timestamp: exitBar.openTimeEpochSeconds),
+                    position: .aboveBar,
+                    shape: .square,
+                    color: ChartColor(hex: 0x9CA7BA),
+                    id: "exit-\(trade.fingerprint)",
+                    text: "NOT FILLED",
+                    size: 1.2
+                )
+            case .invalidated:
+                exitMarker = SeriesMarker(
+                    time: .utc(timestamp: exitBar.openTimeEpochSeconds),
+                    position: .aboveBar,
+                    shape: .square,
+                    color: ChartColor(hex: 0xF59E0B),
+                    id: "exit-\(trade.fingerprint)",
+                    text: "INVALIDATED",
+                    size: 1.2
+                )
+            case .open, .pending:
                 exitMarker = SeriesMarker(
                     time: .utc(timestamp: exitBar.openTimeEpochSeconds),
                     position: .aboveBar,
                     shape: .circle,
                     color: ChartColor(hex: 0xD4AF37),
                     id: "exit-\(trade.fingerprint)",
-                    text: "OPEN",
+                    text: trade.status.rawValue,
                     size: 1.2
                 )
             }
@@ -388,13 +408,25 @@ public struct FullScreenChartSheet: View {
             accent = palette.secondaryInk
             icon = "clock.badge.xmark"
             headline = "EXPIRED (No TP/SL hit within window)"
+        case .notFilled:
+            accent = palette.secondaryInk
+            icon = "tray.and.arrow.down"
+            headline = "NOT FILLED (Entry zone untouched in fill window)"
+        case .invalidated:
+            accent = palette.trapAmber
+            icon = "exclamationmark.triangle"
+            headline = "INVALIDATED BEFORE FILL (SL/TP1 hit prior to entry)"
+        case .pending:
+            accent = palette.macroIceBlue
+            icon = "clock"
+            headline = "PENDING FILL · \(trade.direction.rawValue.uppercased()) · Awaiting Entry Zone"
         case .open:
             accent = palette.champagneGold
             icon = "hourglass"
-            headline = "OPEN SETUP · \(trade.direction.rawValue.uppercased()) · Awaiting TP/SL"
+            headline = "OPEN (FILLED) · \(trade.direction.rawValue.uppercased()) · Awaiting TP/SL"
         }
 
-        let missingExitNote = (trade.exitEpochSeconds != nil && trade.status != .open && build?.hasExitBar == false)
+        let missingExitNote = (trade.exitEpochSeconds != nil && !trade.status.isActive && build?.hasExitBar == false)
 
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {

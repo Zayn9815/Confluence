@@ -1,72 +1,56 @@
 import Foundation
 
 public enum SessionCalendar {
-    private static var utcCalendar: Calendar {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(secondsFromGMT: 0)!
-        return cal
-    }
-
+    /// DST-correct ICT / Institutional Killzones anchored to `Europe/London` and `America/New_York`:
+    /// - London: `07:00..<10:00` `Europe/London` (06:00–09:00 UTC in BST, 07:00–10:00 UTC in GMT)
+    /// - New York: `07:00..<10:00` `America/New_York` (11:00–14:00 UTC in EDT, 12:00–15:00 UTC in EST)
+    /// - London Close: `10:00..<12:00` `America/New_York` (14:00–16:00 UTC in EDT, 15:00–17:00 UTC in EST)
+    /// - Asian: `00:00..<07:00` `UTC` (evaluated after London so `06:00 UTC` during UK BST resolves to `.london`)
     public static func killzone(at epochSeconds: TimeInterval) -> KillzoneSession {
         let date = Date(timeIntervalSince1970: epochSeconds)
-        let hour = utcCalendar.component(.hour, from: date)
-        switch hour {
-        case 0..<7:
-            return .asian
-        case 7..<10:
+        let londonHour = MarketHolidayCalendar.londonCalendar.component(.hour, from: date)
+        if (7..<10).contains(londonHour) {
             return .london
-        case 12..<15:
+        }
+        let nyHour = MarketHolidayCalendar.newYorkCalendar.component(.hour, from: date)
+        if (7..<10).contains(nyHour) {
             return .newYork
-        case 15..<17:
+        }
+        if (10..<12).contains(nyHour) {
             return .londonClose
-        default:
-            return .offSession
         }
+        let utcHour = MarketHolidayCalendar.utcCalendar.component(.hour, from: date)
+        if (0..<7).contains(utcHour) {
+            return .asian
+        }
+        return .offSession
     }
 
-    /// Best-effort UTC session check so closed weekend/after-hours markets are marked "Market Closed" rather than "Stale Error".
-    public static func isMarketOpen(marketClass: MarketClass, at epochSeconds: TimeInterval) -> Bool {
-        if marketClass == .crypto {
-            return true
-        }
-        let date = Date(timeIntervalSince1970: epochSeconds)
-        let weekday = utcCalendar.component(.weekday, from: date) // 1 = Sun, 7 = Sat
-        let hour = utcCalendar.component(.hour, from: date)
-        let minute = utcCalendar.component(.minute, from: date)
-        let minutesOfDay = hour * 60 + minute
-
-        switch marketClass {
-        case .crypto:
-            return true
-        case .forex, .metals:
-            // Forex & spot gold run Sun 22:00 UTC through Fri 22:00 UTC.
-            if weekday == 7 { return false }
-            if weekday == 1 && hour < 22 { return false }
-            if weekday == 6 && hour >= 22 { return false }
-            return true
-        case .indices:
-            // Global index futures / CFDs (US500, NAS100): Sun 22:00 UTC through Fri 21:00 UTC,
-            // with daily 60m rollover maintenance 21:00–22:00 UTC Mon–Thu.
-            if weekday == 7 { return false }
-            if weekday == 1 && hour < 22 { return false }
-            if weekday == 6 && hour >= 21 { return false }
-            if weekday >= 2 && weekday <= 5 && hour == 21 { return false }
-            return true
-        case .stocks:
-            // US regular cash equity session (Mon–Fri 13:30–20:00 UTC).
-            if weekday == 1 || weekday == 7 { return false }
-            return minutesOfDay >= (13 * 60 + 30) && minutesOfDay < (20 * 60)
-        }
+    /// DST- and holiday-aware session status for a market class.
+    public static func sessionStatus(marketClass: MarketClass, at epochSeconds: TimeInterval) -> MarketSessionStatus {
+        MarketHolidayCalendar.sessionStatus(marketClass: marketClass, isUSCashEquityETF: false, at: epochSeconds)
     }
 
-    /// Asset-aware UTC session check distinguishing 23/5 futures/CFD indices (`US500`, `NAS100`)
+    /// Asset-aware DST + holiday session status distinguishing 23/5 futures/CFD indices (`US500`, `NAS100`)
     /// from US cash equity ETFs (`SPY`, `QQQ`) and single stocks (`AAPL`, `NVDA`, `MSFT`).
-    public static func isMarketOpen(asset: AssetDescriptor, at epochSeconds: TimeInterval) -> Bool {
+    public static func sessionStatus(asset: AssetDescriptor, at epochSeconds: TimeInterval) -> MarketSessionStatus {
         let upper = asset.symbol.uppercased()
-        if asset.marketClass == .indices && (upper == "SPY" || upper == "QQQ") {
-            return isMarketOpen(marketClass: .stocks, at: epochSeconds)
-        }
-        return isMarketOpen(marketClass: asset.marketClass, at: epochSeconds)
+        let isETF = asset.marketClass == .indices && (upper == "SPY" || upper == "QQQ")
+        return MarketHolidayCalendar.sessionStatus(
+            marketClass: asset.marketClass,
+            isUSCashEquityETF: isETF,
+            at: epochSeconds
+        )
+    }
+
+    /// DST- and holiday-aware open/closed check by market class.
+    public static func isMarketOpen(marketClass: MarketClass, at epochSeconds: TimeInterval) -> Bool {
+        sessionStatus(marketClass: marketClass, at: epochSeconds).isOpen
+    }
+
+    /// Asset-aware DST + holiday open/closed check.
+    public static func isMarketOpen(asset: AssetDescriptor, at epochSeconds: TimeInterval) -> Bool {
+        sessionStatus(asset: asset, at: epochSeconds).isOpen
     }
 }
 
@@ -154,12 +138,13 @@ public enum CandleHygieneEngine {
         }
 
         let resolvedAsset = asset ?? WatchlistDefaults.descriptor(for: symbol)
-        let isOpenNow: Bool
+        let sessionStatus: MarketSessionStatus
         if let resolvedAsset {
-            isOpenNow = SessionCalendar.isMarketOpen(asset: resolvedAsset, at: serverNowEpochSeconds)
+            sessionStatus = SessionCalendar.sessionStatus(asset: resolvedAsset, at: serverNowEpochSeconds)
         } else {
-            isOpenNow = SessionCalendar.isMarketOpen(marketClass: marketClass, at: serverNowEpochSeconds)
+            sessionStatus = SessionCalendar.sessionStatus(marketClass: marketClass, at: serverNowEpochSeconds)
         }
+        let isOpenNow = sessionStatus.isOpen
         let lastClose = sorted.last?.closeTimeEpochSeconds
         let staleThreshold = max(timeframe.seconds * 2.5, 3_600)
         let age = lastClose.map { serverNowEpochSeconds - $0 } ?? .infinity
@@ -183,6 +168,7 @@ public enum CandleHygieneEngine {
             gapCount: gapCount,
             clockSkewSeconds: clockSkewSeconds,
             isMarketClosed: !isOpenNow,
+            marketClosedReason: sessionStatus.closedReason,
             isStale: isStale,
             rejectionReason: rejection,
             lastClosedBarEpochSeconds: lastClose

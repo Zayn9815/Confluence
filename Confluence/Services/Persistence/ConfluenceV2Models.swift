@@ -165,16 +165,20 @@ public struct TrapLogSnapshot: Codable, Sendable, Equatable, Identifiable {
 }
 
 public enum TradeLedgerStatus: String, Codable, Sendable, CaseIterable, Identifiable {
+    case pending = "PENDING"
     case open = "OPEN"
     case tp1Win = "TP1 WIN"
     case tp2Win = "TP2 WIN"
     case slLoss = "SL LOSS"
     case expired = "EXPIRED"
+    case notFilled = "NOT FILLED"
+    case invalidated = "INVALIDATED"
 
     public var id: String { rawValue }
 
     public var isWin: Bool { self == .tp1Win || self == .tp2Win }
     public var isLoss: Bool { self == .slLoss }
+    public var isActive: Bool { self == .pending || self == .open }
 }
 
 public struct TradeLedgerSnapshot: Codable, Sendable, Equatable, Identifiable {

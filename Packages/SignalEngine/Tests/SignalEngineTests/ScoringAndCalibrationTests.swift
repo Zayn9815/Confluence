@@ -286,14 +286,16 @@ final class ScoringAndCalibrationTests: XCTestCase {
             levels: levels, alignedStrategies: [], rejectionReasons: [],
             psychologyReport: psych, dataProvider: "Fixture"
         )
-        // Bar 1 hits TP1 (102.0), Bar 2 drops to SL (99.0) — with TP2 disabled, must resolve immediately as TP1 on Bar 1
+        // Bar 0 fills entry zone cleanly (TP checks begin next bar per v1.4 fill-bar rule).
+        // Bar 1 hits TP1 (102.0), Bar 2 drops to SL (99.0) — with TP2 disabled, must resolve immediately as TP1 on Bar 1.
         let future = [
-            Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 100.0, high: 102.5, low: 99.8, close: 102.2, volume: 1000, isClosed: true),
-            Candle(openTimeEpochSeconds: base + 3600, closeTimeEpochSeconds: base + 7200, open: 102.2, high: 102.3, low: 98.5, close: 98.8, volume: 1000, isClosed: true)
+            Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 100.0, high: 100.8, low: 99.8, close: 100.4, volume: 1000, isClosed: true),
+            Candle(openTimeEpochSeconds: base + 3600, closeTimeEpochSeconds: base + 7200, open: 100.4, high: 102.5, low: 100.2, close: 102.2, volume: 1000, isClosed: true),
+            Candle(openTimeEpochSeconds: base + 7200, closeTimeEpochSeconds: base + 10800, open: 102.2, high: 102.3, low: 98.5, close: 98.8, volume: 1000, isClosed: true)
         ]
         let out = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: future, roundTripCostBps: 10.0)
         XCTAssertEqual(out.status, .hitTP1)
-        XCTAssertEqual(out.resolvedAtEpochSeconds, base + 3600)
+        XCTAssertEqual(out.resolvedAtEpochSeconds, base + 7200)
     }
 
     func testCalibrationFilterRulesTP2OnlyCategoryAndThresholds() {
@@ -602,5 +604,279 @@ final class ScoringAndCalibrationTests: XCTestCase {
         )
         XCTAssertEqual(eval.verdict, .waitNoTrade)
         XCTAssertFalse(eval.requiredConfirmations.isEmpty)
+    }
+
+    // MARK: - v1.4 Phase 1 (Workstream A): DST, Holidays, Fill Lifecycle, Calibration & Wilson CI Tests
+
+    private func utcEpoch(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) -> TimeInterval {
+        var c = DateComponents()
+        c.year = year
+        c.month = month
+        c.day = day
+        c.hour = hour
+        c.minute = minute
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        return cal.date(from: c)!.timeIntervalSince1970
+    }
+
+    private func nyEpoch(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) -> TimeInterval {
+        var c = DateComponents()
+        c.year = year
+        c.month = month
+        c.day = day
+        c.hour = hour
+        c.minute = minute
+        return MarketHolidayCalendar.newYorkCalendar.date(from: c)!.timeIntervalSince1970
+    }
+
+    func testDSTKillzonesWinterSummerAndMismatchWeeks() {
+        // Winter (Jan 15, 2026 — UK GMT=UTC+0, US EST=UTC-5)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 1, 15, 6)), .asian)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 1, 15, 7)), .london)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 1, 15, 12)), .newYork)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 1, 15, 15)), .londonClose)
+
+        // Summer (Jul 15, 2026 — UK BST=UTC+1, US EDT=UTC-4)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 7, 15, 5)), .asian)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 7, 15, 6)), .london, "06:00 UTC is 07:00 BST -> London killzone")
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 7, 15, 11)), .newYork)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 7, 15, 14)), .londonClose)
+
+        // US/UK DST Mismatch Week (Mar 18, 2026 — US EDT=UTC-4, UK GMT=UTC+0)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 3, 18, 6)), .asian)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 3, 18, 7)), .london)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 3, 18, 11)), .newYork)
+        XCTAssertEqual(SessionCalendar.killzone(at: utcEpoch(2026, 3, 18, 14)), .londonClose)
+    }
+
+    func testNYSE2026And2027GoldenHolidayCalendarAndAssetRules() {
+        // Golden NYSE 2026 full holidays (published calendar)
+        let full2026: [(Int, Int)] = [
+            (1, 1), (1, 19), (2, 16), (4, 3), (5, 25),
+            (6, 19), (7, 3), (9, 7), (11, 26), (12, 25)
+        ]
+        for (m, d) in full2026 {
+            let entry = MarketHolidayCalendar.nyseHoliday(year: 2026, month: m, day: d)
+            XCTAssertEqual(entry?.kind, .fullClose, "Expected NYSE 2026 full close on 2026-\(m)-\(d)")
+        }
+        // Golden NYSE 2026 early closes (13:00 ET)
+        let early2026: [(Int, Int)] = [(11, 27), (12, 24)]
+        for (m, d) in early2026 {
+            let entry = MarketHolidayCalendar.nyseHoliday(year: 2026, month: m, day: d)
+            XCTAssertEqual(entry?.kind, .earlyClose1300ET, "Expected NYSE 2026 early close on 2026-\(m)-\(d)")
+        }
+
+        // Golden NYSE 2027 full holidays (published calendar)
+        let full2027: [(Int, Int)] = [
+            (1, 1), (1, 18), (2, 15), (3, 26), (5, 31),
+            (6, 18), (7, 5), (9, 6), (11, 25), (12, 24)
+        ]
+        for (m, d) in full2027 {
+            let entry = MarketHolidayCalendar.nyseHoliday(year: 2027, month: m, day: d)
+            XCTAssertEqual(entry?.kind, .fullClose, "Expected NYSE 2027 full close on 2027-\(m)-\(d)")
+        }
+        // Golden NYSE 2027 early close (Black Friday; Dec 24 2027 is full close because Dec 25 is Sat)
+        XCTAssertEqual(MarketHolidayCalendar.nyseHoliday(year: 2027, month: 11, day: 26)?.kind, .earlyClose1300ET)
+        XCTAssertEqual(MarketHolidayCalendar.nyseHoliday(year: 2027, month: 12, day: 24)?.kind, .fullClose)
+        // Non-weekend Jul 3 early close check (Mon Jul 3, 2028)
+        XCTAssertEqual(MarketHolidayCalendar.nyseHoliday(year: 2028, month: 7, day: 3)?.kind, .earlyClose1300ET)
+
+        // Asset-specific checks: Index CFDs (US500, NAS100) and Metals (XAU/USD) treat Good Friday & US early closes as closed/limited
+        let nas100 = WatchlistDefaults.descriptor(for: "NAS100")!
+        let us500 = WatchlistDefaults.descriptor(for: "US500")!
+        let gold = WatchlistDefaults.descriptor(for: "XAU/USD")!
+        let eurusd = WatchlistDefaults.descriptor(for: "EUR/USD")!
+        let btc = WatchlistDefaults.descriptor(for: "BTC/USDT")!
+        let spy = WatchlistDefaults.descriptor(for: "SPY")!
+
+        // Good Friday 2026 (Apr 3, 11:00 ET) -> US500, NAS100, XAU/USD, SPY all closed; BTC open
+        let goodFriday2026 = nyEpoch(2026, 4, 3, 11, 0)
+        for asset in [nas100, us500, gold, spy] {
+            let st = SessionCalendar.sessionStatus(asset: asset, at: goodFriday2026)
+            XCTAssertFalse(st.isOpen, "\(asset.symbol) must be closed on Good Friday 2026")
+            XCTAssertTrue(st.closedReason?.contains("Good Friday") == true)
+        }
+        XCTAssertTrue(SessionCalendar.isMarketOpen(asset: btc, at: goodFriday2026))
+
+        // Black Friday 2026 (Nov 27): open at 11:00 ET, closed/limited at 13:30 ET for Index CFDs, Metals & SPY
+        let blackFridayMorning = nyEpoch(2026, 11, 27, 11, 0)
+        let blackFridayAfternoon = nyEpoch(2026, 11, 27, 13, 30)
+        for asset in [nas100, us500, gold, spy] {
+            XCTAssertTrue(SessionCalendar.isMarketOpen(asset: asset, at: blackFridayMorning), "\(asset.symbol) open before 13:00 ET")
+            let afternoon = SessionCalendar.sessionStatus(asset: asset, at: blackFridayAfternoon)
+            XCTAssertFalse(afternoon.isOpen, "\(asset.symbol) must be closed/limited after 13:00 ET on Black Friday")
+            XCTAssertTrue(afternoon.closedReason?.contains("13:00 ET") == true)
+        }
+
+        // Christmas Day 2026 (Dec 25, 11:00 ET): FX, Metals, Indices, Stocks closed; Crypto open
+        let xmas2026 = nyEpoch(2026, 12, 25, 11, 0)
+        XCTAssertFalse(SessionCalendar.isMarketOpen(asset: eurusd, at: xmas2026))
+        XCTAssertFalse(SessionCalendar.isMarketOpen(asset: gold, at: xmas2026))
+        XCTAssertTrue(SessionCalendar.isMarketOpen(asset: btc, at: xmas2026))
+    }
+
+    func testSignalLifecycleFillWindowInvalidationFillBarSLOnlyAndPessimisticSameBar() {
+        let base: TimeInterval = 1_760_000_000
+        let levels = TradeLevels(
+            entryLow: 99.8, entryHigh: 100.2, entryMid: 100.0,
+            stopLoss: 98.0, tp1: 104.0, tp2: 107.0,
+            riskPercent: 2.0, reward1Percent: 4.0, reward2Percent: 7.0,
+            riskRewardRatio: 2.0, tp2RiskRewardRatio: 3.5, isTP2Enabled: true
+        )
+        let psych = PsychologyReport(
+            signalCategory: .strongSignal, proDirection: .long, retailCrowdDirection: .short,
+            provenanceBadge: "Test", whatHappened: "Test", beginnerPsychology: "B", proPsychology: "P",
+            behavioralBadges: [], evidence: []
+        )
+        let sig = TradeSignal(
+            id: "sig-life", fingerprint: "sig-life", symbol: "BTC/USDT", displayName: "Bitcoin",
+            marketClass: .crypto, timeframe: .h1, htfTimeframe: .h4,
+            category: .strongSignal, direction: .long, tier: .highConviction,
+            confidencePercent: 80.0, regime: .trending, riskState: .safe,
+            killzone: .newYork, htfBias: .long,
+            generatedAtEpochSeconds: base, barCloseEpochSeconds: base,
+            levels: levels, alignedStrategies: [], rejectionReasons: [],
+            psychologyReport: psych, dataProvider: "Fixture"
+        )
+
+        // 1. Pending -> Filled -> Open
+        let missBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 101.0, high: 102.0, low: 100.8, close: 101.5, volume: 100)
+        let pendingOut = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: [missBar], fillWindowBars: 4)
+        XCTAssertEqual(pendingOut.status, .pending)
+        XCTAssertEqual(pendingOut.lifecycleStatus, .pending)
+        XCTAssertNil(pendingOut.filledAtEpochSeconds)
+
+        let fillBar = Candle(openTimeEpochSeconds: base + 3600, closeTimeEpochSeconds: base + 7200, open: 101.5, high: 101.8, low: 100.0, close: 100.8, volume: 100)
+        let openOut = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: [missBar, fillBar], fillWindowBars: 4)
+        XCTAssertEqual(openOut.status, .open)
+        XCTAssertEqual(openOut.lifecycleStatus, .open)
+        XCTAssertEqual(openOut.filledAtEpochSeconds, base + 7200)
+
+        // 2. Fill-Bar Rule (Amendment #4): On fill bar, check SL ONLY. TP1/TP2 on the fill bar MUST NOT trigger a win!
+        let fillAndSpikeTP2Bar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 100.0, high: 108.5, low: 99.9, close: 107.8, volume: 200)
+        let fillBarNoWin = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: [fillAndSpikeTP2Bar])
+        XCTAssertEqual(fillBarNoWin.status, .open, "TP checks must NOT fire on the fill bar itself")
+
+        // If fill bar touches entry AND SL -> immediate pessimistic SL hit
+        let fillAndHitSLBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 100.0, high: 108.5, low: 97.5, close: 106.0, volume: 200)
+        let fillBarSL = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: [fillAndHitSLBar])
+        XCTAssertEqual(fillBarSL.status, .hitSL, "SL must be checked on the fill bar itself")
+
+        // 3. Post-fill same-bar conflict (hits BOTH SL and TP2) -> pessimistic SL-first
+        let cleanFill = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 100.0, high: 101.0, low: 99.9, close: 100.5, volume: 100)
+        let sameBarConflict = Candle(openTimeEpochSeconds: base + 3600, closeTimeEpochSeconds: base + 7200, open: 100.5, high: 108.0, low: 97.5, close: 107.5, volume: 300)
+        let conflictOut = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: [cleanFill, sameBarConflict])
+        XCTAssertEqual(conflictOut.status, .hitSL, "Same-bar SL + TP conflict must resolve pessimistically as SL")
+
+        // 4. Fill window expiry -> .notFilled (excluded from win rate)
+        let threeMisses = (0..<3).map { i in
+            Candle(openTimeEpochSeconds: base + Double(i) * 3600, closeTimeEpochSeconds: base + Double(i + 1) * 3600, open: 101.0, high: 102.0, low: 100.8, close: 101.5, volume: 100)
+        }
+        let notFilledOut = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: threeMisses, fillWindowBars: 3)
+        XCTAssertEqual(notFilledOut.status, .notFilled)
+        XCTAssertEqual(notFilledOut.lifecycleStatus, .notFilled)
+
+        // 5. Pre-fill invalidation: price hits TP1 without ever touching entry zone -> .invalidated
+        let runawayTP1 = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 101.5, high: 104.5, low: 101.2, close: 104.2, volume: 100)
+        let invOut = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: [runawayTP1])
+        XCTAssertEqual(invOut.status, .invalidated)
+        XCTAssertEqual(invOut.lifecycleStatus, .invalidated)
+
+        // Verify notFilled & invalidated are excluded from headline Win Rate denominator
+        let summary = PassiveOutcomeEvaluator.summarize(records: [notFilledOut, invOut, fillBarSL], filter: .headlineFixed)
+        XCTAssertEqual(summary.resolvedSignals, 1)
+        XCTAssertEqual(summary.notFilledCount, 1)
+        XCTAssertEqual(summary.invalidatedCount, 1)
+        XCTAssertEqual(summary.winRate, 0.0, accuracy: 1e-9)
+    }
+
+    func testWilsonIntervalConfidenceCalibratorAndHeadlineLegacyExclusion() throws {
+        // 1. Wilson 95% CI exact bounds
+        XCTAssertNil(WilsonInterval.compute(wins: 0, total: 0))
+        let ci = WilsonInterval.compute(wins: 58, total: 100)
+        XCTAssertNotNil(ci)
+        XCTAssertEqual(ci?.lower ?? 0, 0.482, accuracy: 0.005)
+        XCTAssertEqual(ci?.upper ?? 0, 0.672, accuracy: 0.005)
+
+        // 2. ConfidenceCalibrator: inactive at N = 99, active at N = 120, monotonic & improves Brier on overconfident fixture
+        func makeSyntheticRecord(idx: Int, rawScore: Double, isWin: Bool) -> SignalOutcomeRecord {
+            SignalOutcomeRecord(
+                signalId: "cal-\(idx)",
+                symbol: "BTC/USDT",
+                marketClass: .crypto,
+                category: .strongSignal,
+                direction: .long,
+                predictedProbability: rawScore / 100.0,
+                status: isWin ? .hitTP1 : .hitSL,
+                netReturnPercent: isWin ? 2.0 : -1.0,
+                rMultiple: isWin ? 2.0 : -1.0,
+                strategyIds: ["ict_fvg"],
+                hadMacroCatalyst: false,
+                resolvedAtEpochSeconds: 1_760_000_000 + Double(idx) * 3600,
+                lifecycleStatus: .resolved,
+                filledAtEpochSeconds: 1_760_000_000 + Double(idx) * 3600 - 1800,
+                fillWindowBars: 12,
+                isLegacyImmediateFill: false
+            )
+        }
+
+        // Deterministic overconfident dataset: raw scores 70..90, actual win rate ~45% at 70 and ~65% at 90
+        var records: [SignalOutcomeRecord] = []
+        for i in 0..<120 {
+            let highBucket = (i % 2 == 0)
+            let score = highBucket ? 88.0 : 72.0
+            let mod = i % 20
+            let isWin = highBucket ? (mod < 12) : (mod < 8) // 60% vs 40%, while raw predicts 88% vs 72%
+            records.append(makeSyntheticRecord(idx: i, rawScore: score, isWin: isWin))
+        }
+
+        let underThreshold = ConfidenceCalibrator.fit(records: Array(records.prefix(99)), filter: .headlineFixed)
+        XCTAssertFalse(underThreshold.isActive)
+        XCTAssertNil(underThreshold.calibratedProbability(forRawScore: 85.0))
+
+        let fitted = ConfidenceCalibrator.fit(records: records, filter: .headlineFixed)
+        XCTAssertTrue(fitted.isActive)
+        XCTAssertEqual(fitted.sampleCount, 120)
+        let pHigh = fitted.calibratedProbability(forRawScore: 88.0)!
+        let pLow = fitted.calibratedProbability(forRawScore: 72.0)!
+        XCTAssertGreaterThan(pHigh, pLow, "Calibrated probabilities must stay strictly monotonic")
+
+        let rawBrier = records.reduce(0.0) { acc, r in
+            let y = r.isWin ? 1.0 : 0.0
+            let d = r.predictedProbability - y
+            return acc + d * d
+        } / Double(records.count)
+        let calBrier = records.reduce(0.0) { acc, r in
+            let y = r.isWin ? 1.0 : 0.0
+            let p = fitted.calibratedProbability(forRawScore: r.predictedProbability * 100.0)!
+            let d = p - y
+            return acc + d * d
+        } / Double(records.count)
+        XCTAssertLessThan(calBrier, rawBrier, "Platt scaling must improve Brier score on overconfident raw scores")
+
+        // 3. Pre-v1.4 legacy JSON decodes as legacy-immediate-fill and is excluded from headlineFixed
+        let legacyJSON = """
+        {
+          "signalId": "legacy-pre-14",
+          "symbol": "XAU/USD",
+          "marketClass": "metals",
+          "category": "STRONG_SIGNAL",
+          "direction": "long",
+          "predictedProbability": 0.80,
+          "status": "hitTP2",
+          "netReturnPercent": 3.5,
+          "rMultiple": 3.0,
+          "strategyIds": ["ict_bos"],
+          "hadMacroCatalyst": false,
+          "resolvedAtEpochSeconds": 1760010000
+        }
+        """.data(using: .utf8)!
+        let legacyRec = try JSONDecoder().decode(SignalOutcomeRecord.self, from: legacyJSON)
+        XCTAssertTrue(legacyRec.effectiveIsLegacyImmediateFill)
+
+        let summaryWithLegacy = PassiveOutcomeEvaluator.summarize(records: [legacyRec, records[0]], filter: .headlineFixed)
+        XCTAssertEqual(summaryWithLegacy.legacyExcludedCount, 1)
+        XCTAssertEqual(summaryWithLegacy.resolvedSignals, 1, "Headline win rate must exclude pre-v1.4 legacy-immediate-fill record")
     }
 }

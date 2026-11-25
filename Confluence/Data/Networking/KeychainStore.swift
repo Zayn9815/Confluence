@@ -81,27 +81,7 @@ public actor KeychainStore {
         if let v = read(key), !v.isEmpty {
             return true
         }
-        if key == .twelveDataAPIKey, let injected = Self.buildInjectedTwelveDataKey(), !injected.isEmpty {
-            return true
-        }
         return false
-    }
-
-    /// Reads the user's Keychain key first; falls back to an optional CI-injected Info.plist value
-    /// (`ConfluenceDefaultTwelveDataKey`, never committed in source control) only if Keychain is empty.
-    public func readEffectiveTwelveDataKey() -> String? {
-        if let stored = read(.twelveDataAPIKey), !stored.isEmpty {
-            return stored
-        }
-        return Self.buildInjectedTwelveDataKey()
-    }
-
-    private static func buildInjectedTwelveDataKey() -> String? {
-        guard let raw = Bundle.main.infoDictionary?["ConfluenceDefaultTwelveDataKey"] as? String else {
-            return nil
-        }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

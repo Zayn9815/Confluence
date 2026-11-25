@@ -428,7 +428,8 @@ final class AdapterIntegrationTests: XCTestCase {
     func testStrategyTradeMappingAndReplayMarkerSnapping() {
         let base: TimeInterval = 1_760_000_000
         let entryBar = Candle(openTimeEpochSeconds: base - 900, closeTimeEpochSeconds: base, open: 1.30980, high: 1.31020, low: 1.30950, close: 1.31002, volume: nil, isClosed: true)
-        let exitBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 900, open: 1.31002, high: 1.31250, low: 1.30990, close: 1.31220, volume: nil, isClosed: true)
+        let fillBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 900, open: 1.31002, high: 1.31040, low: 1.30990, close: 1.31030, volume: nil, isClosed: true)
+        let exitBar = Candle(openTimeEpochSeconds: base + 900, closeTimeEpochSeconds: base + 1800, open: 1.31030, high: 1.31250, low: 1.31020, close: 1.31220, volume: nil, isClosed: true)
         let levels = TradeLevels(
             entryLow: 1.30990, entryHigh: 1.31014, entryMid: 1.31002,
             stopLoss: 1.30920, tp1: 1.31166, tp2: 1.31240,
@@ -454,7 +455,7 @@ final class AdapterIntegrationTests: XCTestCase {
 
         let store = ConfluenceDataStore(inMemory: true)
         store.upsertSignal(sig)
-        let outcome = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: [exitBar], roundTripCostBps: 2.0)
+        let outcome = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: [fillBar, exitBar], roundTripCostBps: 2.0)
         XCTAssertEqual(outcome.status, .hitTP2)
         store.updateOutcome(outcome)
 
@@ -464,7 +465,7 @@ final class AdapterIntegrationTests: XCTestCase {
         let trade = trades[0]
         XCTAssertEqual(trade.status, .tp2Win)
 
-        let markerResult = TradeReplayMarkerBuilder.buildMarkers(for: trade, candles: [entryBar, exitBar])
+        let markerResult = TradeReplayMarkerBuilder.buildMarkers(for: trade, candles: [entryBar, fillBar, exitBar])
         XCTAssertTrue(markerResult.hasEntryBar)
         XCTAssertTrue(markerResult.hasExitBar)
         XCTAssertEqual(markerResult.markers.count, 2)
@@ -716,5 +717,70 @@ final class AdapterIntegrationTests: XCTestCase {
         XCTAssertTrue(md.contains("## Error & Warning Logs (2)"))
         XCTAssertFalse(md.contains("SECRET_KEY_999"))
         XCTAssertFalse(md.contains("AIzaSyTestFakeKey"))
+    }
+
+    // MARK: - v1.4 Phase 1: Zero Info.plist Secrets & Legacy Headline Exclusion Tests
+
+    func testBuiltInfoPlistContainsNoSecretKeys() {
+        let info = Bundle.main.infoDictionary ?? [:]
+        XCTAssertNil(info["ConfluenceDefaultTwelveDataKey"], "Built Info.plist must never embed Twelve Data API keys")
+
+        for (key, value) in info {
+            guard let str = value as? String else { continue }
+            XCTAssertFalse(str.hasPrefix("AIza"), "Info.plist key \(key) contains Gemini-like API key")
+            XCTAssertFalse(str.hasPrefix("sk-"), "Info.plist key \(key) contains secret-like token")
+            let isHex32Plus = str.count >= 32 && str.allSatisfy { $0.isHexDigit }
+            XCTAssertFalse(isHex32Plus, "Info.plist key \(key) contains a 32+ char hex key-like string")
+        }
+    }
+
+    @MainActor
+    func testLegacyPreV14OutcomeTaggedAndExcludedFromHeadlineWinRate() throws {
+        let store = ConfluenceDataStore(inMemory: true)
+        let legacyJSON = """
+        {
+          "signalId": "fp-pre-v14",
+          "symbol": "GBP/USD",
+          "marketClass": "forex",
+          "category": "STRONG_SIGNAL",
+          "direction": "long",
+          "predictedProbability": 0.82,
+          "status": "hitTP2",
+          "netReturnPercent": 2.4,
+          "rMultiple": 3.0,
+          "strategyIds": ["ict_fvg"],
+          "hadMacroCatalyst": false,
+          "resolvedAtEpochSeconds": 1760010000
+        }
+        """.data(using: .utf8)!
+        let legacyOutcome = try JSONDecoder().decode(SignalOutcomeRecord.self, from: legacyJSON)
+        XCTAssertTrue(legacyOutcome.effectiveIsLegacyImmediateFill)
+        store.updateOutcome(legacyOutcome)
+
+        let v14Outcome = SignalOutcomeRecord(
+            signalId: "fp-v14-filled",
+            symbol: "GBP/USD",
+            marketClass: .forex,
+            category: .strongSignal,
+            direction: .short,
+            predictedProbability: 0.78,
+            status: .hitSL,
+            netReturnPercent: -1.0,
+            rMultiple: -1.0,
+            strategyIds: ["ict_fvg"],
+            hadMacroCatalyst: false,
+            resolvedAtEpochSeconds: 1_760_020_000,
+            lifecycleStatus: .resolved,
+            filledAtEpochSeconds: 1_760_015_000,
+            fillWindowBars: 12,
+            isLegacyImmediateFill: false
+        )
+        store.updateOutcome(v14Outcome)
+
+        let coordinator = MarketScannerCoordinator(settings: AppSettingsStore(), store: store)
+        XCTAssertEqual(coordinator.headlineCalibrationSummary.resolvedSignals, 1)
+        XCTAssertEqual(coordinator.headlineCalibrationSummary.legacyExcludedCount, 1)
+        XCTAssertEqual(coordinator.headlineCalibrationSummary.winRate, 0.0, accuracy: 1e-9)
+        XCTAssertFalse(coordinator.confidenceCalibrator.isActive)
     }
 }

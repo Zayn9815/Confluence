@@ -187,7 +187,10 @@ public final class ConfluenceDataStore {
             case .hitTP1: ledger.statusRaw = TradeLedgerStatus.tp1Win.rawValue
             case .hitSL: ledger.statusRaw = TradeLedgerStatus.slLoss.rawValue
             case .expired: ledger.statusRaw = TradeLedgerStatus.expired.rawValue
-            case .pending: ledger.statusRaw = TradeLedgerStatus.open.rawValue
+            case .notFilled: ledger.statusRaw = TradeLedgerStatus.notFilled.rawValue
+            case .invalidated: ledger.statusRaw = TradeLedgerStatus.invalidated.rawValue
+            case .open: ledger.statusRaw = TradeLedgerStatus.open.rawValue
+            case .pending: ledger.statusRaw = TradeLedgerStatus.pending.rawValue
             }
             ledger.netRMultiple = outcome.rMultiple
             if let ts = outcome.resolvedAtEpochSeconds {
@@ -265,7 +268,7 @@ public final class ConfluenceDataStore {
             killzoneRaw: signal.killzone.rawValue,
             dataProvider: signal.dataProvider,
             alignedStrategyIDsJSON: stratData,
-            statusRaw: TradeLedgerStatus.open.rawValue,
+            statusRaw: TradeLedgerStatus.pending.rawValue,
             netRMultiple: 0.0,
             createdAt: Date(timeIntervalSince1970: signal.generatedAtEpochSeconds)
         )

@@ -52,7 +52,8 @@ public enum ConfluenceScorer {
         dataProvider: String,
         isMarketClosed: Bool,
         nowEpochSeconds: TimeInterval,
-        newsCatalyst: NewsCatalystAssessment? = nil
+        newsCatalyst: NewsCatalystAssessment? = nil,
+        marketClosedReason: String? = nil
     ) -> TradeSignal? {
         guard let lastBar = candles.last else { return nil }
         let killzone = SessionCalendar.killzone(at: lastBar.closeTimeEpochSeconds)
@@ -369,6 +370,7 @@ public enum ConfluenceScorer {
             aiConfirmed: false,
             dataProvider: dataProvider,
             isMarketClosedSnapshot: isMarketClosed,
+            marketClosedReason: marketClosedReason,
             strengthBreakdown: breakdown
         )
     }

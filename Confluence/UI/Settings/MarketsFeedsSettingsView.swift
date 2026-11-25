@@ -52,7 +52,7 @@ public struct MarketsFeedsSettingsView: View {
                         Task {
                             try? await KeychainStore.shared.save(twelveDataKeyInput, for: .twelveDataAPIKey)
                             twelveDataKeyInput = ""
-                            hasTwelveDataKey = await KeychainStore.shared.readEffectiveTwelveDataKey() != nil
+                            hasTwelveDataKey = await KeychainStore.shared.hasValue(for: .twelveDataAPIKey)
                         }
                     }
                     .disabled(twelveDataKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -89,7 +89,7 @@ public struct MarketsFeedsSettingsView: View {
                     Button(role: .destructive) {
                         Task {
                             try? await KeychainStore.shared.delete(.twelveDataAPIKey)
-                            hasTwelveDataKey = await KeychainStore.shared.readEffectiveTwelveDataKey() != nil
+                            hasTwelveDataKey = await KeychainStore.shared.hasValue(for: .twelveDataAPIKey)
                             coordinator.twelveDataQuota = nil
                             coordinator.twelveDataTestMessage = nil
                         }
@@ -158,7 +158,7 @@ public struct MarketsFeedsSettingsView: View {
         .navigationTitle("Markets, News & Feeds")
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            hasTwelveDataKey = await KeychainStore.shared.readEffectiveTwelveDataKey() != nil
+            hasTwelveDataKey = await KeychainStore.shared.hasValue(for: .twelveDataAPIKey)
             hasFinnhubKey = await KeychainStore.shared.hasValue(for: .finnhubAPIKey)
         }
     }

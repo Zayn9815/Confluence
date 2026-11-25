@@ -554,7 +554,8 @@ private struct TradeLedgerViewer: View {
         case .tp1Win, .tp2Win: return palette.longEmerald
         case .slLoss: return palette.shortCrimson
         case .open: return palette.champagneGold
-        case .expired: return palette.tertiaryInk
+        case .pending: return palette.macroIceBlue
+        case .notFilled, .invalidated, .expired: return palette.tertiaryInk
         }
     }
 }

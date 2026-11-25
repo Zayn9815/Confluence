@@ -4,6 +4,7 @@ import SignalEngine
 
 public struct SignalCardView: View {
     let signal: TradeSignal
+    let outcome: SignalOutcomeRecord?
     let palette: ConfluencePalette
     let density: CardDensity
     let showMiniChart: Bool
@@ -19,11 +20,13 @@ public struct SignalCardView: View {
     @State private var showStrategies = false
     @State private var showBreakdown = false
     @State private var showPsychology = true
+    @State private var showScoreExplanation = false
     @State private var arrivalTriggerCount = 0
     @State private var didCopy = false
 
     public init(
         signal: TradeSignal,
+        outcome: SignalOutcomeRecord? = nil,
         palette: ConfluencePalette,
         density: CardDensity,
         showMiniChart: Bool,
@@ -36,6 +39,7 @@ public struct SignalCardView: View {
         onOpenChart: @escaping () -> Void
     ) {
         self.signal = signal
+        self.outcome = outcome
         self.palette = palette
         self.density = density
         self.showMiniChart = showMiniChart
@@ -58,7 +62,7 @@ public struct SignalCardView: View {
         }()
 
         VStack(alignment: .leading, spacing: density == .compact ? 10 : 13) {
-            // 1. Header Row: Selection Checkmark (when selecting), Market, Pair, Direction/Trap Badge, Confidence % Gauge
+            // 1. Header Row: Selection Checkmark (when selecting), Market, Pair, Direction/Trap Badge, Score Gauge
             HStack(alignment: .center, spacing: 10) {
                 if isSelecting {
                     Button {
@@ -101,14 +105,18 @@ public struct SignalCardView: View {
                 confidenceGauge
             }
 
-            // 2. Regime, Killzone, Market Closed & News Catalyst Pills
+            // 2. Lifecycle, Regime, Killzone, Market Closed & News Catalyst Pills
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
+                    if let lifecycle = lifecycleBadge {
+                        badgePill(lifecycle.text, color: lifecycle.color, fill: lifecycle.color.opacity(0.15))
+                    }
                     badgePill(signal.regime.badgeLabel, color: palette.color(for: signal.regime), fill: palette.color(for: signal.regime).opacity(0.14))
                     badgePill(signal.killzone.displayName, color: palette.secondaryInk, fill: palette.elevatedSurface)
                     badgePill("HTF \(signal.htfTimeframe.displayLabel): \(signal.htfBias.rawValue.uppercased())", color: palette.color(for: signal.htfBias), fill: palette.elevatedSurface)
                     if signal.isMarketClosedSnapshot {
-                        badgePill("Market Closed · Last Bar", color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
+                        let reasonText = signal.marketClosedReason ?? "Last Bar"
+                        badgePill("Market Closed · \(reasonText)", color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
                     }
                     if let pre = signal.preNewsBadge {
                         badgePill(pre, color: palette.macroIceBlue, fill: palette.macroIceBlue.opacity(0.14))
@@ -232,13 +240,24 @@ public struct SignalCardView: View {
                             breakdownRow("Regime & Session Risk Adj.", score: bd.regimeRiskAdjustment)
                             Divider().overlay(palette.border)
                             HStack {
-                                Text("Calibrated Confidence")
+                                Text("Raw Confluence Score")
                                     .font(.caption2.weight(.bold))
                                     .foregroundStyle(palette.primaryInk)
                                 Spacer()
-                                Text("\(Int(bd.finalConfidencePercent.rounded()))% · \(bd.strengthLabel)")
+                                Text("\(Int(bd.finalConfidencePercent.rounded()))/100 · \(bd.strengthLabel)")
                                     .font(.caption2.weight(.bold).monospacedDigit())
                                     .foregroundStyle(palette.color(for: signal.tier))
+                            }
+                            if let calProb = signal.calibratedProbability {
+                                HStack {
+                                    Text("Calibrated Win Prob. (n=\(signal.calibrationSampleCount ?? 100))")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(palette.macroIceBlue)
+                                    Spacer()
+                                    Text("\(Int((calProb * 100.0).rounded()))%")
+                                        .font(.caption2.weight(.bold).monospacedDigit())
+                                        .foregroundStyle(palette.macroIceBlue)
+                                }
                             }
                             if !bd.notes.isEmpty {
                                 Text(bd.notes.joined(separator: " · "))
@@ -483,26 +502,82 @@ public struct SignalCardView: View {
         }
     }
 
-    private var confidenceGauge: some View {
-        let pct = max(0, min(99, Int(signal.confidencePercent.rounded())))
-        let ringColor = palette.color(for: signal.tier)
-        return ZStack {
-            Circle()
-                .stroke(palette.border, lineWidth: 3.5)
-            Circle()
-                .trim(from: 0, to: CGFloat(pct) / 100.0)
-                .stroke(ringColor, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-            Text("\(pct)%")
-                .font(.caption.weight(.bold).monospacedDigit())
-                .foregroundStyle(palette.primaryInk)
+    private var lifecycleBadge: (text: String, color: Color)? {
+        guard signal.category == .strongSignal || signal.category == .trapAlert else { return nil }
+        guard let rec = outcome else {
+            return ("Pending Fill", palette.macroIceBlue)
         }
-        .frame(width: 46, height: 46)
-        .changeEffect(
-            .pulse(shape: Circle(), style: ringColor.opacity(0.5), count: 1),
-            value: arrivalTriggerCount,
-            isEnabled: animateArrival && !reduceMotion
-        )
+        switch rec.status {
+        case .pending:
+            return ("Pending Fill", palette.macroIceBlue)
+        case .open:
+            return ("Open · Filled", palette.champagneGold)
+        case .hitTP2:
+            return ("TP2 Win", palette.longEmerald)
+        case .hitTP1:
+            return ("TP1 Win", palette.longEmerald)
+        case .hitSL:
+            return ("SL Hit", palette.shortCrimson)
+        case .notFilled:
+            return ("Not Filled", palette.secondaryInk)
+        case .invalidated:
+            return ("Invalidated", palette.trapAmber)
+        case .expired:
+            return ("Expired", palette.tertiaryInk)
+        }
+    }
+
+    private var confidenceGauge: some View {
+        let rawScore = max(0, min(99, Int(signal.confidencePercent.rounded())))
+        let ringColor = palette.color(for: signal.tier)
+        let calPct: Int? = signal.calibratedProbability.map { max(1, min(99, Int(($0 * 100.0).rounded()))) }
+        let sampleN = signal.calibrationSampleCount ?? 0
+
+        return Button {
+            showScoreExplanation = true
+        } label: {
+            VStack(spacing: 2) {
+                ZStack {
+                    Circle()
+                        .stroke(palette.border, lineWidth: 3.5)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(rawScore) / 100.0)
+                        .stroke(ringColor, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    VStack(spacing: 0) {
+                        Text("\(rawScore)")
+                            .font(.caption.weight(.bold).monospacedDigit())
+                            .foregroundStyle(palette.primaryInk)
+                        Text(calPct == nil ? "SCORE" : "RAW")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(palette.tertiaryInk)
+                    }
+                }
+                .frame(width: 48, height: 48)
+                .changeEffect(
+                    .pulse(shape: Circle(), style: ringColor.opacity(0.5), count: 1),
+                    value: arrivalTriggerCount,
+                    isEnabled: animateArrival && !reduceMotion
+                )
+
+                if let calPct {
+                    Text("Cal \(calPct)%")
+                        .font(.system(size: 9, weight: .bold).monospacedDigit())
+                        .foregroundStyle(palette.macroIceBlue)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(calPct != nil ? "Signal score \(rawScore), calibrated probability \(calPct!) percent" : "Signal score \(rawScore) out of 100")
+        .alert("Signal Score vs. Probability", isPresented: $showScoreExplanation) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let calPct {
+                Text("Raw Confluence Score: \(rawScore)/100.\nCalibrated Win Probability: \(calPct)% (walk-forward Platt scaling fitted on n=\(sampleN) resolved filled trades).\n\nCalibrated probability is display-only; the minimum score gate always evaluates the raw score.")
+            } else {
+                Text("Score \(rawScore)/100 is a deterministic weighted confluence score — not a calibrated win probability yet.\n\nWalk-forward Platt calibration activates automatically once 100 resolved filled Strong signals are recorded. The minimum score gate always evaluates the raw score.")
+            }
+        }
     }
 
     private var psychologyModule: some View {

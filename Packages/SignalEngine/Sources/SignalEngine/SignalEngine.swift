@@ -111,6 +111,7 @@ public enum SignalEngine {
             config: config,
             dataProvider: dataProvider,
             isMarketClosed: entrySeries.report.isMarketClosed,
+            marketClosedReason: entrySeries.report.marketClosedReason,
             nowEpochSeconds: serverNowEpochSeconds
         )
 
@@ -138,6 +139,7 @@ public enum SignalEngine {
         config: EngineConfig,
         dataProvider: String,
         isMarketClosed: Bool,
+        marketClosedReason: String? = nil,
         nowEpochSeconds: TimeInterval
     ) -> TradeSignal? {
         guard entryCandles.count >= CandleHygieneEngine.minimumRequiredBars else { return nil }
@@ -154,6 +156,7 @@ public enum SignalEngine {
             config: config,
             dataProvider: dataProvider,
             isMarketClosed: isMarketClosed,
+            marketClosedReason: marketClosedReason,
             nowEpochSeconds: nowEpochSeconds
         ).signal
     }
@@ -179,6 +182,7 @@ public enum SignalEngine {
         config: EngineConfig,
         dataProvider: String,
         isMarketClosed: Bool,
+        marketClosedReason: String? = nil,
         nowEpochSeconds: TimeInterval
     ) -> DetailedSanitizedEvaluation {
         let regime = MarketRegimeClassifier.classify(candles: entryCandles, marketClass: asset.marketClass)
@@ -252,7 +256,8 @@ public enum SignalEngine {
             dataProvider: dataProvider,
             isMarketClosed: isMarketClosed,
             nowEpochSeconds: nowEpochSeconds,
-            newsCatalyst: newsCatalyst
+            newsCatalyst: newsCatalyst,
+            marketClosedReason: marketClosedReason
         )
 
         return DetailedSanitizedEvaluation(
