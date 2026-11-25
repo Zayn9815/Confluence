@@ -61,7 +61,8 @@ public final class ConfluenceDataStore {
             TradeLedgerEntry.self,
             TradeReplayCandleCache.self,
             PersistedOutcomeRecord.self,
-            CrashLogEntry.self
+            CrashLogEntry.self,
+            JournalEntry.self
         ])
 
         let config: ModelConfiguration
@@ -670,6 +671,99 @@ public final class ConfluenceDataStore {
         }
     }
 
+    // MARK: - Trade Journal (v1.4 Purely Additive 9th Table)
+
+    public func upsertJournalEntry(_ snapshot: JournalEntrySnapshot) {
+        let targetId = snapshot.id
+        let stratData = (try? JSONEncoder().encode(snapshot.strategyIDs)) ?? Data()
+        let tagsData = (try? JSONEncoder().encode(snapshot.tags)) ?? Data()
+        let desc = FetchDescriptor<JournalEntry>(
+            predicate: #Predicate { $0.id == targetId }
+        )
+        if let existing = try? context.fetch(desc).first {
+            existing.signalFingerprint = snapshot.signalFingerprint
+            existing.symbol = snapshot.symbol
+            existing.marketRaw = snapshot.marketClass.rawValue
+            existing.timeframeRaw = snapshot.timeframe.rawValue
+            existing.directionRaw = snapshot.direction.rawValue
+            existing.plannedEntry = snapshot.plannedEntry
+            existing.actualFillPrice = snapshot.actualFillPrice
+            existing.stopLoss = snapshot.stopLoss
+            existing.tp1 = snapshot.tp1
+            existing.tp2 = snapshot.tp2
+            existing.exitPrice = snapshot.exitPrice
+            existing.positionSizeText = snapshot.positionSizeText
+            existing.outcomeRaw = snapshot.outcome.rawValue
+            existing.actualRMultiple = snapshot.actualRMultiple
+            existing.systemRMultiple = snapshot.systemRMultiple
+            existing.strategyIDsJSON = stratData
+            existing.tagsJSON = tagsData
+            existing.notes = snapshot.notes
+            existing.takenAt = snapshot.takenAt
+            existing.closedAt = snapshot.closedAt
+        } else {
+            let row = JournalEntry(
+                id: snapshot.id,
+                signalFingerprint: snapshot.signalFingerprint,
+                symbol: snapshot.symbol,
+                marketRaw: snapshot.marketClass.rawValue,
+                timeframeRaw: snapshot.timeframe.rawValue,
+                directionRaw: snapshot.direction.rawValue,
+                plannedEntry: snapshot.plannedEntry,
+                actualFillPrice: snapshot.actualFillPrice,
+                stopLoss: snapshot.stopLoss,
+                tp1: snapshot.tp1,
+                tp2: snapshot.tp2,
+                exitPrice: snapshot.exitPrice,
+                positionSizeText: snapshot.positionSizeText,
+                outcomeRaw: snapshot.outcome.rawValue,
+                actualRMultiple: snapshot.actualRMultiple,
+                systemRMultiple: snapshot.systemRMultiple,
+                strategyIDsJSON: stratData,
+                tagsJSON: tagsData,
+                notes: snapshot.notes,
+                takenAt: snapshot.takenAt,
+                closedAt: snapshot.closedAt
+            )
+            context.insert(row)
+        }
+        try? context.save()
+    }
+
+    public func fetchJournalEntries(limit: Int = 500) -> [JournalEntrySnapshot] {
+        var desc = FetchDescriptor<JournalEntry>(
+            sortBy: [SortDescriptor(\.takenAt, order: .reverse)]
+        )
+        desc.fetchLimit = limit
+        guard let rows = try? context.fetch(desc) else { return [] }
+        return rows.map { $0.toSnapshot() }
+    }
+
+    public func journalEntry(forSignalFingerprint fp: String) -> JournalEntrySnapshot? {
+        let targetFP: String? = fp
+        let desc = FetchDescriptor<JournalEntry>(
+            predicate: #Predicate { $0.signalFingerprint == targetFP }
+        )
+        return (try? context.fetch(desc).first)?.toSnapshot()
+    }
+
+    public func deleteJournalEntry(id: String) {
+        let desc = FetchDescriptor<JournalEntry>(
+            predicate: #Predicate { $0.id == id }
+        )
+        if let rows = try? context.fetch(desc) {
+            for r in rows { context.delete(r) }
+            try? context.save()
+        }
+    }
+
+    public func clearJournalEntries() {
+        if let rows = try? context.fetch(FetchDescriptor<JournalEntry>()) {
+            for r in rows { context.delete(r) }
+            try? context.save()
+        }
+    }
+
     // MARK: - Reset & Export
 
     public func resetCalibrationAndHistory() {
@@ -709,7 +803,7 @@ public final class ConfluenceDataStore {
     public func exportCalibrationJSON() -> URL? {
         let signals = fetchSignals(limit: 500)
         let outcomes = fetchOutcomeRecords()
-        let summary = PassiveOutcomeEvaluator.summarize(records: outcomes)
+        let summary = PassiveOutcomeEvaluator.summarize(records: outcomes, filter: .headlineFixed)
         let bundle = CalibrationExportBundle(
             exportedAtISO8601: ISO8601DateFormatter().string(from: Date()),
             appBundleId: "com.bilal.confluence",
@@ -719,9 +813,11 @@ public final class ConfluenceDataStore {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(bundle) else { return nil }
+        guard let raw = try? encoder.encode(bundle),
+              let rawStr = String(data: raw, encoding: .utf8) else { return nil }
+        let safe = SecretRedactor.redact(rawStr)
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("Confluence_Calibration_Export.json")
-        try? data.write(to: tmp, options: .atomic)
+        try? Data(safe.utf8).write(to: tmp, options: .atomic)
         return tmp
     }
 }

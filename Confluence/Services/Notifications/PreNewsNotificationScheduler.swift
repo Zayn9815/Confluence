@@ -42,7 +42,7 @@ public final class PreNewsNotificationScheduler {
             center.removePendingNotificationRequests(withIdentifiers: staleIds)
         }
 
-        guard settings.economicCalendarEnabled else { return 0 }
+        guard settings.economicCalendarEnabled, settings.alertRules.allowPreNewsCountdowns else { return 0 }
         var leads: [Int] = []
         if settings.preNewsLead15m { leads.append(15) }
         if settings.preNewsLead5m { leads.append(5) }
@@ -58,6 +58,10 @@ public final class PreNewsNotificationScheduler {
 
         var scheduled = 0
         for slot in slots {
+            let fireDate = Date(timeIntervalSince1970: slot.fireEpochSeconds)
+            guard AlertRuleEvaluator.shouldAllowPreNews(rules: settings.alertRules, at: fireDate) else {
+                continue
+            }
             let content = UNMutableNotificationContent()
             content.title = "Pre-News Volatility Shield · \(slot.event.countryCode)"
             content.subtitle = "\(slot.event.name) in \(slot.leadMinutes)m"
@@ -73,7 +77,6 @@ public final class PreNewsNotificationScheduler {
                 content.sound = UNNotificationSound(named: UNNotificationSoundName("news_release_ping.caf"))
             }
 
-            let fireDate = Date(timeIntervalSince1970: slot.fireEpochSeconds)
             let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: fireDate)
             let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
             let req = UNNotificationRequest(identifier: slot.identifier, content: content, trigger: trigger)
@@ -88,21 +91,28 @@ public final class PreNewsNotificationScheduler {
     }
 
     public func postSignalNotification(_ signal: TradeSignal, settings: PersistedSettingsPayload) async {
+        let decision = AlertRuleEvaluator.evaluateSignalAlert(
+            signal: signal,
+            globalMinScore: settings.minimumConfidencePercent,
+            rules: settings.alertRules
+        )
+        guard decision.allowPush else { return }
+
         let content = UNMutableNotificationContent()
         let notifId = "confluence.signal.\(signal.fingerprint)"
         let itemType: NotificationItemType = (signal.category == .trapAlert) ? .trapAlert : .strongSignal
         if signal.category == .trapAlert, let trap = signal.trapDirection {
             content.title = "\(trap.rawValue) · \(signal.symbol) (\(signal.timeframe.displayLabel))"
             content.body = signal.psychologyReport.whatHappened
-            if settings.pushNotificationSoundEnabled && settings.trapAlertSoundEnabled {
+            if decision.allowSound && settings.pushNotificationSoundEnabled && settings.trapAlertSoundEnabled {
                 content.sound = UNNotificationSound(named: UNNotificationSoundName("trap_warning.caf"))
             }
         } else {
             let dir = signal.direction.rawValue.uppercased()
             let rr = signal.levels.map { "1:\(String(format: "%.1f", $0.riskRewardRatio))" } ?? ""
-            content.title = "\(dir) \(signal.symbol) · \(Int(signal.confidencePercent.rounded()))% (\(signal.tier.displayName))"
+            content.title = "\(dir) \(signal.symbol) · Score \(Int(signal.confidencePercent.rounded())) (\(signal.tier.displayName))"
             content.body = "\(signal.timeframe.displayLabel) \(rr) · \(signal.psychologyReport.whatHappened)"
-            if settings.pushNotificationSoundEnabled, let caf = settings.soundPreset.cafFileName {
+            if decision.allowSound && settings.pushNotificationSoundEnabled, let caf = settings.soundPreset.cafFileName {
                 content.sound = UNNotificationSound(named: UNNotificationSoundName(caf))
             }
         }
@@ -124,6 +134,8 @@ public final class PreNewsNotificationScheduler {
     }
 
     public func postMacroReleaseNotification(_ cluster: MacroClusterImpulse, settings: PersistedSettingsPayload) async {
+        guard AlertRuleEvaluator.shouldAllowMacroRelease(rules: settings.alertRules) else { return }
+
         let content = UNMutableNotificationContent()
         let id = "confluence.macro.\(cluster.currency).\(Int(cluster.clusterEpochSeconds))"
         content.title = "Macro Release · \(cluster.currency)"

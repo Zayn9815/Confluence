@@ -117,6 +117,13 @@ public struct SignalRulesSettingsView: View {
 
                 Toggle("Enable TP2 Target Generation", isOn: $coordinator.settings.payload.enableTP2Target)
                 Toggle("Show \"Weak / Filtered Signals\" in Feed", isOn: $coordinator.settings.payload.showWeakFilteredSignals)
+                Toggle("Max 1 Signal Per Correlated Cluster", isOn: Binding(
+                    get: { coordinator.settings.payload.oneSignalPerCorrelatedCluster },
+                    set: { newValue in
+                        coordinator.settings.payload.oneSignalPerCorrelatedCluster = newValue
+                        coordinator.recomputeCorrelations()
+                    }
+                ))
 
                 if isAdvanced {
                     Picker("Level Calculation Mode", selection: $coordinator.settings.payload.levelCalculationMode) {

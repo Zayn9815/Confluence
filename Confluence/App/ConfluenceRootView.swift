@@ -5,6 +5,7 @@ import SignalEngine
 public struct ConfluenceRootView: View {
     @Bindable var coordinator: MarketScannerCoordinator
     @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var selectedTab: Int = 0
 
     public init(coordinator: MarketScannerCoordinator) {
@@ -22,7 +23,9 @@ public struct ConfluenceRootView: View {
     private var palette: ConfluencePalette {
         ConfluencePalette.resolve(
             colorScheme: effectiveColorScheme,
-            usePureBlackAMOLED: coordinator.settings.payload.usePureBlackAMOLED
+            usePureBlackAMOLED: coordinator.settings.payload.usePureBlackAMOLED,
+            useColorBlindSafe: coordinator.settings.payload.useColorBlindSafePalette,
+            increaseContrast: colorSchemeContrast == .increased
         )
     }
 
@@ -30,6 +33,10 @@ public struct ConfluenceRootView: View {
         let isBannerPresented = Binding<Bool>(
             get: { coordinator.activeBanner != nil },
             set: { if !$0 { coordinator.activeBanner = nil } }
+        )
+        let isOnboardingPresented = Binding<Bool>(
+            get: { !coordinator.settings.payload.hasCompletedOnboarding },
+            set: { if !$0 { coordinator.settings.payload.hasCompletedOnboarding = true } }
         )
 
         TabView(selection: $selectedTab) {
@@ -55,6 +62,11 @@ public struct ConfluenceRootView: View {
         }
         .tint(palette.champagneGold)
         .preferredColorScheme(coordinator.settings.payload.appearanceMode.colorScheme)
+        .fullScreenCover(isPresented: isOnboardingPresented) {
+            OnboardingFlowView(palette: palette) {
+                coordinator.settings.payload.hasCompletedOnboarding = true
+            }
+        }
         .sheet(isPresented: $coordinator.isNotificationInboxPresented) {
             NotificationInboxSheet(coordinator: coordinator, palette: palette)
         }

@@ -719,4 +719,258 @@ public final class CrashLogEntry {
     }
 }
 
+// MARK: - v1.4 Purely Additive Trade Journal (9th SwiftData Table — Zero Mutation to v1.0-v1.3 Tables)
+
+public enum JournalTradeOutcome: String, Codable, Sendable, CaseIterable, Identifiable {
+    case open = "OPEN"
+    case win = "WIN"
+    case loss = "LOSS"
+    case breakeven = "BREAKEVEN"
+    case scratched = "SCRATCHED"
+
+    public var id: String { rawValue }
+}
+
+public struct JournalEntrySnapshot: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public let id: String
+    public let signalFingerprint: String?
+    public let symbol: String
+    public let marketClass: MarketClass
+    public let timeframe: Timeframe
+    public let direction: TradeDirection
+    public let plannedEntry: Double
+    public let actualFillPrice: Double?
+    public let stopLoss: Double
+    public let tp1: Double
+    public let tp2: Double?
+    public let exitPrice: Double?
+    public let positionSizeText: String?
+    public let outcome: JournalTradeOutcome
+    public let actualRMultiple: Double?
+    public let systemRMultiple: Double?
+    public let strategyIDs: [String]
+    public let tags: [String]
+    public let notes: String
+    public let takenAt: Date
+    public let closedAt: Date?
+
+    public init(
+        id: String = UUID().uuidString,
+        signalFingerprint: String? = nil,
+        symbol: String,
+        marketClass: MarketClass,
+        timeframe: Timeframe,
+        direction: TradeDirection,
+        plannedEntry: Double,
+        actualFillPrice: Double? = nil,
+        stopLoss: Double,
+        tp1: Double,
+        tp2: Double? = nil,
+        exitPrice: Double? = nil,
+        positionSizeText: String? = nil,
+        outcome: JournalTradeOutcome = .open,
+        actualRMultiple: Double? = nil,
+        systemRMultiple: Double? = nil,
+        strategyIDs: [String] = [],
+        tags: [String] = [],
+        notes: String = "",
+        takenAt: Date = Date(),
+        closedAt: Date? = nil
+    ) {
+        self.id = id
+        self.signalFingerprint = signalFingerprint
+        self.symbol = symbol
+        self.marketClass = marketClass
+        self.timeframe = timeframe
+        self.direction = direction
+        self.plannedEntry = plannedEntry
+        self.actualFillPrice = actualFillPrice
+        self.stopLoss = stopLoss
+        self.tp1 = tp1
+        self.tp2 = tp2
+        self.exitPrice = exitPrice
+        self.positionSizeText = positionSizeText
+        self.outcome = outcome
+        self.actualRMultiple = actualRMultiple
+        self.systemRMultiple = systemRMultiple
+        self.strategyIDs = strategyIDs
+        self.tags = tags
+        self.notes = notes
+        self.takenAt = takenAt
+        self.closedAt = closedAt
+    }
+
+    public var effectiveRMultiple: Double? {
+        if let explicit = actualRMultiple { return explicit }
+        guard let exit = exitPrice else { return nil }
+        let entry = actualFillPrice ?? plannedEntry
+        let risk = abs(entry - stopLoss)
+        guard risk > 1e-12 else { return nil }
+        let pnl = (direction == .long) ? (exit - entry) : (entry - exit)
+        return pnl / risk
+    }
+}
+
+public struct JournalSummaryStats: Sendable, Equatable {
+    public let totalTaken: Int
+    public let closedCount: Int
+    public let winsCount: Int
+    public let lossesCount: Int
+    public let myWinRate: Double?
+    public let myWinRateCI: WilsonInterval?
+    public let myAvgR: Double?
+    public let systemAvgR: Double?
+    public let takenRatio: Double?
+
+    public init(
+        totalTaken: Int,
+        closedCount: Int,
+        winsCount: Int,
+        lossesCount: Int,
+        myWinRate: Double?,
+        myWinRateCI: WilsonInterval?,
+        myAvgR: Double?,
+        systemAvgR: Double?,
+        takenRatio: Double?
+    ) {
+        self.totalTaken = totalTaken
+        self.closedCount = closedCount
+        self.winsCount = winsCount
+        self.lossesCount = lossesCount
+        self.myWinRate = myWinRate
+        self.myWinRateCI = myWinRateCI
+        self.myAvgR = myAvgR
+        self.systemAvgR = systemAvgR
+        self.takenRatio = takenRatio
+    }
+
+    public static func compute(entries: [JournalEntrySnapshot], totalSystemStrongSignals: Int) -> JournalSummaryStats {
+        let closed = entries.filter { $0.outcome == .win || $0.outcome == .loss || $0.outcome == .breakeven }
+        let wins = closed.filter { $0.outcome == .win }.count
+        let losses = closed.filter { $0.outcome == .loss }.count
+        let decided = wins + losses
+        let wr: Double? = decided > 0 ? Double(wins) / Double(decided) : nil
+        let ci = WilsonInterval.compute(wins: wins, total: decided)
+        let rVals = closed.compactMap(\.effectiveRMultiple)
+        let myAvgR: Double? = rVals.isEmpty ? nil : rVals.reduce(0, +) / Double(rVals.count)
+        let sysRVals = entries.compactMap(\.systemRMultiple)
+        let sysAvgR: Double? = sysRVals.isEmpty ? nil : sysRVals.reduce(0, +) / Double(sysRVals.count)
+        let ratio: Double? = totalSystemStrongSignals > 0
+            ? min(1.0, Double(entries.count) / Double(totalSystemStrongSignals))
+            : nil
+        return JournalSummaryStats(
+            totalTaken: entries.count,
+            closedCount: closed.count,
+            winsCount: wins,
+            lossesCount: losses,
+            myWinRate: wr,
+            myWinRateCI: ci,
+            myAvgR: myAvgR,
+            systemAvgR: sysAvgR,
+            takenRatio: ratio
+        )
+    }
+}
+
+/// Purely additive v1.4 SwiftData table for user's personal Trade Journal.
+@Model
+public final class JournalEntry {
+    @Attribute(.unique) public var id: String
+    public var signalFingerprint: String?
+    public var symbol: String
+    public var marketRaw: String
+    public var timeframeRaw: String
+    public var directionRaw: String
+    public var plannedEntry: Double
+    public var actualFillPrice: Double?
+    public var stopLoss: Double
+    public var tp1: Double
+    public var tp2: Double?
+    public var exitPrice: Double?
+    public var positionSizeText: String?
+    public var outcomeRaw: String
+    public var actualRMultiple: Double?
+    public var systemRMultiple: Double?
+    public var strategyIDsJSON: Data
+    public var tagsJSON: Data
+    public var notes: String
+    public var takenAt: Date
+    public var closedAt: Date?
+
+    public init(
+        id: String,
+        signalFingerprint: String? = nil,
+        symbol: String,
+        marketRaw: String,
+        timeframeRaw: String,
+        directionRaw: String,
+        plannedEntry: Double,
+        actualFillPrice: Double? = nil,
+        stopLoss: Double,
+        tp1: Double,
+        tp2: Double? = nil,
+        exitPrice: Double? = nil,
+        positionSizeText: String? = nil,
+        outcomeRaw: String = JournalTradeOutcome.open.rawValue,
+        actualRMultiple: Double? = nil,
+        systemRMultiple: Double? = nil,
+        strategyIDsJSON: Data = Data(),
+        tagsJSON: Data = Data(),
+        notes: String = "",
+        takenAt: Date = Date(),
+        closedAt: Date? = nil
+    ) {
+        self.id = id
+        self.signalFingerprint = signalFingerprint
+        self.symbol = symbol
+        self.marketRaw = marketRaw
+        self.timeframeRaw = timeframeRaw
+        self.directionRaw = directionRaw
+        self.plannedEntry = plannedEntry
+        self.actualFillPrice = actualFillPrice
+        self.stopLoss = stopLoss
+        self.tp1 = tp1
+        self.tp2 = tp2
+        self.exitPrice = exitPrice
+        self.positionSizeText = positionSizeText
+        self.outcomeRaw = outcomeRaw
+        self.actualRMultiple = actualRMultiple
+        self.systemRMultiple = systemRMultiple
+        self.strategyIDsJSON = strategyIDsJSON
+        self.tagsJSON = tagsJSON
+        self.notes = notes
+        self.takenAt = takenAt
+        self.closedAt = closedAt
+    }
+
+    public func toSnapshot() -> JournalEntrySnapshot {
+        let stratIDs = (try? JSONDecoder().decode([String].self, from: strategyIDsJSON)) ?? []
+        let tags = (try? JSONDecoder().decode([String].self, from: tagsJSON)) ?? []
+        return JournalEntrySnapshot(
+            id: id,
+            signalFingerprint: signalFingerprint,
+            symbol: symbol,
+            marketClass: MarketClass(rawValue: marketRaw) ?? .crypto,
+            timeframe: Timeframe(rawValue: timeframeRaw) ?? .h1,
+            direction: TradeDirection(rawValue: directionRaw) ?? .long,
+            plannedEntry: plannedEntry,
+            actualFillPrice: actualFillPrice,
+            stopLoss: stopLoss,
+            tp1: tp1,
+            tp2: tp2,
+            exitPrice: exitPrice,
+            positionSizeText: positionSizeText,
+            outcome: JournalTradeOutcome(rawValue: outcomeRaw) ?? .open,
+            actualRMultiple: actualRMultiple,
+            systemRMultiple: systemRMultiple,
+            strategyIDs: stratIDs,
+            tags: tags,
+            notes: notes,
+            takenAt: takenAt,
+            closedAt: closedAt
+        )
+    }
+}
+
+
 

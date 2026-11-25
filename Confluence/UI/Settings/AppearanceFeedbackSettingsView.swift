@@ -1,7 +1,7 @@
 import SwiftUI
 import SignalEngine
 
-/// Settings Category 1: Appearance & Feedback (Theme Mode, Pure Black AMOLED, Card Density, Audio, Haptics & Motion).
+/// Settings Category 1: Appearance & Feedback (Theme Mode, Pure Black AMOLED, Accessibility, Time Format, Audio & Haptics).
 public struct AppearanceFeedbackSettingsView: View {
     @Bindable var coordinator: MarketScannerCoordinator
     let palette: ConfluencePalette
@@ -23,10 +23,17 @@ public struct AppearanceFeedbackSettingsView: View {
                 if coordinator.settings.payload.appearanceMode != .light {
                     Toggle("Pure Black (AMOLED)", isOn: $coordinator.settings.payload.usePureBlackAMOLED)
                 }
+
+                Toggle("Color-Blind Safe Palette (Blue / Orange)", isOn: $coordinator.settings.payload.useColorBlindSafePalette)
             } header: {
-                Text("Theme & Color Mode")
+                Text("Theme & Accessibility")
             } footer: {
-                Text("Pure Black (AMOLED) switches the dark canvas to true #000000 black for OLED displays while preserving contrast on cards and price levels.")
+                Text("Color-Blind Safe replaces green/red directional cues with Okabe-Ito Blue/Orange alongside explicit directional arrows. System Increase Contrast & Reduce Motion are honored automatically.")
+            }
+
+            Section("Time Display") {
+                Toggle("24-Hour Clock (14:30 vs 2:30 PM)", isOn: $coordinator.settings.payload.use24HourTime)
+                Toggle("Show Timestamps in UTC", isOn: $coordinator.settings.payload.useUTCTimeZone)
             }
 
             Section("Feed Layout") {

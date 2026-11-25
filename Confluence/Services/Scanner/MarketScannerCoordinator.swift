@@ -62,6 +62,11 @@ public final class MarketScannerCoordinator {
     public var strategyBreakdowns: [StrategyDiagnosticBreakdown] = []
     public var tradeLedger: [TradeLedgerSnapshot] = []
     public var trapLogs: [TrapLogSnapshot] = []
+    public var journalEntries: [JournalEntrySnapshot] = []
+    public var journalSummary: JournalSummaryStats = JournalSummaryStats.compute(entries: [], totalSystemStrongSignals: 0)
+    public var correlationWarningsByFingerprint: [String: [CorrelationPairWarning]] = [:]
+    public var netExposureSummary: NetExposureSummary = NetExposureSummary(exposures: [], concentratedClusters: [], totalStrongSignals: 0)
+    private var cachedClosedCandlesBySymbol: [String: [Candle]] = [:]
 
     // Notification Bell Inbox & Deep-Link Routing
     public var notifications: [NotificationItemSnapshot] = []
@@ -129,7 +134,9 @@ public final class MarketScannerCoordinator {
         self.outcomeRecords = store.fetchOutcomeRecords()
         self.tradeLedger = store.fetchTradeLedger(limit: 300)
         self.trapLogs = store.fetchTrapLogs(limit: 300)
+        self.journalEntries = store.fetchJournalEntries(limit: 500)
         recomputeCalibration()
+        recomputeCorrelations()
         reloadNotifications()
         Task {
             self.geminiDailyCallsUsed = await geminiClient.dailyUsageCount()
@@ -137,6 +144,127 @@ public final class MarketScannerCoordinator {
             self.twelveDataQuota = await twelveData.cachedQuotaStatus()
             await refreshNotificationStatus()
         }
+    }
+
+    // MARK: - Trade Journal, Correlation Awareness, Broker Offsets & Backup/CSV (v1.4)
+
+    public func recomputeJournalSummary() {
+        let strongCount = signals.filter { $0.category == .strongSignal }.count
+        self.journalSummary = JournalSummaryStats.compute(
+            entries: journalEntries,
+            totalSystemStrongSignals: max(strongCount, tradeLedger.count)
+        )
+    }
+
+    public func recomputeCorrelations() {
+        let activeList: [TradeSignal]
+        if settings.payload.oneSignalPerCorrelatedCluster {
+            activeList = CorrelationAnalyzer.filterOnePerCorrelatedCluster(
+                signals: signals,
+                candlesBySymbol: cachedClosedCandlesBySymbol
+            )
+        } else {
+            activeList = signals
+        }
+        self.correlationWarningsByFingerprint = CorrelationAnalyzer.analyzeActiveSignals(
+            signals: activeList,
+            candlesBySymbol: cachedClosedCandlesBySymbol
+        )
+        self.netExposureSummary = CorrelationAnalyzer.netExposureSummary(signals: activeList)
+    }
+
+    /// Signals displayed in the feed (honoring optional `oneSignalPerCorrelatedCluster` cap when enabled).
+    public var displaySignals: [TradeSignal] {
+        if settings.payload.oneSignalPerCorrelatedCluster {
+            return CorrelationAnalyzer.filterOnePerCorrelatedCluster(
+                signals: signals,
+                candlesBySymbol: cachedClosedCandlesBySymbol
+            )
+        }
+        return signals
+    }
+
+    public func lastKnownPrice(for symbol: String) -> Double? {
+        if let bar = cachedClosedCandlesBySymbol[symbol]?.last {
+            return bar.close
+        }
+        if let sig = signals.first(where: { $0.symbol == symbol }) {
+            return sig.recentCandles.last?.close ?? sig.levels?.entryMid
+        }
+        return nil
+    }
+
+    public func journalEntry(forSignalFingerprint fingerprint: String) -> JournalEntrySnapshot? {
+        journalEntries.first { $0.signalFingerprint == fingerprint }
+    }
+
+    public func makeJournalDraft(from signal: TradeSignal) -> JournalEntrySnapshot {
+        if let existing = journalEntry(forSignalFingerprint: signal.fingerprint) {
+            return existing
+        }
+        let lv = settings.displayLevels(for: signal) ?? signal.levels
+        let outcomeRec = outcomeBySignalId[signal.fingerprint]
+        return JournalEntrySnapshot(
+            signalFingerprint: signal.fingerprint,
+            symbol: signal.symbol,
+            marketClass: signal.marketClass,
+            timeframe: signal.timeframe,
+            direction: signal.direction,
+            plannedEntry: lv?.entryMid ?? signal.recentCandles.last?.close ?? 0,
+            actualFillPrice: lv?.entryMid,
+            stopLoss: lv?.stopLoss ?? 0,
+            tp1: lv?.tp1 ?? 0,
+            tp2: (lv?.isTP2Enabled == true) ? lv?.tp2 : nil,
+            outcome: .open,
+            systemRMultiple: outcomeRec?.isResolved == true ? outcomeRec?.rMultiple : nil,
+            strategyIDs: signal.alignedStrategies.map(\.id),
+            tags: [signal.regime.badgeLabel, signal.killzone.displayName],
+            notes: "",
+            takenAt: Date()
+        )
+    }
+
+    public func saveJournalEntry(_ entry: JournalEntrySnapshot) {
+        store.upsertJournalEntry(entry)
+        self.journalEntries = store.fetchJournalEntries(limit: 500)
+        recomputeJournalSummary()
+    }
+
+    public func deleteJournalEntry(id: String) {
+        store.deleteJournalEntry(id: id)
+        self.journalEntries = store.fetchJournalEntries(limit: 500)
+        recomputeJournalSummary()
+    }
+
+    public func exportBackupArchiveURL() -> URL? {
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.0"
+        return BackupArchiveService.exportBackupFile(settings: settings.payload, store: store, appVersion: ver)
+    }
+
+    public func importBackupArchive(from data: Data, mode: BackupImportMode) throws -> BackupImportSummary {
+        let summary = try BackupArchiveService.restoreArchive(
+            from: data,
+            mode: mode,
+            settingsStore: settings,
+            dataStore: store
+        )
+        loadPersistedState()
+        diagnosticLog.log(
+            .info,
+            category: .engine,
+            message: "Restored backup (\(mode.rawValue)): \(summary.signalsImported) signals, \(summary.outcomesImported) outcomes, \(summary.journalImported) journal entries."
+        )
+        return summary
+    }
+
+    public func exportTradeLedgerCSVURL() -> URL? {
+        let csv = BackupArchiveService.buildTradeLedgerCSV(entries: tradeLedger)
+        return BackupArchiveService.writeCSVToTemporaryFile(content: csv, filename: "Confluence_Trade_Ledger.csv")
+    }
+
+    public func exportJournalCSVURL() -> URL? {
+        let csv = BackupArchiveService.buildJournalCSV(entries: journalEntries)
+        return BackupArchiveService.writeCSVToTemporaryFile(content: csv, filename: "Confluence_Trade_Journal.csv")
     }
 
     /// Recomputes Calibration KPIs (fixed headline + active custom filter), display-only Platt calibrator,
@@ -179,6 +307,7 @@ public final class MarketScannerCoordinator {
         self.calibrationSummary = PassiveOutcomeEvaluator.summarize(records: enriched, filter: filter)
         self.strategyBreakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: enriched, filter: filter)
         self.outcomeBySignalId = Dictionary(uniqueKeysWithValues: enriched.map { ($0.signalId, $0) })
+        recomputeJournalSummary()
     }
 
     // MARK: - Notification Bell Inbox
@@ -585,12 +714,15 @@ public final class MarketScannerCoordinator {
             }
         }
 
+        self.cachedClosedCandlesBySymbol = sanitizedClosedBySymbol
         self.activeTraps = scannedTraps
         self.signals = store.fetchSignals(limit: 150)
         self.outcomeRecords = store.fetchOutcomeRecords()
         self.tradeLedger = store.fetchTradeLedger(limit: 300)
         self.trapLogs = store.fetchTrapLogs(limit: 300)
+        self.journalEntries = store.fetchJournalEntries(limit: 500)
         recomputeCalibration()
+        recomputeCorrelations()
         self.twelveDataLocalDailyUsed = await twelveData.localDailyUsage()
         self.twelveDataQuota = await twelveData.cachedQuotaStatus()
 
@@ -612,6 +744,7 @@ public final class MarketScannerCoordinator {
         dismissedSignalFingerprints.insert(fingerprint)
         store.deleteSignal(fingerprint: fingerprint)
         signals.removeAll { $0.fingerprint == fingerprint }
+        recomputeCorrelations()
         diagnosticLog.log(.info, category: .engine, message: "Deleted signal card \(fingerprint) (Calibration Stats preserved).")
     }
 
@@ -620,6 +753,7 @@ public final class MarketScannerCoordinator {
         dismissedSignalFingerprints.formUnion(fingerprints)
         store.deleteSignals(fingerprints: fingerprints)
         signals.removeAll { fingerprints.contains($0.fingerprint) }
+        recomputeCorrelations()
         diagnosticLog.log(.info, category: .engine, message: "Deleted \(fingerprints.count) selected signal card(s) (Calibration Stats preserved).")
     }
 
@@ -628,6 +762,7 @@ public final class MarketScannerCoordinator {
         dismissedSignalFingerprints.formUnion(matching)
         store.deleteSignals(category: category)
         signals.removeAll { $0.category == category }
+        recomputeCorrelations()
         diagnosticLog.log(.info, category: .engine, message: "Cleared \(category.rawValue) tab (\(matching.count) cards; Calibration Stats preserved).")
     }
 
@@ -635,6 +770,7 @@ public final class MarketScannerCoordinator {
         dismissedSignalFingerprints.formUnion(signals.map(\.fingerprint))
         store.deleteAllSignals()
         signals = []
+        recomputeCorrelations()
         diagnosticLog.log(.info, category: .engine, message: "Cleared all signal cards from Signals feed (Calibration Stats preserved).")
     }
 
@@ -1125,7 +1261,7 @@ public final class MarketScannerCoordinator {
         if signal.category == .trapAlert, let td = signal.trapDirection {
             title = "\(td.rawValue) · \(signal.symbol)"
         } else {
-            title = "\(signal.direction.rawValue.uppercased()) \(signal.symbol) · \(Int(signal.confidencePercent.rounded()))%"
+            title = "\(signal.direction.rawValue.uppercased()) \(signal.symbol) · Score \(Int(signal.confidencePercent.rounded()))"
         }
 
         let item = NotificationItemSnapshot(
@@ -1144,29 +1280,47 @@ public final class MarketScannerCoordinator {
         )
         recordNotification(item)
 
+        let decision = AlertRuleEvaluator.evaluateSignalAlert(
+            signal: signal,
+            globalMinScore: settings.payload.minimumConfidencePercent,
+            rules: settings.payload.alertRules
+        )
+        guard decision.allowAnyDelivery else {
+            if let reason = decision.suppressedReason {
+                diagnosticLog.log(.info, category: .notification, message: "Suppressed alert for \(signal.symbol): \(reason)")
+            }
+            return
+        }
+
         if isBackground {
-            await PreNewsNotificationScheduler.shared.postSignalNotification(signal, settings: settings.payload)
+            if decision.allowPush {
+                await PreNewsNotificationScheduler.shared.postSignalNotification(signal, settings: settings.payload)
+            }
         } else {
-            let bannerKind: AlertBannerKind = (signal.category == .trapAlert) ? .trapAlert : .strongSignal(signal.direction)
-            self.activeBanner = FloatingAlertBanner(
-                kind: bannerKind,
-                title: title,
-                subtitle: signal.psychologyReport.whatHappened,
-                targetSignalId: signal.fingerprint
-            )
+            if decision.allowBanner {
+                let bannerKind: AlertBannerKind = (signal.category == .trapAlert) ? .trapAlert : .strongSignal(signal.direction)
+                self.activeBanner = FloatingAlertBanner(
+                    kind: bannerKind,
+                    title: title,
+                    subtitle: signal.psychologyReport.whatHappened,
+                    targetSignalId: signal.fingerprint
+                )
+            }
 
-            let audioKind: AlertAudioKind = (signal.category == .trapAlert)
-                ? .trapWarning
-                : .tradeSignal(settings.payload.soundPreset)
-            let soundAllowed = (signal.category == .trapAlert)
-                ? (settings.payload.inAppSignalSoundEnabled && settings.payload.trapAlertSoundEnabled)
-                : settings.payload.inAppSignalSoundEnabled
+            if decision.allowSound {
+                let audioKind: AlertAudioKind = (signal.category == .trapAlert)
+                    ? .trapWarning
+                    : .tradeSignal(settings.payload.soundPreset)
+                let soundAllowed = (signal.category == .trapAlert)
+                    ? (settings.payload.inAppSignalSoundEnabled && settings.payload.trapAlertSoundEnabled)
+                    : settings.payload.inAppSignalSoundEnabled
 
-            SignalSoundEngine.shared.playAlert(
-                kind: audioKind,
-                soundEnabled: soundAllowed,
-                hapticsEnabled: settings.payload.hapticsEnabled
-            )
+                SignalSoundEngine.shared.playAlert(
+                    kind: audioKind,
+                    soundEnabled: soundAllowed,
+                    hapticsEnabled: settings.payload.hapticsEnabled
+                )
+            }
         }
     }
 

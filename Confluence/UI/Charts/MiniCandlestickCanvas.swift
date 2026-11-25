@@ -132,6 +132,14 @@ public struct MiniCandlestickCanvas: View {
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilitySummary)
+    }
+
+    private var accessibilitySummary: String {
+        let count = min(candles.count, 36)
+        let lastClose = candles.last.map { String(format: "%.2f", $0.close) } ?? "unavailable"
+        return "Mini candlestick chart showing \(count) recent closed bars, last close \(lastClose). Double tap to open full interactive chart."
     }
 
     private func drawLevelLine(context: GraphicsContext, width: CGFloat, y: CGFloat, color: Color, dash: [CGFloat]) {

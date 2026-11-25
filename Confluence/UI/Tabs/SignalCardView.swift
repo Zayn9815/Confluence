@@ -5,6 +5,13 @@ import SignalEngine
 public struct SignalCardView: View {
     let signal: TradeSignal
     let outcome: SignalOutcomeRecord?
+    let displayLevelsOverride: TradeLevels?
+    let brokerOffsetInfo: BrokerPriceOffset?
+    let isBrokerAdjusted: Bool
+    let correlationWarnings: [CorrelationPairWarning]
+    let isTakenInJournal: Bool
+    let use24HourTime: Bool
+    let useUTCTimeZone: Bool
     let palette: ConfluencePalette
     let density: CardDensity
     let showMiniChart: Bool
@@ -14,9 +21,14 @@ public struct SignalCardView: View {
     let isSelected: Bool
     let onToggleSelect: (() -> Void)?
     let onDelete: (() -> Void)?
+    let onToggleBrokerAdjusted: (() -> Void)?
+    let onOpenPositionSizer: (() -> Void)?
+    let onMarkAsTaken: (() -> Void)?
+    let onOpenGlossaryTerm: ((String) -> Void)?
     let onOpenChart: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var showStrategies = false
     @State private var showBreakdown = false
     @State private var showPsychology = true
@@ -27,6 +39,13 @@ public struct SignalCardView: View {
     public init(
         signal: TradeSignal,
         outcome: SignalOutcomeRecord? = nil,
+        displayLevelsOverride: TradeLevels? = nil,
+        brokerOffsetInfo: BrokerPriceOffset? = nil,
+        isBrokerAdjusted: Bool = false,
+        correlationWarnings: [CorrelationPairWarning] = [],
+        isTakenInJournal: Bool = false,
+        use24HourTime: Bool = false,
+        useUTCTimeZone: Bool = false,
         palette: ConfluencePalette,
         density: CardDensity,
         showMiniChart: Bool,
@@ -36,10 +55,21 @@ public struct SignalCardView: View {
         isSelected: Bool = false,
         onToggleSelect: (() -> Void)? = nil,
         onDelete: (() -> Void)? = nil,
+        onToggleBrokerAdjusted: (() -> Void)? = nil,
+        onOpenPositionSizer: (() -> Void)? = nil,
+        onMarkAsTaken: (() -> Void)? = nil,
+        onOpenGlossaryTerm: ((String) -> Void)? = nil,
         onOpenChart: @escaping () -> Void
     ) {
         self.signal = signal
         self.outcome = outcome
+        self.displayLevelsOverride = displayLevelsOverride
+        self.brokerOffsetInfo = brokerOffsetInfo
+        self.isBrokerAdjusted = isBrokerAdjusted
+        self.correlationWarnings = correlationWarnings
+        self.isTakenInJournal = isTakenInJournal
+        self.use24HourTime = use24HourTime
+        self.useUTCTimeZone = useUTCTimeZone
         self.palette = palette
         self.density = density
         self.showMiniChart = showMiniChart
@@ -49,17 +79,28 @@ public struct SignalCardView: View {
         self.isSelected = isSelected
         self.onToggleSelect = onToggleSelect
         self.onDelete = onDelete
+        self.onToggleBrokerAdjusted = onToggleBrokerAdjusted
+        self.onOpenPositionSizer = onOpenPositionSizer
+        self.onMarkAsTaken = onMarkAsTaken
+        self.onOpenGlossaryTerm = onOpenGlossaryTerm
         self.onOpenChart = onOpenChart
     }
 
+    private var activeLevels: TradeLevels? {
+        displayLevelsOverride ?? signal.levels
+    }
+
     public var body: some View {
-        let dec = PriceFormatHelper.decimals(for: signal.symbol, marketClass: signal.marketClass, referencePrice: signal.levels?.entryMid)
+        let dec = PriceFormatHelper.decimals(for: signal.symbol, marketClass: signal.marketClass, referencePrice: activeLevels?.entryMid)
         let accentBorder: Color? = {
             if isSelecting && isSelected { return palette.shortCrimson.opacity(0.85) }
             if signal.tier == .aPlusInstitutional { return palette.champagneGold.opacity(0.65) }
             if signal.category == .trapAlert { return palette.trapAmber.opacity(0.65) }
             return nil
         }()
+        let gridCols: [GridItem] = dynamicTypeSize.isAccessibilitySize
+            ? [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+            : [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
 
         VStack(alignment: .leading, spacing: density == .compact ? 10 : 13) {
             // 1. Header Row: Selection Checkmark (when selecting), Market, Pair, Direction/Trap Badge, Score Gauge
@@ -89,12 +130,12 @@ public struct SignalCardView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(palette.color(for: signal.tier))
                     }
-                    // Persisted signal generation date, local time & relative age
+                    // Persisted signal generation date, formatted time (12h/24h, Local/UTC) & relative age
                     HStack(spacing: 4) {
                         Image(systemName: "clock")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(palette.tertiaryInk)
-                        Text(Self.formattedGeneratedStamp(epochSeconds: signal.generatedAtEpochSeconds))
+                        Text(formattedGeneratedStamp(epochSeconds: signal.generatedAtEpochSeconds))
                             .font(.system(size: 10, weight: .medium).monospacedDigit())
                             .foregroundStyle(palette.secondaryInk)
                             .lineLimit(1)
@@ -105,11 +146,27 @@ public struct SignalCardView: View {
                 confidenceGauge
             }
 
-            // 2. Lifecycle, Regime, Killzone, Market Closed & News Catalyst Pills
+            // 2. Lifecycle, Correlation, Broker Offset, Regime, Killzone, Market Closed & News Catalyst Pills
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     if let lifecycle = lifecycleBadge {
                         badgePill(lifecycle.text, color: lifecycle.color, fill: lifecycle.color.opacity(0.15))
+                    }
+                    if isTakenInJournal {
+                        badgePill("Taken · Journal", color: palette.champagneGold, fill: palette.champagneGold.opacity(0.16))
+                    }
+                    ForEach(correlationWarnings.prefix(2)) { warn in
+                        badgePill(warn.badgeText, color: palette.trapAmber, fill: palette.trapAmber.opacity(0.15))
+                    }
+                    if let offsetInfo = brokerOffsetInfo {
+                        Button {
+                            onToggleBrokerAdjusted?()
+                        } label: {
+                            let staleSuffix = offsetInfo.isStale() ? " · Stale >24h" : ""
+                            let label = isBrokerAdjusted ? "Broker-Adjusted\(staleSuffix)" : "Feed Prices (Tap for Broker)"
+                            badgePill(label, color: isBrokerAdjusted ? palette.macroIceBlue : palette.secondaryInk, fill: (isBrokerAdjusted ? palette.macroIceBlue : palette.elevatedSurface).opacity(isBrokerAdjusted ? 0.16 : 1.0))
+                        }
+                        .buttonStyle(.plain)
                     }
                     badgePill(signal.regime.badgeLabel, color: palette.color(for: signal.regime), fill: palette.color(for: signal.regime).opacity(0.14))
                     badgePill(signal.killzone.displayName, color: palette.secondaryInk, fill: palette.elevatedSurface)
@@ -156,14 +213,10 @@ public struct SignalCardView: View {
                 .buttonStyle(.plain)
             }
 
-            // 4. Numeric Execution Grid (Code owns ALL numbers, zero truncation)
-            if let lv = signal.levels {
+            // 4. Numeric Execution Grid (Code owns ALL numbers; switches cleanly to 2-col at AX3 Dynamic Type)
+            if let lv = activeLevels {
                 let levelDec = PriceFormatHelper.decimals(for: signal.symbol, marketClass: signal.marketClass, referencePrice: lv.entryMid)
-                LazyVGrid(columns: [
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8)
-                ], spacing: 8) {
+                LazyVGrid(columns: gridCols, spacing: 8) {
                     entryZoneCell(
                         low: PriceFormatHelper.format(lv.entryLow, decimals: levelDec),
                         high: PriceFormatHelper.format(lv.entryHigh, decimals: levelDec),
@@ -205,7 +258,7 @@ public struct SignalCardView: View {
                     metricCell(
                         title: "CONFLUENCE",
                         value: "\(signal.alignedStrategies.count) Signals",
-                        sub: signal.dataProvider,
+                        sub: isBrokerAdjusted ? "\(signal.dataProvider) + Offset" : signal.dataProvider,
                         accent: palette.secondaryInk
                     )
                 }
@@ -272,28 +325,47 @@ public struct SignalCardView: View {
                 }
             }
 
-            // 6. Aligned Strategies Chips (Expandable with weight & historical win-rate)
+            // 6. Aligned Strategies Chips (Expandable with Glossary (i) deep-link)
             if !signal.alignedStrategies.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { showStrategies.toggle() }
-                    } label: {
-                        HStack {
-                            Text("Aligned Strategies (\(signal.alignedStrategies.count))")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.secondaryInk)
-                            Spacer()
-                            Image(systemName: showStrategies ? "chevron.up" : "chevron.down")
-                                .font(.caption2)
-                                .foregroundStyle(palette.tertiaryInk)
+                    HStack {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { showStrategies.toggle() }
+                        } label: {
+                            HStack {
+                                Text("Aligned Strategies (\(signal.alignedStrategies.count))")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(palette.secondaryInk)
+                                Spacer()
+                                Image(systemName: showStrategies ? "chevron.up" : "chevron.down")
+                                    .font(.caption2)
+                                    .foregroundStyle(palette.tertiaryInk)
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        if let onOpenGlossaryTerm {
+                            Button {
+                                onOpenGlossaryTerm("")
+                            } label: {
+                                Image(systemName: "info.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(palette.macroIceBlue)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Open strategy glossary")
                         }
                     }
-                    .buttonStyle(.plain)
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(signal.alignedStrategies) { strat in
-                                badgePill(strat.name, color: palette.primaryInk, fill: palette.elevatedSurface)
+                                Button {
+                                    onOpenGlossaryTerm?(strat.name)
+                                } label: {
+                                    badgePill(strat.name, color: palette.primaryInk, fill: palette.elevatedSurface)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -352,48 +424,28 @@ public struct SignalCardView: View {
                 .background(palette.elevatedSurface.opacity(0.8), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
 
-            // 9. Footer Actions: Closed Bar Timestamp + Delete + One-Tap Copy Setup
-            HStack(spacing: 8) {
-                Text("Bar \(Date(timeIntervalSince1970: signal.barCloseEpochSeconds).formatted(date: .abbreviated, time: .shortened))")
+            // 9. Footer Actions: Bar Timestamp + Size + Mark Taken + Delete + Copy Setup (AX3-adaptive via ViewThatFits)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Bar \(TimeDisplayFormatter.formatDateTime(epochSeconds: signal.barCloseEpochSeconds, use24Hour: use24HourTime, useUTC: useUTCTimeZone))")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(palette.tertiaryInk)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
-                Spacer()
-                if !isSelecting, let onDelete {
-                    Button(role: .destructive) {
-                        onDelete()
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(palette.shortCrimson.opacity(0.85))
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 6)
-                            .background(palette.elevatedSurface, in: Capsule())
-                            .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Delete signal")
-                }
 
-                Button {
-                    UIPasteboard.general.string = signal.formattedCopyText(decimals: dec)
-                    SignalSoundEngine.shared.playCopyConfirmationHaptic(enabled: hapticsEnabled)
-                    withAnimation { didCopy = true }
-                    Task {
-                        try? await Task.sleep(nanoseconds: 1_400_000_000)
-                        withAnimation { didCopy = false }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 7) {
+                        actionButtons(decimals: dec)
+                        Spacer(minLength: 0)
                     }
-                } label: {
-                    Label(didCopy ? "Copied" : "Copy Setup", systemImage: didCopy ? "checkmark" : "doc.on.doc")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(didCopy ? palette.longEmerald : palette.primaryInk)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(palette.elevatedSurface, in: Capsule())
-                        .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(spacing: 7) {
+                            sizeAndJournalButtons
+                        }
+                        HStack(spacing: 7) {
+                            deleteAndCopyButtons(decimals: dec)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
             }
         }
         .padding(density == .compact ? 12 : 15)
@@ -410,8 +462,22 @@ public struct SignalCardView: View {
             } label: {
                 Label("Open Interactive Chart", systemImage: "chart.xyaxis.line")
             }
+            if let onOpenPositionSizer, activeLevels != nil {
+                Button {
+                    onOpenPositionSizer()
+                } label: {
+                    Label("Position Size Calculator", systemImage: "function")
+                }
+            }
+            if let onMarkAsTaken {
+                Button {
+                    onMarkAsTaken()
+                } label: {
+                    Label(isTakenInJournal ? "Edit Journal Entry" : "Mark as Taken", systemImage: "book.closed")
+                }
+            }
             Button {
-                UIPasteboard.general.string = signal.formattedCopyText(decimals: dec)
+                UIPasteboard.general.string = formattedSetupCopyText(decimals: dec)
             } label: {
                 Label("Copy Setup", systemImage: "doc.on.doc")
             }
@@ -424,7 +490,6 @@ public struct SignalCardView: View {
                 }
             }
         }
-        // One-shot metallic Pow shine on arrival (respects Reduce Motion, then settles static to save battery)
         .changeEffect(.shine(duration: 0.9), value: arrivalTriggerCount, isEnabled: animateArrival && !reduceMotion)
         .onAppear {
             if animateArrival && !reduceMotion && arrivalTriggerCount == 0 {
@@ -433,9 +498,102 @@ public struct SignalCardView: View {
         }
     }
 
-    private static func formattedGeneratedStamp(epochSeconds: TimeInterval) -> String {
-        let date = Date(timeIntervalSince1970: epochSeconds)
-        let dateTime = date.formatted(date: .abbreviated, time: .shortened)
+    @ViewBuilder
+    private func actionButtons(decimals dec: Int) -> some View {
+        sizeAndJournalButtons
+        deleteAndCopyButtons(decimals: dec)
+    }
+
+    @ViewBuilder
+    private var sizeAndJournalButtons: some View {
+        if let onOpenPositionSizer, activeLevels != nil {
+            Button {
+                onOpenPositionSizer()
+            } label: {
+                Label("Size", systemImage: "function")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.macroIceBlue)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(palette.elevatedSurface, in: Capsule())
+                    .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+            }
+            .buttonStyle(.plain)
+        }
+        if let onMarkAsTaken {
+            Button {
+                onMarkAsTaken()
+            } label: {
+                Label(isTakenInJournal ? "Journal" : "Mark Taken", systemImage: isTakenInJournal ? "checkmark.circle.fill" : "book.closed")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isTakenInJournal ? palette.champagneGold : palette.primaryInk)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(palette.elevatedSurface, in: Capsule())
+                    .overlay(Capsule().strokeBorder(isTakenInJournal ? palette.champagneGold.opacity(0.6) : palette.border, lineWidth: 0.75))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private func deleteAndCopyButtons(decimals dec: Int) -> some View {
+        if !isSelecting, let onDelete {
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.shortCrimson.opacity(0.85))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(palette.elevatedSurface, in: Capsule())
+                    .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Delete signal")
+        }
+
+        Button {
+            UIPasteboard.general.string = formattedSetupCopyText(decimals: dec)
+            SignalSoundEngine.shared.playCopyConfirmationHaptic(enabled: hapticsEnabled)
+            withAnimation { didCopy = true }
+            Task {
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                withAnimation { didCopy = false }
+            }
+        } label: {
+            Label(didCopy ? "Copied" : "Copy", systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(didCopy ? palette.longEmerald : palette.primaryInk)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(palette.elevatedSurface, in: Capsule())
+                .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func formattedSetupCopyText(decimals: Int) -> String {
+        guard isBrokerAdjusted, let lv = activeLevels else {
+            return signal.formattedCopyText(decimals: decimals)
+        }
+        let fmt = "%.\(decimals)f"
+        var lines = [
+            "CONFLUENCE \(signal.direction.rawValue.uppercased()) | \(signal.symbol) (\(signal.timeframe.displayLabel)) [Broker-Adjusted]",
+            "Score: \(Int(signal.confidencePercent.rounded()))/100 (\(signal.tier.displayName)) | Regime: \(signal.regime.badgeLabel) | \(signal.killzone.displayName)",
+            "Entry Zone: \(String(format: fmt, lv.entryLow)) - \(String(format: fmt, lv.entryHigh))",
+            "Stop Loss: \(String(format: fmt, lv.stopLoss)) (-\(String(format: "%.2f", lv.riskPercent))%)",
+            "TP1: \(String(format: fmt, lv.tp1)) (+\(String(format: "%.2f", lv.reward1Percent))%) | R:R 1:\(String(format: "%.2f", lv.riskRewardRatio))"
+        ]
+        if lv.isTP2Enabled {
+            lines.append("TP2: \(String(format: fmt, lv.tp2)) (+\(String(format: "%.2f", lv.reward2Percent))%)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func formattedGeneratedStamp(epochSeconds: TimeInterval) -> String {
+        let dateTime = TimeDisplayFormatter.formatDateTime(epochSeconds: epochSeconds, use24Hour: use24HourTime, useUTC: useUTCTimeZone)
         let ageSeconds = max(0, Date().timeIntervalSince1970 - epochSeconds)
         let ageText: String
         if ageSeconds < 60 {
@@ -489,15 +647,18 @@ public struct SignalCardView: View {
         }
     }
 
+    /// Explicit icon + text direction badge (never color-only, supporting color-blind & VoiceOver users).
     private var directionOrTrapBadge: some View {
         Group {
             if signal.category == .trapAlert, let trap = signal.trapDirection {
-                badgePill(trap.rawValue, color: palette.trapAmber, fill: palette.trapAmber.opacity(0.16))
+                iconBadgePill(trap.rawValue, systemImage: "exclamationmark.triangle.fill", color: palette.trapAmber, fill: palette.trapAmber.opacity(0.16))
             } else if signal.category == .weakSignal {
-                badgePill("WEAK · \(signal.direction.rawValue.uppercased())", color: palette.secondaryInk, fill: palette.elevatedSurface)
+                let icon = signal.direction == .long ? "arrow.up.right" : (signal.direction == .short ? "arrow.down.right" : "minus")
+                iconBadgePill("WEAK · \(signal.direction.rawValue.uppercased())", systemImage: icon, color: palette.secondaryInk, fill: palette.elevatedSurface)
             } else {
                 let c = palette.color(for: signal.direction)
-                badgePill(signal.direction.rawValue.uppercased(), color: c, fill: c.opacity(0.16))
+                let icon = signal.direction == .long ? "arrow.up.right" : (signal.direction == .short ? "arrow.down.right" : "minus")
+                iconBadgePill(signal.direction.rawValue.uppercased(), systemImage: icon, color: c, fill: c.opacity(0.16))
             }
         }
     }
@@ -532,6 +693,7 @@ public struct SignalCardView: View {
         let ringColor = palette.color(for: signal.tier)
         let calPct: Int? = signal.calibratedProbability.map { max(1, min(99, Int(($0 * 100.0).rounded()))) }
         let sampleN = signal.calibrationSampleCount ?? 0
+        let a11yText = calPct.map { "Signal score \(rawScore), calibrated probability \($0) percent" } ?? "Signal score \(rawScore) out of 100"
 
         return Button {
             showScoreExplanation = true
@@ -568,7 +730,7 @@ public struct SignalCardView: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(calPct != nil ? "Signal score \(rawScore), calibrated probability \(calPct!) percent" : "Signal score \(rawScore) out of 100")
+        .accessibilityLabel(a11yText)
         .alert("Signal Score vs. Probability", isPresented: $showScoreExplanation) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -601,7 +763,6 @@ public struct SignalCardView: View {
             }
             .buttonStyle(.plain)
 
-            // Intraday Pro Flow vs Beginner Direction Strip (plus separate Weekly Macro COT row when present)
             VStack(spacing: 7) {
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -650,7 +811,6 @@ public struct SignalCardView: View {
             .padding(9)
             .background(palette.elevatedSurface.opacity(0.8), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-            // Provenance + Behavioral Badges
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     badgePill(psych.provenanceBadge, color: palette.macroIceBlue, fill: palette.macroIceBlue.opacity(0.12))
@@ -726,5 +886,18 @@ public struct SignalCardView: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(fill, in: Capsule())
+    }
+
+    private func iconBadgePill(_ text: String, systemImage: String, color: Color, fill: Color) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: systemImage)
+                .font(.system(size: 9, weight: .bold))
+            Text(text)
+                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(fill, in: Capsule())
     }
 }

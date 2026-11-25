@@ -186,7 +186,13 @@ public struct NewsCalendarTabView: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     if ev.isExactClock {
-                        Text(ev.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                        Text(
+                            TimeDisplayFormatter.formatDateTime(
+                                epochSeconds: ev.scheduledEpochSeconds,
+                                use24Hour: coordinator.settings.payload.use24HourTime,
+                                useUTC: coordinator.settings.payload.useUTCTimeZone
+                            )
+                        )
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(palette.secondaryInk)
                         if !ev.isPublished && ev.scheduledEpochSeconds > nowEpoch {
@@ -347,7 +353,13 @@ public struct NewsCalendarTabView: View {
 
                 Spacer()
 
-                Text(Date(timeIntervalSince1970: item.publishedEpochSeconds).formatted(date: .omitted, time: .shortened))
+                Text(
+                    TimeDisplayFormatter.formatShortTime(
+                        epochSeconds: item.publishedEpochSeconds,
+                        use24Hour: coordinator.settings.payload.use24HourTime,
+                        useUTC: coordinator.settings.payload.useUTCTimeZone
+                    )
+                )
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(palette.tertiaryInk)
             }

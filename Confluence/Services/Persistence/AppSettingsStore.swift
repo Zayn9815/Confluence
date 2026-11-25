@@ -53,15 +53,34 @@ public enum CalendarImpactFilter: String, Codable, Sendable, CaseIterable, Ident
     }
 }
 
+public struct BrokerPriceOffset: Codable, Sendable, Equatable {
+    /// Additive price delta (`brokerPrice - providerLastClose`) applied strictly for display/copy.
+    public var offset: Double
+    public var calibratedAtEpochSeconds: TimeInterval
+
+    public init(offset: Double, calibratedAtEpochSeconds: TimeInterval = Date().timeIntervalSince1970) {
+        self.offset = offset
+        self.calibratedAtEpochSeconds = calibratedAtEpochSeconds
+    }
+
+    public func isStale(nowEpochSeconds: TimeInterval = Date().timeIntervalSince1970) -> Bool {
+        (nowEpochSeconds - calibratedAtEpochSeconds) > 86_400
+    }
+}
+
 public struct PersistedSettingsPayload: Codable, Sendable {
-    // Section 1 — Appearance & Feedback
+    // Section 1 — Appearance, Accessibility & Time Display
     public var appearanceMode: AppearanceMode = .dark
     public var usePureBlackAMOLED: Bool = false
+    public var useColorBlindSafePalette: Bool = false
+    public var use24HourTime: Bool = false
+    public var useUTCTimeZone: Bool = false
     public var cardDensity: CardDensity = .standard
     public var showMiniCharts: Bool = true
     public var showAdvancedSettings: Bool = false
+    public var hasCompletedOnboarding: Bool = false
 
-    // Section 2 — Alerts, Sound & Haptics
+    // Section 2 — Alerts, Sound, Haptics & Quiet Hours
     public var inAppSignalSoundEnabled: Bool = true
     public var pushNotificationSoundEnabled: Bool = true
     public var soundPreset: SoundPreset = .terminalChime
@@ -70,8 +89,9 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var newsReleaseImpactSoundEnabled: Bool = true
     public var hapticsEnabled: Bool = true
     public var arrivalAnimationsEnabled: Bool = true
+    public var alertRules: AlertRulesConfig = AlertRulesConfig()
 
-    // Section 3 — Markets, News & Data Feeds
+    // Section 3 — Markets, News, Broker Offsets & Data Feeds
     public var enabledMarkets: Set<MarketClass> = Set(MarketClass.allCases)
     public var watchlistSymbols: [String] = WatchlistDefaults.assets.map(\.symbol)
     public var tradFiProviderPreference: TradFiProviderPreference = .auto
@@ -85,8 +105,10 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var positioningFeedsEnabled: Bool = true
     public var backgroundRefreshEnabled: Bool = true
     public var backgroundRefreshIntervalMinutes: Int = 30
+    public var brokerPriceOffsets: [String: BrokerPriceOffset] = [:]
+    public var showBrokerAdjustedLevels: Bool = false
 
-    // Section 4 — Signal Rules, Risk/TP & Strategy Selection
+    // Section 4 — Signal Rules, Risk/TP, Sizing, Correlation & Strategy Selection
     public var htfTimeframe: Timeframe = .h4
     public var entryTimeframe: Timeframe = .h1
     public var minimumConfidencePercent: Double = 70.0
@@ -105,6 +127,14 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var customStrategyMatchRule: CustomStrategyMatchRule = .anyWithMinConfluence
     public var showWeakFilteredSignals: Bool = false
     public var autoSuppressCrisisAlerts: Bool = true
+    public var oneSignalPerCorrelatedCluster: Bool = false
+
+    // Position Sizing Defaults (USD native + manual conversion rate for non-USD accounts)
+    public var defaultAccountBalance: Double = 10_000.0
+    public var defaultRiskPercent: Double = 1.0
+    public var defaultAccountCurrency: AccountCurrency = .usd
+    public var manualUSDToAccountRate: Double = 1.0
+    public var customContractSpecs: [String: InstrumentContractSpec] = [:]
 
     // Section 4b — Custom Calibration View Filter Rules (headline win rate always stays fixed!)
     public var calibrationWinDefinition: CalibrationWinDefinition = .tp1OrTp2
@@ -121,20 +151,24 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public init() {}
 
     enum CodingKeys: String, CodingKey {
-        case appearanceMode, usePureBlackAMOLED, cardDensity, showMiniCharts, showAdvancedSettings
+        case appearanceMode, usePureBlackAMOLED, useColorBlindSafePalette, use24HourTime, useUTCTimeZone
+        case cardDensity, showMiniCharts, showAdvancedSettings, hasCompletedOnboarding
         case inAppSignalSoundEnabled, pushNotificationSoundEnabled, soundPreset
         case trapAlertSoundEnabled, preNewsCountdownSoundEnabled, newsReleaseImpactSoundEnabled
-        case hapticsEnabled, arrivalAnimationsEnabled
+        case hapticsEnabled, arrivalAnimationsEnabled, alertRules
         case enabledMarkets, watchlistSymbols, tradFiProviderPreference, cryptoPrimaryExchange
         case economicCalendarEnabled, breakingNewsRadarEnabled, calendarPushImpactFilter
         case preNewsLead15m, preNewsLead5m, pauseSignalsDuringPreNewsWindow
         case positioningFeedsEnabled, backgroundRefreshEnabled, backgroundRefreshIntervalMinutes
+        case brokerPriceOffsets, showBrokerAdjustedLevels
         case htfTimeframe, entryTimeframe, minimumConfidencePercent, minimumRiskReward
         case maxStopLossPercentCryptoStocks, maxStopLossPercentFXMetalsIndices
         case levelCalculationMode, fixedStopLossPercent, fixedTP1Percent, fixedTP2Percent
         case enableTP2Target, minimumAlignedStrategies, enabledStrategyGroups
         case strategySelectionMode, selectedStrategyConcepts, customStrategyMatchRule
-        case showWeakFilteredSignals, autoSuppressCrisisAlerts
+        case showWeakFilteredSignals, autoSuppressCrisisAlerts, oneSignalPerCorrelatedCluster
+        case defaultAccountBalance, defaultRiskPercent, defaultAccountCurrency
+        case manualUSDToAccountRate, customContractSpecs
         case calibrationWinDefinition, calibrationCategoryScope
         case calibrationMinConfidencePercent, calibrationMinRiskReward
         case geminiEnabled, geminiModel, geminiDailyCallLimit, geminiConfirmationThreshold
@@ -145,9 +179,6 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         case lastDarkThemePreset
     }
 
-    /// Custom backwards-compatible decoder so existing v1.0–v1.3 sideloaded installs keep every setting cleanly,
-    /// seamlessly migrating legacy `ThemePreset` (`Obsidian` / `AMOLED` / `Porcelain`) -> `appearanceMode` + `usePureBlackAMOLED`
-    /// and legacy `Random Subset` -> `.defaultAll`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
@@ -171,9 +202,13 @@ public struct PersistedSettingsPayload: Codable, Sendable {
             usePureBlackAMOLED = (legacyPreset == "AMOLED Vault" || legacyDarkPreset == "AMOLED Vault")
         }
 
+        useColorBlindSafePalette = (try? c.decodeIfPresent(Bool.self, forKey: .useColorBlindSafePalette)) ?? d.useColorBlindSafePalette
+        use24HourTime = (try? c.decodeIfPresent(Bool.self, forKey: .use24HourTime)) ?? d.use24HourTime
+        useUTCTimeZone = (try? c.decodeIfPresent(Bool.self, forKey: .useUTCTimeZone)) ?? d.useUTCTimeZone
         cardDensity = (try? c.decodeIfPresent(CardDensity.self, forKey: .cardDensity)) ?? d.cardDensity
         showMiniCharts = (try? c.decodeIfPresent(Bool.self, forKey: .showMiniCharts)) ?? d.showMiniCharts
         showAdvancedSettings = (try? c.decodeIfPresent(Bool.self, forKey: .showAdvancedSettings)) ?? d.showAdvancedSettings
+        hasCompletedOnboarding = (try? c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding)) ?? d.hasCompletedOnboarding
 
         inAppSignalSoundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .inAppSignalSoundEnabled)) ?? d.inAppSignalSoundEnabled
         pushNotificationSoundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .pushNotificationSoundEnabled)) ?? d.pushNotificationSoundEnabled
@@ -183,6 +218,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         newsReleaseImpactSoundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .newsReleaseImpactSoundEnabled)) ?? d.newsReleaseImpactSoundEnabled
         hapticsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .hapticsEnabled)) ?? d.hapticsEnabled
         arrivalAnimationsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .arrivalAnimationsEnabled)) ?? d.arrivalAnimationsEnabled
+        alertRules = (try? c.decodeIfPresent(AlertRulesConfig.self, forKey: .alertRules)) ?? d.alertRules
 
         enabledMarkets = (try? c.decodeIfPresent(Set<MarketClass>.self, forKey: .enabledMarkets)) ?? d.enabledMarkets
         watchlistSymbols = (try? c.decodeIfPresent([String].self, forKey: .watchlistSymbols)) ?? d.watchlistSymbols
@@ -197,6 +233,8 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         positioningFeedsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .positioningFeedsEnabled)) ?? d.positioningFeedsEnabled
         backgroundRefreshEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .backgroundRefreshEnabled)) ?? d.backgroundRefreshEnabled
         backgroundRefreshIntervalMinutes = (try? c.decodeIfPresent(Int.self, forKey: .backgroundRefreshIntervalMinutes)) ?? d.backgroundRefreshIntervalMinutes
+        brokerPriceOffsets = (try? c.decodeIfPresent([String: BrokerPriceOffset].self, forKey: .brokerPriceOffsets)) ?? d.brokerPriceOffsets
+        showBrokerAdjustedLevels = (try? c.decodeIfPresent(Bool.self, forKey: .showBrokerAdjustedLevels)) ?? d.showBrokerAdjustedLevels
 
         htfTimeframe = (try? c.decodeIfPresent(Timeframe.self, forKey: .htfTimeframe)) ?? d.htfTimeframe
         entryTimeframe = (try? c.decodeIfPresent(Timeframe.self, forKey: .entryTimeframe)) ?? d.entryTimeframe
@@ -216,6 +254,13 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         customStrategyMatchRule = (try? c.decodeIfPresent(CustomStrategyMatchRule.self, forKey: .customStrategyMatchRule)) ?? d.customStrategyMatchRule
         showWeakFilteredSignals = (try? c.decodeIfPresent(Bool.self, forKey: .showWeakFilteredSignals)) ?? d.showWeakFilteredSignals
         autoSuppressCrisisAlerts = (try? c.decodeIfPresent(Bool.self, forKey: .autoSuppressCrisisAlerts)) ?? d.autoSuppressCrisisAlerts
+        oneSignalPerCorrelatedCluster = (try? c.decodeIfPresent(Bool.self, forKey: .oneSignalPerCorrelatedCluster)) ?? d.oneSignalPerCorrelatedCluster
+
+        defaultAccountBalance = (try? c.decodeIfPresent(Double.self, forKey: .defaultAccountBalance)) ?? d.defaultAccountBalance
+        defaultRiskPercent = (try? c.decodeIfPresent(Double.self, forKey: .defaultRiskPercent)) ?? d.defaultRiskPercent
+        defaultAccountCurrency = (try? c.decodeIfPresent(AccountCurrency.self, forKey: .defaultAccountCurrency)) ?? d.defaultAccountCurrency
+        manualUSDToAccountRate = (try? c.decodeIfPresent(Double.self, forKey: .manualUSDToAccountRate)) ?? d.manualUSDToAccountRate
+        customContractSpecs = (try? c.decodeIfPresent([String: InstrumentContractSpec].self, forKey: .customContractSpecs)) ?? d.customContractSpecs
 
         calibrationWinDefinition = (try? c.decodeIfPresent(CalibrationWinDefinition.self, forKey: .calibrationWinDefinition)) ?? d.calibrationWinDefinition
         calibrationCategoryScope = (try? c.decodeIfPresent(CalibrationCategoryScope.self, forKey: .calibrationCategoryScope)) ?? d.calibrationCategoryScope
@@ -255,9 +300,50 @@ public final class AppSettingsStore {
         }
     }
 
-    /// Immediately flips between Dark and Light mode while preserving `usePureBlackAMOLED` across switches.
     public func toggleDarkLightMode(currentlyDark: Bool) {
         payload.appearanceMode = currentlyDark ? .light : .dark
+    }
+
+    public func contractSpec(for symbol: String, marketClass: MarketClass) -> InstrumentContractSpec {
+        payload.customContractSpecs[symbol] ?? InstrumentContractSpec.defaultSpec(for: symbol, marketClass: marketClass)
+    }
+
+    public func setContractSpec(_ spec: InstrumentContractSpec, for symbol: String) {
+        payload.customContractSpecs[symbol] = spec
+    }
+
+    public func brokerOffset(for symbol: String) -> BrokerPriceOffset? {
+        payload.brokerPriceOffsets[symbol]
+    }
+
+    public func setBrokerOffset(_ offset: Double, for symbol: String) {
+        if abs(offset) < 1e-12 {
+            payload.brokerPriceOffsets.removeValue(forKey: symbol)
+        } else {
+            payload.brokerPriceOffsets[symbol] = BrokerPriceOffset(offset: offset, calibratedAtEpochSeconds: Date().timeIntervalSince1970)
+        }
+    }
+
+    /// Returns display-adjusted TradeLevels (adding broker offset strictly for UI/Copy; never mutates stored signal/outcome).
+    public func displayLevels(for signal: TradeSignal) -> TradeLevels? {
+        guard let lv = signal.levels else { return nil }
+        guard payload.showBrokerAdjustedLevels, let delta = payload.brokerPriceOffsets[signal.symbol]?.offset, abs(delta) > 1e-12 else {
+            return lv
+        }
+        return TradeLevels(
+            entryLow: lv.entryLow + delta,
+            entryHigh: lv.entryHigh + delta,
+            entryMid: lv.entryMid + delta,
+            stopLoss: lv.stopLoss + delta,
+            tp1: lv.tp1 + delta,
+            tp2: lv.tp2 + delta,
+            riskPercent: lv.riskPercent,
+            reward1Percent: lv.reward1Percent,
+            reward2Percent: lv.reward2Percent,
+            riskRewardRatio: lv.riskRewardRatio,
+            tp2RiskRewardRatio: lv.tp2RiskRewardRatio,
+            isTP2Enabled: lv.isTP2Enabled
+        )
     }
 
     public var preNewsLeadTimesMinutes: [Int] {

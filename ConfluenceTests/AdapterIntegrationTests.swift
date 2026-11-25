@@ -796,4 +796,217 @@ final class AdapterIntegrationTests: XCTestCase {
         XCTAssertEqual(coordinator.headlineCalibrationSummary.winRate, 0.0, accuracy: 1e-9)
         XCTAssertFalse(coordinator.confidenceCalibrator.isActive)
     }
+
+    // MARK: - v1.4 Phase 3a: On-Disk SwiftData v1.3 -> v1.4 Migration, Backup/CSV & Broker Offset Tests
+
+    @MainActor
+    func testSwiftDataV1_3ToV1_4AdditiveMigrationAndJournalRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("confluence_v14_mig_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let storeURL = dir.appendingPathComponent("confluence_v14.store")
+
+        let base: TimeInterval = 1_760_050_000
+        let sampleOutcome = SignalOutcomeRecord(
+            signalId: "fp-v13-existing",
+            symbol: "XAU/USD",
+            marketClass: .metals,
+            category: .strongSignal,
+            direction: .long,
+            predictedProbability: 0.78,
+            status: .hitTP2,
+            netReturnPercent: 1.9,
+            rMultiple: 2.5,
+            strategyIds: ["ict_fvg", "ict_sweep"],
+            hadMacroCatalyst: false,
+            resolvedAtEpochSeconds: base + 3600,
+            lifecycleStatus: .resolved,
+            filledAtEpochSeconds: base + 1800,
+            fillWindowBars: 12,
+            isLegacyImmediateFill: false
+        )
+        let outcomeData = try JSONEncoder().encode(sampleOutcome)
+
+        // 1. Seed an on-disk v1.3 8-table SwiftData store (without JournalEntry)
+        do {
+            let v13Schema = Schema([
+                PersistedSignalRecord.self,
+                StoredNotificationItem.self,
+                DiagnosticLogEntry.self,
+                TrapLogEntry.self,
+                TradeLedgerEntry.self,
+                TradeReplayCandleCache.self,
+                PersistedOutcomeRecord.self,
+                CrashLogEntry.self
+            ])
+            let v13Config = ModelConfiguration(schema: v13Schema, url: storeURL)
+            let v13Container = try ModelContainer(for: v13Schema, configurations: [v13Config])
+            let ctx = ModelContext(v13Container)
+            ctx.insert(PersistedOutcomeRecord(
+                signalId: sampleOutcome.signalId,
+                symbol: sampleOutcome.symbol,
+                statusRaw: sampleOutcome.status.rawValue,
+                updatedAt: Date(timeIntervalSince1970: base + 3600),
+                outcomeJSON: outcomeData
+            ))
+            try ctx.save()
+        }
+
+        // 2. Open with v1.4 9-table ConfluenceDataStore -> zero quarantine, v1.3 outcome preserved
+        let v14Store = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
+        XCTAssertFalse(v14Store.didQuarantineCorruptStore)
+        XCTAssertEqual(v14Store.fetchOutcomeRecords().count, 1)
+        XCTAssertEqual(v14Store.fetchOutcomeRecords().first?.signalId, "fp-v13-existing")
+
+        // 3. Upsert a personal Trade Journal entry & verify persistence across disk reopen
+        let entry = JournalEntrySnapshot(
+            id: "journal-1",
+            signalFingerprint: "fp-v13-existing",
+            symbol: "XAU/USD",
+            marketClass: .metals,
+            timeframe: .h1,
+            direction: .long,
+            plannedEntry: 2650.0,
+            actualFillPrice: 2650.5,
+            stopLoss: 2640.0,
+            tp1: 2670.0,
+            tp2: 2685.0,
+            exitPrice: 2671.5,
+            positionSizeText: "0.10 Lots",
+            outcome: .win,
+            actualRMultiple: 2.0,
+            systemRMultiple: 2.5,
+            strategyIDs: ["ict_fvg", "ict_sweep"],
+            tags: ["A+ Setup", "London KZ"],
+            notes: "Clean sweep and FVG entry",
+            takenAt: Date(timeIntervalSince1970: base + 1800),
+            closedAt: Date(timeIntervalSince1970: base + 5400)
+        )
+        v14Store.upsertJournalEntry(entry)
+
+        let reopened = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
+        XCTAssertFalse(reopened.didQuarantineCorruptStore)
+        let fetched = reopened.fetchJournalEntries()
+        XCTAssertEqual(fetched.count, 1)
+        XCTAssertEqual(fetched.first?.symbol, "XAU/USD")
+        XCTAssertEqual(fetched.first?.outcome, .win)
+        XCTAssertEqual(fetched.first?.tags, ["A+ Setup", "London KZ"])
+        XCTAssertEqual(reopened.journalEntry(forSignalFingerprint: "fp-v13-existing")?.id, "journal-1")
+    }
+
+    @MainActor
+    func testBackupArchiveMergeReplaceZeroSecretsAndCSVEscaping() throws {
+        let store = ConfluenceDataStore(inMemory: true)
+        let settings = AppSettingsStore()
+        settings.payload.minimumConfidencePercent = 77.0
+        settings.payload.use24HourTime = true
+
+        // Put a secret-like string in journal notes to verify SecretRedactor scrubs exports
+        let j1 = JournalEntrySnapshot(
+            id: "j-secret-test",
+            symbol: "EUR/USD",
+            marketClass: .forex,
+            timeframe: .h1,
+            direction: .long,
+            plannedEntry: 1.1000,
+            stopLoss: 1.0950,
+            tp1: 1.1100,
+            outcome: .win,
+            actualRMultiple: 2.0,
+            tags: [" London, NY "],
+            notes: "Quoted \"entry\", apikey=SECRET_TD_KEY_12345 and AIzaSyFakeGeminiKey0123456789012345\nSecond line"
+        )
+        store.upsertJournalEntry(j1)
+
+        // 1. Export JSON archive and verify zero secrets
+        let archive = BackupArchiveService.buildArchive(settings: settings.payload, store: store, appVersion: "1.4.0")
+        let archiveData = try BackupArchiveService.encodeRedactedArchiveData(archive)
+        let archiveText = String(data: archiveData, encoding: .utf8) ?? ""
+        XCTAssertFalse(archiveText.contains("SECRET_TD_KEY_12345"))
+        XCTAssertFalse(archiveText.contains("AIzaSyFakeGeminiKey"))
+        XCTAssertTrue(archiveText.contains("[REDACTED]"))
+
+        // 2. Reject unsupported future schemaVersion
+        let badSchemaJSON = archiveText.replacingOccurrences(of: "\"schemaVersion\" : 1", with: "\"schemaVersion\" : 99")
+        XCTAssertThrowsError(try BackupArchiveService.decodeAndValidateArchive(from: Data(badSchemaJSON.utf8)))
+
+        // 3. Merge vs Replace restore
+        let targetStore = ConfluenceDataStore(inMemory: true)
+        let targetSettings = AppSettingsStore()
+        targetStore.upsertJournalEntry(JournalEntrySnapshot(
+            id: "j-existing-local", symbol: "BTC/USDT", marketClass: .crypto, timeframe: .h4,
+            direction: .short, plannedEntry: 95_000, stopLoss: 96_000, tp1: 92_000
+        ))
+
+        let mergeSummary = try BackupArchiveService.restoreArchive(
+            from: archiveData, mode: .merge, settingsStore: targetSettings, dataStore: targetStore
+        )
+        XCTAssertEqual(mergeSummary.journalImported, 1)
+        XCTAssertEqual(targetStore.fetchJournalEntries().count, 2, "Merge mode must keep pre-existing local entries")
+        XCTAssertEqual(targetSettings.payload.minimumConfidencePercent, 77.0, accuracy: 1e-6)
+
+        let replaceSummary = try BackupArchiveService.restoreArchive(
+            from: archiveData, mode: .replace, settingsStore: targetSettings, dataStore: targetStore
+        )
+        XCTAssertEqual(replaceSummary.journalImported, 1)
+        XCTAssertEqual(targetStore.fetchJournalEntries().count, 1, "Replace mode must clear pre-existing local entries")
+        XCTAssertEqual(targetStore.fetchJournalEntries().first?.id, "j-secret-test")
+
+        // 4. RFC-4180 CSV escaping & redaction
+        let csv = BackupArchiveService.buildJournalCSV(entries: [j1])
+        XCTAssertFalse(csv.contains("SECRET_TD_KEY_12345"))
+        XCTAssertFalse(csv.contains("AIzaSyFakeGeminiKey"))
+        XCTAssertTrue(csv.contains("\"\"entry\"\""), "RFC-4180 must double inner quotes")
+        XCTAssertTrue(csv.contains("\" London, NY \""), "RFC-4180 must quote fields containing commas")
+    }
+
+    @MainActor
+    func testBrokerPriceOffsetDisplayOnlyAndStaleCheck() throws {
+        let settings = AppSettingsStore()
+        let baseNow: TimeInterval = 1_760_100_000
+        let staleOffset = BrokerPriceOffset(offset: 12.5, calibratedAtEpochSeconds: baseNow - 90_000)
+        XCTAssertTrue(staleOffset.isStale(nowEpochSeconds: baseNow))
+
+        let freshOffset = BrokerPriceOffset(offset: 12.5, calibratedAtEpochSeconds: baseNow - 3_600)
+        XCTAssertFalse(freshOffset.isStale(nowEpochSeconds: baseNow))
+
+        settings.setBrokerOffset(12.5, for: "XAU/USD")
+        let psych = PsychologyReport(
+            signalCategory: .strongSignal, proDirection: .long, retailCrowdDirection: .short,
+            provenanceBadge: "Structure", whatHappened: "Setup", beginnerPsychology: "B", proPsychology: "P",
+            behavioralBadges: [], evidence: []
+        )
+        let rawLevels = TradeLevels(
+            entryLow: 2648.0, entryHigh: 2652.0, entryMid: 2650.0, stopLoss: 2640.0, tp1: 2670.0, tp2: 2685.0,
+            riskPercent: 0.38, reward1Percent: 0.75, reward2Percent: 1.32,
+            riskRewardRatio: 2.0, tp2RiskRewardRatio: 3.5, isTP2Enabled: true
+        )
+        let sig = TradeSignal(
+            id: "fp-gold-offset", fingerprint: "fp-gold-offset", symbol: "XAU/USD", displayName: "Gold",
+            marketClass: .metals, timeframe: .h1, htfTimeframe: .h4,
+            category: .strongSignal, direction: .long, tier: .highConviction,
+            confidencePercent: 80.0, regime: .trending, riskState: .safe,
+            killzone: .london, htfBias: .long,
+            generatedAtEpochSeconds: baseNow, barCloseEpochSeconds: baseNow,
+            levels: rawLevels, alignedStrategies: [], rejectionReasons: [],
+            psychologyReport: psych, dataProvider: "Yahoo"
+        )
+
+        // Toggle OFF -> exact raw levels
+        settings.payload.showBrokerAdjustedLevels = false
+        let rawDisplayed = try XCTUnwrap(settings.displayLevels(for: sig))
+        XCTAssertEqual(rawDisplayed.entryMid, 2650.0, accuracy: 1e-9)
+        XCTAssertEqual(rawDisplayed.stopLoss, 2640.0, accuracy: 1e-9)
+
+        // Toggle ON -> shifted display levels while raw signal.levels stays untouched
+        settings.payload.showBrokerAdjustedLevels = true
+        let shifted = try XCTUnwrap(settings.displayLevels(for: sig))
+        XCTAssertEqual(shifted.entryLow, 2660.5, accuracy: 1e-9)
+        XCTAssertEqual(shifted.entryMid, 2662.5, accuracy: 1e-9)
+        XCTAssertEqual(shifted.stopLoss, 2652.5, accuracy: 1e-9)
+        XCTAssertEqual(shifted.tp1, 2682.5, accuracy: 1e-9)
+        XCTAssertEqual(shifted.tp2, 2697.5, accuracy: 1e-9)
+        XCTAssertEqual(sig.levels?.entryMid ?? 0, 2650.0, accuracy: 1e-9, "Raw signal levels must never be mutated by display offset")
+    }
 }
+

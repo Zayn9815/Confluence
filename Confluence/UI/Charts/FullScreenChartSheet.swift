@@ -158,6 +158,7 @@ public struct FullScreenChartSheet: View {
     let palette: ConfluencePalette
     let coordinator: MarketScannerCoordinator?
     let replayContext: TradeReplayContext?
+    let sourceSignal: TradeSignal?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -169,6 +170,8 @@ public struct FullScreenChartSheet: View {
     @State private var proxySymbolUsed: String? = nil
     @State private var isLoadingCandles: Bool = false
     @State private var loadError: String? = nil
+    @State private var journalDraft: JournalEntrySnapshot? = nil
+    @State private var journalDraftIsExisting: Bool = false
 
     public init(
         signal: TradeSignal,
@@ -182,6 +185,7 @@ public struct FullScreenChartSheet: View {
         self.palette = palette
         self.coordinator = coordinator
         self.replayContext = nil
+        self.sourceSignal = signal
         _activeCandles = State(initialValue: signal.recentCandles)
         _activeTimeframe = State(initialValue: signal.timeframe)
         _activeProviderName = State(initialValue: signal.dataProvider)
@@ -200,6 +204,7 @@ public struct FullScreenChartSheet: View {
         self.palette = palette
         self.coordinator = coordinator
         self.replayContext = replayContext
+        self.sourceSignal = trade.sourceSignal
         _activeCandles = State(initialValue: replayContext.initialCandles)
         _activeTimeframe = State(initialValue: trade.timeframe)
         _activeProviderName = State(initialValue: replayContext.providerName)
@@ -234,10 +239,16 @@ public struct FullScreenChartSheet: View {
         guard let last = activeCandles.sorted(by: { $0.closeTimeEpochSeconds < $1.closeTimeEpochSeconds }).last else {
             return "No closed bars"
         }
-        let formatter = DateFormatter()
-        formatter.dateFormat = activeTimeframe == .d1 ? "MMM d 'UTC'" : "HH:mm 'UTC'"
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return "Closed \(formatter.string(from: Date(timeIntervalSince1970: last.closeTimeEpochSeconds)))"
+        let use24 = coordinator?.settings.payload.use24HourTime ?? true
+        let useUTC = coordinator?.settings.payload.useUTCTimeZone ?? true
+        if activeTimeframe == .d1 {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = useUTC ? "MMM d 'UTC'" : "MMM d"
+            formatter.timeZone = useUTC ? TimeZone(secondsFromGMT: 0) : TimeZone.current
+            return "Closed \(formatter.string(from: Date(timeIntervalSince1970: last.closeTimeEpochSeconds)))"
+        }
+        return "Closed \(TimeDisplayFormatter.formatShortTime(epochSeconds: last.closeTimeEpochSeconds, use24Hour: use24, useUTC: useUTC))"
     }
 
     public var body: some View {
@@ -366,8 +377,37 @@ public struct FullScreenChartSheet: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    if let coord = coordinator, let sig = sourceSignal {
+                        let existing = coord.journalEntry(forSignalFingerprint: sig.fingerprint)
+                        Button {
+                            if let existing {
+                                journalDraft = existing
+                                journalDraftIsExisting = true
+                            } else {
+                                journalDraft = coord.makeJournalDraft(from: sig)
+                                journalDraftIsExisting = false
+                            }
+                        } label: {
+                            Image(systemName: existing != nil ? "book.closed.fill" : "bookmark.circle")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(existing != nil ? palette.champagneGold : palette.primaryInk)
+                        }
+                        .accessibilityLabel(existing != nil ? "Edit Trade Journal entry" : "Mark trade taken in Journal")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                         .fontWeight(.semibold)
+                }
+            }
+            .sheet(item: $journalDraft) { draft in
+                if let coord = coordinator {
+                    JournalEntryEditorSheet(
+                        entry: draft,
+                        isExisting: journalDraftIsExisting,
+                        coordinator: coord,
+                        palette: palette
+                    )
                 }
             }
         }
@@ -385,10 +425,9 @@ public struct FullScreenChartSheet: View {
 
         let exitTimeStr: String = {
             guard let ts = trade.exitEpochSeconds else { return "" }
-            let f = DateFormatter()
-            f.dateFormat = "MMM d HH:mm 'UTC'"
-            f.timeZone = TimeZone(secondsFromGMT: 0)
-            return " at \(f.string(from: Date(timeIntervalSince1970: ts)))"
+            let use24 = coordinator?.settings.payload.use24HourTime ?? true
+            let useUTC = coordinator?.settings.payload.useUTCTimeZone ?? true
+            return " at \(TimeDisplayFormatter.formatDateTime(epochSeconds: ts, use24Hour: use24, useUTC: useUTC))"
         }()
 
         switch trade.status {

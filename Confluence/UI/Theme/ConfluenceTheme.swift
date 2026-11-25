@@ -10,51 +10,107 @@ public struct ConfluencePalette: Sendable {
     public let secondaryInk: Color
     public let tertiaryInk: Color
 
-    // Institutional signal accents
-    public let longEmerald = Color(hex: 0x10B981)
-    public let shortCrimson = Color(hex: 0xEF4444)
-    public let champagneGold = Color(hex: 0xD4AF37)
-    public let trapAmber = Color(hex: 0xF59E0B)
-    public let macroIceBlue = Color(hex: 0x38BDF8)
+    // Institutional signal accents (switches to Okabe-Ito Blue/Vermilion when Color-Blind Safe is ON)
+    public let longEmerald: Color
+    public let shortCrimson: Color
+    public let champagneGold: Color
+    public let trapAmber: Color
+    public let macroIceBlue: Color
+
+    public init(
+        canvas: Color,
+        surface: Color,
+        elevatedSurface: Color,
+        border: Color,
+        primaryInk: Color,
+        secondaryInk: Color,
+        tertiaryInk: Color,
+        longEmerald: Color = Color(hex: 0x10B981),
+        shortCrimson: Color = Color(hex: 0xEF4444),
+        champagneGold: Color = Color(hex: 0xD4AF37),
+        trapAmber: Color = Color(hex: 0xF59E0B),
+        macroIceBlue: Color = Color(hex: 0x38BDF8)
+    ) {
+        self.canvas = canvas
+        self.surface = surface
+        self.elevatedSurface = elevatedSurface
+        self.border = border
+        self.primaryInk = primaryInk
+        self.secondaryInk = secondaryInk
+        self.tertiaryInk = tertiaryInk
+        self.longEmerald = longEmerald
+        self.shortCrimson = shortCrimson
+        self.champagneGold = champagneGold
+        self.trapAmber = trapAmber
+        self.macroIceBlue = macroIceBlue
+    }
 
     public static func resolve(
         colorScheme: ColorScheme,
-        usePureBlackAMOLED: Bool
+        usePureBlackAMOLED: Bool,
+        useColorBlindSafe: Bool = false,
+        increaseContrast: Bool = false
     ) -> ConfluencePalette {
-        if colorScheme == .light {
-            return porcelain
+        let isLight = (colorScheme == .light)
+        let longColor: Color = useColorBlindSafe
+            ? (isLight ? Color(hex: 0x0072B2) : Color(hex: 0x38BDF8)) // Okabe-Ito Blue
+            : (isLight ? Color(hex: 0x059669) : Color(hex: 0x10B981))
+        let shortColor: Color = useColorBlindSafe
+            ? (isLight ? Color(hex: 0xD55E00) : Color(hex: 0xFB923C)) // Okabe-Ito Vermilion
+            : (isLight ? Color(hex: 0xDC2626) : Color(hex: 0xEF4444))
+        let goldColor: Color = isLight ? Color(hex: 0xB48A18) : Color(hex: 0xD4AF37)
+        let amberColor: Color = useColorBlindSafe ? Color(hex: 0xE69F00) : Color(hex: 0xF59E0B)
+        let iceBlue: Color = useColorBlindSafe ? Color(hex: 0x56B4E9) : Color(hex: 0x38BDF8)
+
+        if isLight {
+            return ConfluencePalette(
+                canvas: Color(hex: 0xF6F7F9),
+                surface: Color(hex: 0xFFFFFF),
+                elevatedSurface: increaseContrast ? Color(hex: 0xE2E8F0) : Color(hex: 0xEEF1F6),
+                border: increaseContrast ? Color(hex: 0x94A3B8) : Color(hex: 0xE2E8F0),
+                primaryInk: Color(hex: 0x090D16),
+                secondaryInk: increaseContrast ? Color(hex: 0x1F2937) : Color(hex: 0x4B5563),
+                tertiaryInk: increaseContrast ? Color(hex: 0x374151) : Color(hex: 0x6B7280),
+                longEmerald: longColor,
+                shortCrimson: shortColor,
+                champagneGold: goldColor,
+                trapAmber: amberColor,
+                macroIceBlue: iceBlue
+            )
         }
         if usePureBlackAMOLED {
             return ConfluencePalette(
                 canvas: Color(hex: 0x000000),
                 surface: Color(hex: 0x0E1116),
                 elevatedSurface: Color(hex: 0x161B24),
-                border: Color(hex: 0x222733),
-                primaryInk: Color(hex: 0xF8FAFC),
-                secondaryInk: Color(hex: 0x94A3B8),
-                tertiaryInk: Color(hex: 0x64748B)
+                border: increaseContrast ? Color(hex: 0x475569) : Color(hex: 0x222733),
+                primaryInk: Color(hex: 0xFFFFFF),
+                secondaryInk: increaseContrast ? Color(hex: 0xCBD5E1) : Color(hex: 0x94A3B8),
+                tertiaryInk: increaseContrast ? Color(hex: 0x94A3B8) : Color(hex: 0x64748B),
+                longEmerald: longColor,
+                shortCrimson: shortColor,
+                champagneGold: goldColor,
+                trapAmber: amberColor,
+                macroIceBlue: iceBlue
             )
         }
         return ConfluencePalette(
             canvas: Color(hex: 0x0B0D11),
             surface: Color(hex: 0x131720),
             elevatedSurface: Color(hex: 0x1A202D),
-            border: Color(hex: 0x232A38),
-            primaryInk: Color(hex: 0xF3F5F8),
-            secondaryInk: Color(hex: 0x9CA7BA),
-            tertiaryInk: Color(hex: 0x677287)
+            border: increaseContrast ? Color(hex: 0x475569) : Color(hex: 0x232A38),
+            primaryInk: Color(hex: 0xF8FAFC),
+            secondaryInk: increaseContrast ? Color(hex: 0xCBD5E1) : Color(hex: 0x9CA7BA),
+            tertiaryInk: increaseContrast ? Color(hex: 0x94A3B8) : Color(hex: 0x677287),
+            longEmerald: longColor,
+            shortCrimson: shortColor,
+            champagneGold: goldColor,
+            trapAmber: amberColor,
+            macroIceBlue: iceBlue
         )
     }
 
-    public static let porcelain = ConfluencePalette(
-        canvas: Color(hex: 0xF6F7F9),
-        surface: Color(hex: 0xFFFFFF),
-        elevatedSurface: Color(hex: 0xEEF1F6),
-        border: Color(hex: 0xE2E8F0),
-        primaryInk: Color(hex: 0x111827),
-        secondaryInk: Color(hex: 0x4B5563),
-        tertiaryInk: Color(hex: 0x6B7280)
-    )
+    public static let porcelain = resolve(colorScheme: .light, usePureBlackAMOLED: false)
 
     public func color(for direction: TradeDirection) -> Color {
         switch direction {

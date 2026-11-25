@@ -17,6 +17,10 @@ public struct SignalsTabView: View {
     @State private var selectedMarket: MarketClass? = nil // nil == All
     @State private var feedFilter: SignalFeedFilter = .strong
     @State private var chartSignal: TradeSignal?
+    @State private var sizerSignal: TradeSignal?
+    @State private var journalDraft: JournalEntrySnapshot?
+    @State private var journalDraftIsExisting: Bool = false
+    @State private var glossaryQuery: GlossarySheetQuery?
     @State private var preNewsTick: Date = Date()
 
     // Signal Deletion & Multi-Select State
@@ -40,7 +44,7 @@ public struct SignalsTabView: View {
     }
 
     private var filteredSignals: [TradeSignal] {
-        coordinator.signals.filter { sig in
+        coordinator.displaySignals.filter { sig in
             if let market = selectedMarket, sig.marketClass != market {
                 return false
             }
@@ -97,6 +101,31 @@ public struct SignalsTabView: View {
                     .background(palette.shortCrimson.opacity(0.14))
                 }
 
+                // Net Exposure Correlation Strip (visible whenever 2+ Strong signals share a macro cluster)
+                if feedFilter == .strong && coordinator.netExposureSummary.hasConcentratedRisk {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            Label("Net Exposure", systemImage: "point.3.connected.trianglepath.dotted")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(palette.trapAmber)
+                            ForEach(coordinator.netExposureSummary.concentratedClusters) { cluster in
+                                Text(cluster.summaryBadge)
+                                    .font(.caption2.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(palette.primaryInk)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(palette.trapAmber.opacity(0.16), in: Capsule())
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                    }
+                    .background(palette.surface.opacity(0.9))
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(palette.border).frame(height: 0.5)
+                    }
+                }
+
                 // Market & Category Filter Bar
                 VStack(spacing: 8) {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -140,9 +169,21 @@ public struct SignalsTabView: View {
                                 ForEach(filteredSignals) { sig in
                                     let isHighlighted = (coordinator.highlightedSignalFingerprint == sig.fingerprint)
                                     let isRowSelected = selectedFingerprints.contains(sig.fingerprint)
+                                    let brokerOffset = coordinator.settings.brokerOffset(for: sig.symbol)
+                                    let adjLevels = coordinator.settings.displayLevels(for: sig)
+                                    let isBrokerAdj = coordinator.settings.payload.showBrokerAdjustedLevels && brokerOffset != nil
+                                    let isTaken = coordinator.journalEntry(forSignalFingerprint: sig.fingerprint) != nil
+
                                     SignalCardView(
                                         signal: sig,
                                         outcome: coordinator.outcomeBySignalId[sig.fingerprint],
+                                        displayLevelsOverride: adjLevels,
+                                        brokerOffsetInfo: brokerOffset,
+                                        isBrokerAdjusted: isBrokerAdj,
+                                        correlationWarnings: coordinator.correlationWarningsByFingerprint[sig.fingerprint] ?? [],
+                                        isTakenInJournal: isTaken,
+                                        use24HourTime: coordinator.settings.payload.use24HourTime,
+                                        useUTCTimeZone: coordinator.settings.payload.useUTCTimeZone,
                                         palette: palette,
                                         density: coordinator.settings.payload.cardDensity,
                                         showMiniChart: coordinator.settings.payload.showMiniCharts,
@@ -158,6 +199,19 @@ public struct SignalsTabView: View {
                                                 coordinator.deleteSignal(fingerprint: sig.fingerprint)
                                                 selectedFingerprints.remove(sig.fingerprint)
                                             }
+                                        },
+                                        onToggleBrokerAdjusted: {
+                                            coordinator.settings.payload.showBrokerAdjustedLevels.toggle()
+                                        },
+                                        onOpenPositionSizer: {
+                                            sizerSignal = sig
+                                        },
+                                        onMarkAsTaken: {
+                                            journalDraftIsExisting = isTaken
+                                            journalDraft = coordinator.makeJournalDraft(from: sig)
+                                        },
+                                        onOpenGlossaryTerm: { term in
+                                            glossaryQuery = GlossarySheetQuery(query: term)
                                         },
                                         onOpenChart: { chartSignal = sig }
                                     )
@@ -328,6 +382,34 @@ public struct SignalsTabView: View {
             .sheet(item: $chartSignal) { sig in
                 FullScreenChartSheet(signal: sig, palette: palette, coordinator: coordinator)
             }
+            .sheet(item: $sizerSignal) { sig in
+                if let lv = coordinator.settings.displayLevels(for: sig) ?? sig.levels {
+                    PositionSizeCalculatorSheet(
+                        signal: sig,
+                        activeLevels: lv,
+                        coordinator: coordinator,
+                        palette: palette
+                    )
+                }
+            }
+            .sheet(item: $journalDraft) { draft in
+                JournalEntryEditorSheet(
+                    entry: draft,
+                    isExisting: journalDraftIsExisting,
+                    coordinator: coordinator,
+                    palette: palette
+                )
+            }
+            .sheet(item: $glossaryQuery) { q in
+                NavigationStack {
+                    GlossaryView(palette: palette, initialQuery: q.query)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { glossaryQuery = nil }
+                            }
+                        }
+                }
+            }
             .task(id: coordinator.imminentPreNewsEvent?.event.id) {
                 guard coordinator.imminentPreNewsEvent != nil else { return }
                 while !Task.isCancelled && coordinator.imminentPreNewsEvent != nil {
@@ -490,3 +572,9 @@ public struct SignalsTabView: View {
         .padding(.top, 16)
     }
 }
+
+private struct GlossarySheetQuery: Identifiable {
+    let id = UUID()
+    let query: String
+}
+

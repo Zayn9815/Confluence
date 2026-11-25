@@ -908,4 +908,261 @@ final class ScoringAndCalibrationTests: XCTestCase {
         XCTAssertNil(HeadlineSentimentClassifier.analyzeNewsCatalyst(for: eur, breakingNews: [], fearGreed: extremeFear, nowEpochSeconds: now))
         XCTAssertNil(HeadlineSentimentClassifier.analyzeNewsCatalyst(for: aapl, breakingNews: [], fearGreed: extremeFear, nowEpochSeconds: now))
     }
+
+    // MARK: - v1.4 Phase 3a (Workstream B2, B5, B8): Position Sizing, Correlation, Alert Rules
+
+    func testPositionSizeCalculatorAcrossAllAssetClassesAndNonUSDConversion() throws {
+        // 1. EUR/USD Quote-USD FX: $10,000 balance, 1% risk = $100, 50 pip SL (0.0050) -> 0.20 standard lots (20,000 units)
+        let eurRes = try XCTUnwrap(PositionSizeCalculator.calculate(PositionSizeInput(
+            symbol: "EUR/USD",
+            marketClass: .forex,
+            entryPrice: 1.10000,
+            stopLossPrice: 1.09500,
+            tp1Price: 1.11000,
+            accountBalance: 10_000,
+            riskPercent: 1.0,
+            accountCurrency: .usd
+        )))
+        XCTAssertEqual(eurRes.riskAmountUSD, 100.0, accuracy: 1e-6)
+        XCTAssertEqual(eurRes.stopDistancePips ?? 0, 50.0, accuracy: 1e-4)
+        XCTAssertEqual(eurRes.primaryQuantity, 0.20, accuracy: 1e-4)
+        XCTAssertEqual(eurRes.secondaryQuantity ?? 0, 20_000.0, accuracy: 1e-1)
+        XCTAssertEqual(eurRes.estimatedReward1Account ?? 0, 200.0, accuracy: 1e-4)
+
+        // 2. USD/JPY Base-USD FX: pip = 0.01, 50 pips = 0.50 @ entry 150.0 -> pipValueUSD = 1000/150 = 6.6667, lots = 100 / (50 * 6.6667) = 0.30
+        let jpyRes = try XCTUnwrap(PositionSizeCalculator.calculate(PositionSizeInput(
+            symbol: "USD/JPY",
+            marketClass: .forex,
+            entryPrice: 150.000,
+            stopLossPrice: 149.500,
+            accountBalance: 10_000,
+            riskPercent: 1.0,
+            accountCurrency: .usd
+        )))
+        XCTAssertEqual(jpyRes.stopDistancePips ?? 0, 50.0, accuracy: 1e-4)
+        XCTAssertEqual(jpyRes.primaryQuantity, 0.30, accuracy: 1e-4)
+
+        // 3. XAU/USD Gold: 100 oz/lot, $10 stop distance, $100 risk -> 10 troy oz = 0.10 lots
+        let goldRes = try XCTUnwrap(PositionSizeCalculator.calculate(PositionSizeInput(
+            symbol: "XAU/USD",
+            marketClass: .metals,
+            entryPrice: 2650.0,
+            stopLossPrice: 2640.0,
+            accountBalance: 10_000,
+            riskPercent: 1.0,
+            accountCurrency: .usd
+        )))
+        XCTAssertEqual(goldRes.primaryQuantity, 0.10, accuracy: 1e-6)
+        XCTAssertEqual(goldRes.secondaryQuantity ?? 0, 10.0, accuracy: 1e-6)
+
+        // 4. NAS100 Index CFD with custom contract spec (contractSize = 2.0, pointValue = 5.0 -> $10/pt/contract)
+        let nasRes = try XCTUnwrap(PositionSizeCalculator.calculate(PositionSizeInput(
+            symbol: "NAS100",
+            marketClass: .indices,
+            entryPrice: 20_000.0,
+            stopLossPrice: 19_980.0,
+            accountBalance: 10_000,
+            riskPercent: 1.0,
+            accountCurrency: .usd,
+            contractSpec: InstrumentContractSpec(contractSize: 2.0, pointValue: 5.0)
+        )))
+        // $100 risk / (20 pts * $10/pt) = 0.50 contracts
+        XCTAssertEqual(nasRes.primaryQuantity, 0.50, accuracy: 1e-6)
+
+        // 5. Crypto & US Stock shares
+        let btcRes = try XCTUnwrap(PositionSizeCalculator.calculate(PositionSizeInput(
+            symbol: "BTC/USDT", marketClass: .crypto, entryPrice: 100_000, stopLossPrice: 99_000,
+            accountBalance: 10_000, riskPercent: 1.0
+        )))
+        XCTAssertEqual(btcRes.primaryQuantity, 0.10, accuracy: 1e-6)
+
+        let aaplRes = try XCTUnwrap(PositionSizeCalculator.calculate(PositionSizeInput(
+            symbol: "AAPL", marketClass: .stocks, entryPrice: 200, stopLossPrice: 196,
+            accountBalance: 10_000, riskPercent: 1.0
+        )))
+        XCTAssertEqual(aaplRes.primaryQuantity, 25.0, accuracy: 1e-6)
+
+        // 6. Non-USD Account (EUR) with manual 1 USD = 0.90 EUR conversion rate:
+        // Balance €9,000, 1% risk = €90 -> $100 USD risk -> identical 0.20 lots on EUR/USD!
+        let eurAccountRes = try XCTUnwrap(PositionSizeCalculator.calculate(PositionSizeInput(
+            symbol: "EUR/USD",
+            marketClass: .forex,
+            entryPrice: 1.10000,
+            stopLossPrice: 1.09500,
+            accountBalance: 9_000,
+            riskPercent: 1.0,
+            accountCurrency: .eur,
+            usdToAccountRate: 0.90
+        )))
+        XCTAssertEqual(eurAccountRes.riskAmountAccount, 90.0, accuracy: 1e-6)
+        XCTAssertEqual(eurAccountRes.riskAmountUSD, 100.0, accuracy: 1e-6)
+        XCTAssertEqual(eurAccountRes.primaryQuantity, 0.20, accuracy: 1e-4)
+
+        // 7. Invalid / zero stop distance safely returns nil
+        XCTAssertNil(PositionSizeCalculator.calculate(PositionSizeInput(
+            symbol: "EUR/USD", marketClass: .forex, entryPrice: 1.10, stopLossPrice: 1.10,
+            accountBalance: 10_000, riskPercent: 1.0
+        )))
+    }
+
+    func testCorrelationAnalyzerRollingPearsonStaticClusterAndClusterCap() throws {
+        let base: TimeInterval = 1_760_000_000
+        var btcBars: [Candle] = []
+        var ethBars: [Candle] = []
+        var invBars: [Candle] = []
+
+        var pBtc = 50_000.0
+        var pEth = 3_000.0
+        var pInv = 150.0
+        let returns: [Double] = [
+            0.012, -0.008, 0.015, 0.004, -0.011, 0.019, -0.006, 0.009, -0.014, 0.011,
+            0.007, -0.009, 0.016, -0.003, 0.010, -0.012, 0.014, 0.005, -0.007, 0.013,
+            -0.010, 0.008, 0.011, -0.005, 0.009, -0.008, 0.015, 0.006, -0.011, 0.012
+        ]
+
+        for i in 0...returns.count {
+            let openTs = base + Double(i) * 3600
+            let closeTs = openTs + 3600
+            if i > 0 {
+                let r = returns[i - 1]
+                pBtc *= exp(r)
+                pEth *= exp(r * 1.15)
+                pInv *= exp(-r * 0.95)
+            }
+            btcBars.append(Candle(openTimeEpochSeconds: openTs, closeTimeEpochSeconds: closeTs, open: pBtc, high: pBtc * 1.002, low: pBtc * 0.998, close: pBtc, volume: 100, isClosed: true))
+            ethBars.append(Candle(openTimeEpochSeconds: openTs, closeTimeEpochSeconds: closeTs, open: pEth, high: pEth * 1.002, low: pEth * 0.998, close: pEth, volume: 100, isClosed: true))
+            invBars.append(Candle(openTimeEpochSeconds: openTs, closeTimeEpochSeconds: closeTs, open: pInv, high: pInv * 1.002, low: pInv * 0.998, close: pInv, volume: 100, isClosed: true))
+        }
+
+        let rhoPos = try XCTUnwrap(CorrelationAnalyzer.rollingPearsonCorrelation(seriesA: btcBars, seriesB: ethBars))
+        XCTAssertGreaterThan(rhoPos, 0.95)
+
+        let rhoNeg = try XCTUnwrap(CorrelationAnalyzer.rollingPearsonCorrelation(seriesA: btcBars, seriesB: invBars))
+        XCTAssertLessThan(rhoNeg, -0.95)
+
+        let psych = PsychologyReport(
+            signalCategory: .strongSignal, proDirection: .long, retailCrowdDirection: .short,
+            provenanceBadge: "Structure", whatHappened: "Setup", beginnerPsychology: "B", proPsychology: "P",
+            behavioralBadges: [], evidence: []
+        )
+        let levels = TradeLevels(
+            entryLow: 100, entryHigh: 101, entryMid: 100.5, stopLoss: 99, tp1: 103.5, tp2: 105.5,
+            riskPercent: 1.5, reward1Percent: 3.0, reward2Percent: 5.0,
+            riskRewardRatio: 2.0, tp2RiskRewardRatio: 3.3, isTP2Enabled: true
+        )
+
+        func makeSig(fp: String, symbol: String, market: MarketClass, dir: TradeDirection, score: Double) -> TradeSignal {
+            TradeSignal(
+                id: fp, fingerprint: fp, symbol: symbol, displayName: symbol,
+                marketClass: market, timeframe: .h1, htfTimeframe: .h4,
+                category: .strongSignal, direction: dir, tier: .highConviction,
+                confidencePercent: score, regime: .trending, riskState: .safe,
+                killzone: .newYork, htfBias: dir,
+                generatedAtEpochSeconds: base, barCloseEpochSeconds: base,
+                levels: levels, alignedStrategies: [], rejectionReasons: [],
+                psychologyReport: psych, dataProvider: "Test"
+            )
+        }
+
+        let sBtc = makeSig(fp: "fp-btc", symbol: "BTC/USDT", market: .crypto, dir: .long, score: 86)
+        let sEth = makeSig(fp: "fp-eth", symbol: "ETH/USDT", market: .crypto, dir: .long, score: 78)
+        let sJpy = makeSig(fp: "fp-jpy", symbol: "USD/JPY", market: .forex, dir: .short, score: 81)
+        let candlesMap = ["BTC/USDT": btcBars, "ETH/USDT": ethBars, "USD/JPY": invBars]
+
+        let warnings = CorrelationAnalyzer.analyzeActiveSignals(signals: [sBtc, sEth, sJpy], candlesBySymbol: candlesMap)
+        XCTAssertTrue(warnings["fp-btc"]?.contains(where: { $0.otherSymbol == "ETH/USDT" && $0.isLiveComputed }) == true)
+        // BTC long & USD/JPY short with rho < -0.95 are the same directional risk bet -> should also flag!
+        XCTAssertTrue(warnings["fp-btc"]?.contains(where: { $0.otherSymbol == "USD/JPY" && ($0.correlation ?? 0) < -0.70 }) == true)
+
+        let exposure = CorrelationAnalyzer.netExposureSummary(signals: [sBtc, sEth, sJpy])
+        XCTAssertTrue(exposure.hasConcentratedRisk)
+        XCTAssertEqual(exposure.concentratedClusters.first?.clusterName, "Crypto-Beta")
+        XCTAssertEqual(exposure.concentratedClusters.first?.longCount, 2)
+
+        // One-per-cluster cap keeps highest raw-score signal (BTC 86) and filters correlated ETH (78) & inverse-same-bet USD/JPY (81)
+        let capped = CorrelationAnalyzer.filterOnePerCorrelatedCluster(signals: [sBtc, sEth, sJpy], candlesBySymbol: candlesMap)
+        XCTAssertEqual(capped.map(\.symbol), ["BTC/USDT"])
+    }
+
+    func testAlertRuleEvaluatorQuietHoursOvernightAndPerMarketOverrides() throws {
+        var utcCal = Calendar(identifier: .gregorian)
+        utcCal.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        func utcDate(year: Int, month: Int, day: Int, hour: Int, minute: Int) -> Date {
+            utcCal.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
+        }
+
+        // 2026-11-23 is Monday (weekday = 2), 2026-11-24 is Tuesday (weekday = 3)
+        let monday2330 = utcDate(year: 2026, month: 11, day: 23, hour: 23, minute: 30)
+        let tuesday0200 = utcDate(year: 2026, month: 11, day: 24, hour: 2, minute: 0)
+        let tuesday0800 = utcDate(year: 2026, month: 11, day: 24, hour: 8, minute: 0)
+        let tuesday1400 = utcDate(year: 2026, month: 11, day: 24, hour: 14, minute: 0)
+
+        // Overnight quiet hours 22:00-07:00 active ONLY on Monday (weekday = 2)
+        let overnightQuiet = QuietHoursConfig(enabled: true, startHour: 22, startMinute: 0, endHour: 7, endMinute: 0, activeWeekdays: [2])
+        XCTAssertTrue(AlertRuleEvaluator.isInsideQuietHours(overnightQuiet, at: monday2330, calendar: utcCal))
+        XCTAssertTrue(AlertRuleEvaluator.isInsideQuietHours(overnightQuiet, at: tuesday0200, calendar: utcCal), "02:00 Tuesday belongs to Monday's overnight quiet window")
+        XCTAssertFalse(AlertRuleEvaluator.isInsideQuietHours(overnightQuiet, at: tuesday0800, calendar: utcCal))
+
+        // Same-day quiet window 13:00-15:00 on Tuesday (weekday = 3)
+        let sameDayQuiet = QuietHoursConfig(enabled: true, startHour: 13, startMinute: 0, endHour: 15, endMinute: 0, activeWeekdays: [3])
+        XCTAssertTrue(AlertRuleEvaluator.isInsideQuietHours(sameDayQuiet, at: tuesday1400, calendar: utcCal))
+        XCTAssertFalse(AlertRuleEvaluator.isInsideQuietHours(sameDayQuiet, at: tuesday0800, calendar: utcCal))
+
+        let psych = PsychologyReport(
+            signalCategory: .strongSignal, proDirection: .long, retailCrowdDirection: .short,
+            provenanceBadge: "Structure", whatHappened: "Setup", beginnerPsychology: "B", proPsychology: "P",
+            behavioralBadges: [], evidence: []
+        )
+        let levels = TradeLevels(
+            entryLow: 100, entryHigh: 101, entryMid: 100.5, stopLoss: 99, tp1: 103.5, tp2: 105.5,
+            riskPercent: 1.5, reward1Percent: 3.0, reward2Percent: 5.0,
+            riskRewardRatio: 2.0, tp2RiskRewardRatio: 3.3, isTP2Enabled: true
+        )
+        func makeSig(market: MarketClass, category: SignalCategory, score: Double) -> TradeSignal {
+            TradeSignal(
+                id: "fp-\(market.rawValue)-\(score)", fingerprint: "fp-\(market.rawValue)-\(score)",
+                symbol: market == .crypto ? "BTC/USDT" : "EUR/USD", displayName: "Test",
+                marketClass: market, timeframe: .h1, htfTimeframe: .h4,
+                category: category, direction: .long, tier: .highConviction,
+                confidencePercent: score, regime: .trending, riskState: .safe,
+                killzone: .newYork, htfBias: .long,
+                generatedAtEpochSeconds: 1_760_000_000, barCloseEpochSeconds: 1_760_000_000,
+                levels: levels, alignedStrategies: [], rejectionReasons: [],
+                psychologyReport: psych, dataProvider: "Test"
+            )
+        }
+
+        var rules = AlertRulesConfig()
+        rules.quietHours = overnightQuiet
+        rules.allowTrapAlerts = false
+        rules.allowPreNewsCountdowns = false
+        rules.marketRules[.crypto] = MarketAlertRule(enabled: true, allowPush: true, allowBanner: true, allowSound: false, minScoreOverride: 85.0)
+        rules.marketRules[.forex] = MarketAlertRule(enabled: false)
+
+        // Quiet hours suppresses even 90-score signal
+        let dQuiet = AlertRuleEvaluator.evaluateSignalAlert(signal: makeSig(market: .crypto, category: .strongSignal, score: 90), globalMinScore: 70, rules: rules, at: tuesday0200, calendar: utcCal)
+        XCTAssertFalse(dQuiet.allowAnyDelivery)
+
+        // Outside quiet hours: Crypto score 78 blocked by per-market floor 85, while score 88 passes with sound=false
+        let dBelow = AlertRuleEvaluator.evaluateSignalAlert(signal: makeSig(market: .crypto, category: .strongSignal, score: 78), globalMinScore: 70, rules: rules, at: tuesday0800, calendar: utcCal)
+        XCTAssertFalse(dBelow.allowAnyDelivery)
+
+        let dAbove = AlertRuleEvaluator.evaluateSignalAlert(signal: makeSig(market: .crypto, category: .strongSignal, score: 88), globalMinScore: 70, rules: rules, at: tuesday0800, calendar: utcCal)
+        XCTAssertTrue(dAbove.allowPush)
+        XCTAssertTrue(dAbove.allowBanner)
+        XCTAssertFalse(dAbove.allowSound)
+
+        // Muted market (Forex) & disabled category (Trap Alerts & Pre-News)
+        let dMuted = AlertRuleEvaluator.evaluateSignalAlert(signal: makeSig(market: .forex, category: .strongSignal, score: 92), globalMinScore: 70, rules: rules, at: tuesday0800, calendar: utcCal)
+        XCTAssertFalse(dMuted.allowAnyDelivery)
+
+        let dTrap = AlertRuleEvaluator.evaluateSignalAlert(signal: makeSig(market: .crypto, category: .trapAlert, score: 92), globalMinScore: 70, rules: rules, at: tuesday0800, calendar: utcCal)
+        XCTAssertFalse(dTrap.allowAnyDelivery)
+
+        XCTAssertFalse(AlertRuleEvaluator.shouldAllowPreNews(rules: rules, at: tuesday0800, calendar: utcCal))
+        XCTAssertFalse(AlertRuleEvaluator.shouldAllowMacroRelease(rules: rules, at: tuesday0200, calendar: utcCal))
+        XCTAssertTrue(AlertRuleEvaluator.shouldAllowMacroRelease(rules: rules, at: tuesday0800, calendar: utcCal))
+    }
 }
+

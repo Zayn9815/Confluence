@@ -158,6 +158,26 @@ public struct MarketsFeedsSettingsView: View {
                     step: 15
                 )
             }
+
+            Section {
+                Toggle("Show Broker-Adjusted Levels on Cards", isOn: $coordinator.settings.payload.showBrokerAdjustedLevels)
+
+                NavigationLink {
+                    BrokerPriceOffsetsCalibrationView(coordinator: coordinator, palette: palette)
+                } label: {
+                    HStack {
+                        Label("Calibrate Broker Price Offsets", systemImage: "arrow.left.arrow.right")
+                        Spacer()
+                        Text("\(coordinator.settings.payload.brokerPriceOffsets.count) set")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(palette.secondaryInk)
+                    }
+                }
+            } header: {
+                Text("Broker Price Offsets (Display Only)")
+            } footer: {
+                Text("Adds your calibrated broker-vs-feed price delta to displayed Entry/SL/TP and Copy Setup without ever mutating deterministic engine math or stored Calibration outcomes.")
+            }
         }
         .navigationTitle("Markets & Data")
         .navigationBarTitleDisplayMode(.inline)
@@ -165,5 +185,121 @@ public struct MarketsFeedsSettingsView: View {
             hasTwelveDataKey = await KeychainStore.shared.hasValue(for: .twelveDataAPIKey)
             hasFinnhubKey = await KeychainStore.shared.hasValue(for: .finnhubAPIKey)
         }
+    }
+}
+
+private struct BrokerPriceOffsetsCalibrationView: View {
+    @Bindable var coordinator: MarketScannerCoordinator
+    let palette: ConfluencePalette
+
+    @State private var selectedSymbol: String = "XAU/USD"
+    @State private var brokerPriceText: String = ""
+    @State private var manualOffsetText: String = ""
+
+    private var lastFeedPrice: Double? {
+        coordinator.lastKnownPrice(for: selectedSymbol)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Instrument", selection: $selectedSymbol) {
+                    ForEach(WatchlistDefaults.assets, id: \.symbol) { asset in
+                        Text("\(asset.symbol) (\(asset.marketClass.displayName))").tag(asset.symbol)
+                    }
+                }
+
+                HStack {
+                    Text("Last Feed Close")
+                    Spacer()
+                    if let last = lastFeedPrice {
+                        let dec = PriceFormatHelper.decimals(for: selectedSymbol, referencePrice: last)
+                        Text(PriceFormatHelper.format(last, decimals: dec))
+                            .fontWeight(.semibold)
+                            .monospacedDigit()
+                    } else {
+                        Text("Run a scan first (or enter manual offset)")
+                            .font(.caption)
+                            .foregroundStyle(palette.tertiaryInk)
+                    }
+                }
+
+                HStack {
+                    Text("Your Broker Price")
+                    Spacer()
+                    TextField("Enter live broker quote", text: $brokerPriceText)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
+                }
+
+                Button("Calibrate Offset from Broker Price") {
+                    guard let bp = Double(brokerPriceText), let feed = lastFeedPrice else { return }
+                    coordinator.settings.setBrokerOffset(bp - feed, for: selectedSymbol)
+                    brokerPriceText = ""
+                }
+                .disabled(Double(brokerPriceText) == nil || lastFeedPrice == nil)
+
+                HStack {
+                    Text("Or Direct Delta (+/-)")
+                    Spacer()
+                    TextField("e.g. -2.50", text: $manualOffsetText)
+                        .keyboardType(.numbersAndPunctuation)
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
+                }
+
+                Button("Save Direct Offset") {
+                    guard let delta = Double(manualOffsetText) else { return }
+                    coordinator.settings.setBrokerOffset(delta, for: selectedSymbol)
+                    manualOffsetText = ""
+                }
+                .disabled(Double(manualOffsetText) == nil)
+            } header: {
+                Text("Calibrate Symbol")
+            } footer: {
+                Text("Formula: offset = brokerPrice − lastFeedClose. Offsets older than 24 hours are flagged as stale so you can recalibrate.")
+            }
+
+            Section("Saved Broker Offsets") {
+                if coordinator.settings.payload.brokerPriceOffsets.isEmpty {
+                    Text("No broker price offsets saved.")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondaryInk)
+                } else {
+                    ForEach(coordinator.settings.payload.brokerPriceOffsets.keys.sorted(), id: \.self) { sym in
+                        if let entry = coordinator.settings.payload.brokerPriceOffsets[sym] {
+                            let stale = entry.isStale()
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(sym).fontWeight(.semibold)
+                                        if stale {
+                                            Text("STALE >24h")
+                                                .font(.system(size: 9, weight: .bold))
+                                                .foregroundStyle(palette.trapAmber)
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 2)
+                                                .background(palette.trapAmber.opacity(0.16), in: Capsule())
+                                        }
+                                    }
+                                    Text(String(format: "Delta: %+.5f", entry.offset))
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(palette.secondaryInk)
+                                }
+                                Spacer()
+                                Button(role: .destructive) {
+                                    coordinator.settings.setBrokerOffset(0, for: sym)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Broker Price Offsets")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

@@ -288,10 +288,11 @@ public struct StrategyTradesView: View {
     }
 
     private func formatUTC(_ epoch: TimeInterval) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "MM/dd HH:mm"
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        return f.string(from: Date(timeIntervalSince1970: epoch))
+        TimeDisplayFormatter.formatCompactStamp(
+            epochSeconds: epoch,
+            use24Hour: coordinator.settings.payload.use24HourTime,
+            useUTC: coordinator.settings.payload.useUTCTimeZone
+        )
     }
 }
 

@@ -1,9 +1,17 @@
 import SwiftUI
 import SignalEngine
 
+public enum StatsSubTab: String, CaseIterable, Identifiable {
+    case calibration = "System Calibration"
+    case journal = "Trade Journal"
+    public var id: String { rawValue }
+}
+
 public struct StatsCalibrationTabView: View {
     @Bindable var coordinator: MarketScannerCoordinator
     let palette: ConfluencePalette
+
+    @State private var activeTab: StatsSubTab = .calibration
 
     public init(coordinator: MarketScannerCoordinator, palette: ConfluencePalette) {
         self.coordinator = coordinator
@@ -33,6 +41,23 @@ public struct StatsCalibrationTabView: View {
         }()
 
         NavigationStack {
+            VStack(spacing: 0) {
+                Picker("Stats Mode", selection: $activeTab) {
+                    ForEach(StatsSubTab.allCases) { tab in
+                        Text(tab == .journal && !coordinator.journalEntries.isEmpty
+                             ? "\(tab.rawValue) (\(coordinator.journalEntries.count))"
+                             : tab.rawValue)
+                        .tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(palette.canvas)
+
+                if activeTab == .journal {
+                    TradeJournalView(coordinator: coordinator, palette: palette)
+                } else {
             ScrollView {
                 VStack(spacing: 14) {
                     // 1. Fixed Un-Cherry-Pickable Headline Calibration KPI Grid (Strong · TP1/TP2 · Filled v1.4+)
@@ -228,7 +253,9 @@ public struct StatsCalibrationTabView: View {
                 .padding(14)
             }
             .background(palette.canvas)
-            .navigationTitle("Calibration Stats")
+                }
+            }
+            .navigationTitle(activeTab == .journal ? "Trade Journal" : "Calibration Stats")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
