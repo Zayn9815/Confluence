@@ -894,7 +894,7 @@ final class ScoringAndCalibrationTests: XCTestCase {
 
         // Extreme Fear & Greed (value = 10) must apply ONLY to Crypto, NEVER to FX / Metals / Indices / Stocks
         let now: TimeInterval = 1_760_000_000
-        let extremeFear = FearGreedSnapshot(value: 10, classification: "Extreme Fear", timestampEpochSeconds: now, source: "Alternative.me")
+        let extremeFear = FearGreedSnapshot(value: 10, classification: "Extreme Fear", updatedEpochSeconds: now, source: "Alternative.me")
         let btc = WatchlistDefaults.descriptor(for: "BTC/USDT")!
         let gold = WatchlistDefaults.descriptor(for: "XAU/USD")!
         let eur = WatchlistDefaults.descriptor(for: "EUR/USD")!
