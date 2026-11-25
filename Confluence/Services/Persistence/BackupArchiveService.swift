@@ -9,7 +9,7 @@ public enum BackupImportMode: String, Codable, Sendable, CaseIterable, Identifia
 }
 
 public struct ConfluenceBackupArchive: Codable, Sendable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public let schemaVersion: Int
     public let exportedAtISO8601: String
@@ -20,6 +20,7 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
     public let outcomes: [SignalOutcomeRecord]
     public let tradeLedger: [TradeLedgerSnapshot]
     public let journalEntries: [JournalEntrySnapshot]
+    public let demoWallet: DemoWallet?
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -30,7 +31,8 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
         signals: [TradeSignal],
         outcomes: [SignalOutcomeRecord],
         tradeLedger: [TradeLedgerSnapshot],
-        journalEntries: [JournalEntrySnapshot]
+        journalEntries: [JournalEntrySnapshot],
+        demoWallet: DemoWallet? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.exportedAtISO8601 = exportedAtISO8601
@@ -41,6 +43,26 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
         self.outcomes = outcomes
         self.tradeLedger = tradeLedger
         self.journalEntries = journalEntries
+        self.demoWallet = demoWallet
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion, exportedAtISO8601, appBundleId, appVersion
+        case settings, signals, outcomes, tradeLedger, journalEntries, demoWallet
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        exportedAtISO8601 = try c.decode(String.self, forKey: .exportedAtISO8601)
+        appBundleId = try c.decode(String.self, forKey: .appBundleId)
+        appVersion = try c.decode(String.self, forKey: .appVersion)
+        settings = try c.decode(PersistedSettingsPayload.self, forKey: .settings)
+        signals = (try? c.decodeIfPresent([TradeSignal].self, forKey: .signals)) ?? []
+        outcomes = (try? c.decodeIfPresent([SignalOutcomeRecord].self, forKey: .outcomes)) ?? []
+        tradeLedger = (try? c.decodeIfPresent([TradeLedgerSnapshot].self, forKey: .tradeLedger)) ?? []
+        journalEntries = (try? c.decodeIfPresent([JournalEntrySnapshot].self, forKey: .journalEntries)) ?? []
+        demoWallet = try? c.decodeIfPresent(DemoWallet.self, forKey: .demoWallet)
     }
 }
 
@@ -50,6 +72,23 @@ public struct BackupImportSummary: Sendable, Equatable {
     public let journalImported: Int
     public let settingsRestored: Bool
     public let schemaVersion: Int
+    public let demoWalletRestored: Bool
+
+    public init(
+        signalsImported: Int,
+        outcomesImported: Int,
+        journalImported: Int,
+        settingsRestored: Bool,
+        schemaVersion: Int,
+        demoWalletRestored: Bool = false
+    ) {
+        self.signalsImported = signalsImported
+        self.outcomesImported = outcomesImported
+        self.journalImported = journalImported
+        self.settingsRestored = settingsRestored
+        self.schemaVersion = schemaVersion
+        self.demoWalletRestored = demoWalletRestored
+    }
 }
 
 public enum BackupArchiveError: Error, LocalizedError, Sendable {
@@ -87,7 +126,8 @@ public enum BackupArchiveService {
             signals: store.fetchSignals(limit: 500),
             outcomes: store.fetchOutcomeRecords(),
             tradeLedger: store.fetchTradeLedger(limit: 500),
-            journalEntries: store.fetchJournalEntries(limit: 500)
+            journalEntries: store.fetchJournalEntries(limit: 500),
+            demoWallet: store.loadDemoWallet()
         )
     }
 
@@ -142,6 +182,9 @@ public enum BackupArchiveService {
         if mode == .replace {
             dataStore.resetCalibrationAndHistory()
             dataStore.clearJournalEntries()
+            if archive.demoWallet != nil {
+                dataStore.clearDemoWallet()
+            }
         }
 
         settingsStore.payload = archive.settings
@@ -155,13 +198,19 @@ public enum BackupArchiveService {
         for entry in archive.journalEntries {
             dataStore.upsertJournalEntry(entry)
         }
+        var restoredWallet = false
+        if let wallet = archive.demoWallet {
+            dataStore.saveDemoWallet(wallet)
+            restoredWallet = true
+        }
 
         return BackupImportSummary(
             signalsImported: archive.signals.count,
             outcomesImported: archive.outcomes.count,
             journalImported: archive.journalEntries.count,
             settingsRestored: true,
-            schemaVersion: archive.schemaVersion
+            schemaVersion: archive.schemaVersion,
+            demoWalletRestored: restoredWallet
         )
     }
 
@@ -236,6 +285,27 @@ public enum BackupArchiveService {
                 j.notes,
                 iso.string(from: j.takenAt),
                 j.closedAt.map { iso.string(from: $0) } ?? ""
+            ]
+            lines.append(row.map(csvEscape).joined(separator: ","))
+        }
+        return lines.joined(separator: "\r\n")
+    }
+
+    public static func buildDemoWalletTransactionsCSV(transactions: [DemoWalletTransaction]) -> String {
+        let iso = ISO8601DateFormatter()
+        var lines: [String] = [
+            "id,timestamp,kind,symbol,position_id,amount_usd,balance_after_usd,note"
+        ]
+        for tx in transactions {
+            let row: [String] = [
+                tx.id,
+                iso.string(from: Date(timeIntervalSince1970: tx.timestampEpochSeconds)),
+                tx.kind.rawValue,
+                tx.symbol ?? "",
+                tx.positionId ?? "",
+                String(format: "%.4f", tx.amountUSD),
+                String(format: "%.4f", tx.balanceAfterUSD),
+                tx.note
             ]
             lines.append(row.map(csvEscape).joined(separator: ","))
         }

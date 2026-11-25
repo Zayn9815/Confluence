@@ -62,7 +62,10 @@ public final class ConfluenceDataStore {
             TradeReplayCandleCache.self,
             PersistedOutcomeRecord.self,
             CrashLogEntry.self,
-            JournalEntry.self
+            JournalEntry.self,
+            DemoWalletRecord.self,
+            DemoPositionRecord.self,
+            DemoWalletTransactionRecord.self
         ])
 
         let config: ModelConfiguration
@@ -762,6 +765,130 @@ public final class ConfluenceDataStore {
             for r in rows { context.delete(r) }
             try? context.save()
         }
+    }
+
+    // MARK: - Demo Paper Wallet (v1.5 Purely Additive)
+
+    public func loadDemoWallet() -> DemoWallet {
+        let walletDesc = FetchDescriptor<DemoWalletRecord>()
+        let posDesc = FetchDescriptor<DemoPositionRecord>(
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        let txDesc = FetchDescriptor<DemoWalletTransactionRecord>(
+            sortBy: [SortDescriptor(\.timestamp, order: .forward)]
+        )
+
+        let walletRow = (try? context.fetch(walletDesc))?.first
+        let positions = ((try? context.fetch(posDesc)) ?? []).compactMap { $0.toPosition() }
+        let transactions = ((try? context.fetch(txDesc)) ?? []).map { $0.toTransaction() }
+
+        guard let w = walletRow else {
+            return DemoWallet(
+                startingBalanceUSD: DemoWallet.defaultStartingBalanceUSD,
+                cashBalanceUSD: DemoWallet.defaultStartingBalanceUSD,
+                reservedMarginUSD: 0,
+                realizedPnLUSD: 0,
+                totalFeesPaidUSD: 0,
+                positions: positions,
+                transactions: transactions
+            )
+        }
+        return DemoWallet(
+            startingBalanceUSD: w.startingBalanceUSD,
+            cashBalanceUSD: w.cashBalanceUSD,
+            reservedMarginUSD: w.reservedMarginUSD,
+            realizedPnLUSD: w.realizedPnLUSD,
+            totalFeesPaidUSD: w.totalFeesPaidUSD,
+            positions: positions,
+            transactions: transactions
+        )
+    }
+
+    public func saveDemoWallet(_ wallet: DemoWallet) {
+        let primaryId = "primary"
+        let walletDesc = FetchDescriptor<DemoWalletRecord>(
+            predicate: #Predicate { $0.id == primaryId }
+        )
+        if let existing = try? context.fetch(walletDesc).first {
+            existing.startingBalanceUSD = wallet.startingBalanceUSD
+            existing.cashBalanceUSD = wallet.cashBalanceUSD
+            existing.reservedMarginUSD = wallet.reservedMarginUSD
+            existing.realizedPnLUSD = wallet.realizedPnLUSD
+            existing.totalFeesPaidUSD = wallet.totalFeesPaidUSD
+            existing.updatedAt = Date()
+        } else {
+            context.insert(DemoWalletRecord(
+                id: primaryId,
+                startingBalanceUSD: wallet.startingBalanceUSD,
+                cashBalanceUSD: wallet.cashBalanceUSD,
+                reservedMarginUSD: wallet.reservedMarginUSD,
+                realizedPnLUSD: wallet.realizedPnLUSD,
+                totalFeesPaidUSD: wallet.totalFeesPaidUSD,
+                updatedAt: Date()
+            ))
+        }
+
+        // Upsert positions
+        let existingPositions = (try? context.fetch(FetchDescriptor<DemoPositionRecord>())) ?? []
+        var existingPosById: [String: DemoPositionRecord] = Dictionary(
+            existingPositions.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let incomingPosIds = Set(wallet.positions.map(\.id))
+        for old in existingPositions where !incomingPosIds.contains(old.id) {
+            context.delete(old)
+        }
+        for pos in wallet.positions {
+            guard let data = try? JSONEncoder().encode(pos) else { continue }
+            if let existing = existingPosById[pos.id] {
+                existing.symbol = pos.symbol
+                existing.statusRaw = pos.status.rawValue
+                existing.positionJSON = data
+                existing.closedAt = pos.closedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) }
+            } else {
+                let row = DemoPositionRecord(
+                    id: pos.id,
+                    symbol: pos.symbol,
+                    statusRaw: pos.status.rawValue,
+                    positionJSON: data,
+                    createdAt: Date(timeIntervalSince1970: pos.createdAtEpochSeconds),
+                    closedAt: pos.closedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) }
+                )
+                context.insert(row)
+                existingPosById[pos.id] = row
+            }
+        }
+
+        // Append missing transactions (capped at latest 500)
+        let existingTxs = (try? context.fetch(FetchDescriptor<DemoWalletTransactionRecord>())) ?? []
+        let existingTxIds = Set(existingTxs.map(\.id))
+        for tx in wallet.transactions.suffix(500) where !existingTxIds.contains(tx.id) {
+            context.insert(DemoWalletTransactionRecord(
+                id: tx.id,
+                timestamp: Date(timeIntervalSince1970: tx.timestampEpochSeconds),
+                kindRaw: tx.kind.rawValue,
+                symbol: tx.symbol,
+                positionId: tx.positionId,
+                amountUSD: tx.amountUSD,
+                balanceAfterUSD: tx.balanceAfterUSD,
+                note: tx.note
+            ))
+        }
+
+        try? context.save()
+    }
+
+    public func clearDemoWallet() {
+        if let rows = try? context.fetch(FetchDescriptor<DemoWalletRecord>()) {
+            for r in rows { context.delete(r) }
+        }
+        if let rows = try? context.fetch(FetchDescriptor<DemoPositionRecord>()) {
+            for r in rows { context.delete(r) }
+        }
+        if let rows = try? context.fetch(FetchDescriptor<DemoWalletTransactionRecord>()) {
+            for r in rows { context.delete(r) }
+        }
+        try? context.save()
     }
 
     // MARK: - Reset & Export

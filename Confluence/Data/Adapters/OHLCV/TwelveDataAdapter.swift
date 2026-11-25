@@ -93,7 +93,9 @@ public actor TwelveDataAdapter {
         asset: AssetDescriptor,
         timeframe: Timeframe,
         apiKey: String,
-        allowProxySymbol: Bool = false
+        allowProxySymbol: Bool = false,
+        outputSize: Int = 200,
+        endDateEpochSeconds: TimeInterval? = nil
     ) async throws -> OHLCVFetchResult {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanKey.isEmpty else {
@@ -116,7 +118,9 @@ public actor TwelveDataAdapter {
                     timeframe: timeframe,
                     apiKey: cleanKey,
                     providerBadge: "Twelve Data (\(proxy) Proxy)",
-                    usedProxySymbol: proxy
+                    usedProxySymbol: proxy,
+                    outputSize: outputSize,
+                    endDateEpochSeconds: endDateEpochSeconds
                 )
             }
             throw TwelveDataError.planRestrictedSymbol(targetSymbol, "Requires Grow/Pro plan (cached)")
@@ -129,7 +133,9 @@ public actor TwelveDataAdapter {
                 timeframe: timeframe,
                 apiKey: cleanKey,
                 providerBadge: "Twelve Data",
-                usedProxySymbol: nil
+                usedProxySymbol: nil,
+                outputSize: outputSize,
+                endDateEpochSeconds: endDateEpochSeconds
             )
         } catch TwelveDataError.planRestrictedSymbol(let restrictedSym, let message) {
             planRestrictedSymbols.insert(restrictedSym.uppercased())
@@ -140,7 +146,9 @@ public actor TwelveDataAdapter {
                     timeframe: timeframe,
                     apiKey: cleanKey,
                     providerBadge: "Twelve Data (\(proxy) Proxy)",
-                    usedProxySymbol: proxy
+                    usedProxySymbol: proxy,
+                    outputSize: outputSize,
+                    endDateEpochSeconds: endDateEpochSeconds
                 )
             }
             throw TwelveDataError.planRestrictedSymbol(restrictedSym, message)
@@ -172,7 +180,9 @@ public actor TwelveDataAdapter {
         timeframe: Timeframe,
         apiKey: String,
         providerBadge: String,
-        usedProxySymbol: String?
+        usedProxySymbol: String?,
+        outputSize: Int = 200,
+        endDateEpochSeconds: TimeInterval? = nil
     ) async throws -> OHLCVFetchResult {
         try await pacer.acquireSlot()
 
@@ -185,12 +195,20 @@ public actor TwelveDataAdapter {
         }
 
         var comps = URLComponents(string: "https://api.twelvedata.com/time_series")!
-        comps.queryItems = [
+        var items: [URLQueryItem] = [
             URLQueryItem(name: "symbol", value: querySymbol),
             URLQueryItem(name: "interval", value: interval),
-            URLQueryItem(name: "outputsize", value: "200"),
+            URLQueryItem(name: "outputsize", value: "\(min(max(outputSize, 1), 500))"),
             URLQueryItem(name: "timezone", value: "UTC")
         ]
+        if let endSec = endDateEpochSeconds {
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "en_US_POSIX")
+            df.timeZone = TimeZone(secondsFromGMT: 0)
+            df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            items.append(URLQueryItem(name: "end_date", value: df.string(from: Date(timeIntervalSince1970: endSec))))
+        }
+        comps.queryItems = items
         guard let url = comps.url else {
             throw NetworkAdapterError.invalidURL("Twelve Data time_series")
         }

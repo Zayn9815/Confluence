@@ -148,6 +148,15 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var geminiDailyCallLimit: Int = 25
     public var geminiConfirmationThreshold: Double = 0.80
 
+    // Section 6 — v1.5 Live Feeds, Chart Options, Auto-Scan & Demo Wallet
+    public var tradFiLiveFeedMode: TradFiLiveFeedMode = .autoStreamWithBackup
+    public var cryptoLiveFeedMode: CryptoLiveFeedMode = .liveStream
+    public var defaultChartViewMode: DefaultChartViewMode = .confluence
+    public var showTradingViewOption: Bool = true
+    public var scanOnOpenEnabled: Bool = true
+    public var autoScanIntervalMinutes: Int = ScanSchedulePolicy.defaultIntervalMinutes
+    public var demoWalletFeesEnabled: Bool = false
+
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -172,6 +181,8 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         case calibrationWinDefinition, calibrationCategoryScope
         case calibrationMinConfidencePercent, calibrationMinRiskReward
         case geminiEnabled, geminiModel, geminiDailyCallLimit, geminiConfirmationThreshold
+        case tradFiLiveFeedMode, cryptoLiveFeedMode, defaultChartViewMode, showTradingViewOption
+        case scanOnOpenEnabled, autoScanIntervalMinutes, demoWalletFeesEnabled
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
@@ -271,6 +282,14 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         geminiModel = (try? c.decodeIfPresent(GeminiModelOption.self, forKey: .geminiModel)) ?? d.geminiModel
         geminiDailyCallLimit = (try? c.decodeIfPresent(Int.self, forKey: .geminiDailyCallLimit)) ?? d.geminiDailyCallLimit
         geminiConfirmationThreshold = (try? c.decodeIfPresent(Double.self, forKey: .geminiConfirmationThreshold)) ?? d.geminiConfirmationThreshold
+
+        tradFiLiveFeedMode = (try? c.decodeIfPresent(TradFiLiveFeedMode.self, forKey: .tradFiLiveFeedMode)) ?? d.tradFiLiveFeedMode
+        cryptoLiveFeedMode = (try? c.decodeIfPresent(CryptoLiveFeedMode.self, forKey: .cryptoLiveFeedMode)) ?? d.cryptoLiveFeedMode
+        defaultChartViewMode = (try? c.decodeIfPresent(DefaultChartViewMode.self, forKey: .defaultChartViewMode)) ?? d.defaultChartViewMode
+        showTradingViewOption = (try? c.decodeIfPresent(Bool.self, forKey: .showTradingViewOption)) ?? d.showTradingViewOption
+        scanOnOpenEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .scanOnOpenEnabled)) ?? d.scanOnOpenEnabled
+        autoScanIntervalMinutes = (try? c.decodeIfPresent(Int.self, forKey: .autoScanIntervalMinutes)) ?? d.autoScanIntervalMinutes
+        demoWalletFeesEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .demoWalletFeesEnabled)) ?? d.demoWalletFeesEnabled
     }
 }
 

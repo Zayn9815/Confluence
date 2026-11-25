@@ -22,9 +22,13 @@ public struct ConfluenceApp: App {
                     switch newPhase {
                     case .active:
                         SignalSoundEngine.shared.prepareHaptics()
+                        coordinator.handleScenePhaseActive(true)
                     case .background:
+                        coordinator.handleScenePhaseActive(false)
                         coordinator.scheduleNextBackgroundRefresh()
-                    default:
+                    case .inactive:
+                        coordinator.handleScenePhaseActive(false)
+                    @unknown default:
                         break
                     }
                 }

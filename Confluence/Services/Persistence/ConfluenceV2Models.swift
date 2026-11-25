@@ -972,5 +972,115 @@ public final class JournalEntry {
     }
 }
 
+// MARK: - Purely Additive v1.5 SwiftData @Model Classes (Demo Paper Wallet)
+
+/// Purely additive v1.5 table storing the simulated paper-trading wallet summary.
+@Model
+public final class DemoWalletRecord {
+    @Attribute(.unique) public var id: String
+    public var startingBalanceUSD: Double
+    public var cashBalanceUSD: Double
+    public var reservedMarginUSD: Double
+    public var realizedPnLUSD: Double
+    public var totalFeesPaidUSD: Double
+    public var updatedAt: Date
+
+    public init(
+        id: String = "primary",
+        startingBalanceUSD: Double = DemoWallet.defaultStartingBalanceUSD,
+        cashBalanceUSD: Double = DemoWallet.defaultStartingBalanceUSD,
+        reservedMarginUSD: Double = 0,
+        realizedPnLUSD: Double = 0,
+        totalFeesPaidUSD: Double = 0,
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.startingBalanceUSD = startingBalanceUSD
+        self.cashBalanceUSD = cashBalanceUSD
+        self.reservedMarginUSD = reservedMarginUSD
+        self.realizedPnLUSD = realizedPnLUSD
+        self.totalFeesPaidUSD = totalFeesPaidUSD
+        self.updatedAt = updatedAt
+    }
+}
+
+/// Purely additive v1.5 table storing simulated demo positions (JSON-encoded `DemoPosition` payload).
+@Model
+public final class DemoPositionRecord {
+    @Attribute(.unique) public var id: String
+    public var symbol: String
+    public var statusRaw: String
+    public var positionJSON: Data
+    public var createdAt: Date
+    public var closedAt: Date?
+
+    public init(
+        id: String,
+        symbol: String,
+        statusRaw: String,
+        positionJSON: Data,
+        createdAt: Date,
+        closedAt: Date? = nil
+    ) {
+        self.id = id
+        self.symbol = symbol
+        self.statusRaw = statusRaw
+        self.positionJSON = positionJSON
+        self.createdAt = createdAt
+        self.closedAt = closedAt
+    }
+
+    public func toPosition() -> DemoPosition? {
+        try? JSONDecoder().decode(DemoPosition.self, from: positionJSON)
+    }
+}
+
+/// Purely additive v1.5 table storing simulated demo wallet transactions.
+@Model
+public final class DemoWalletTransactionRecord {
+    @Attribute(.unique) public var id: String
+    public var timestamp: Date
+    public var kindRaw: String
+    public var symbol: String?
+    public var positionId: String?
+    public var amountUSD: Double
+    public var balanceAfterUSD: Double
+    public var note: String
+
+    public init(
+        id: String,
+        timestamp: Date,
+        kindRaw: String,
+        symbol: String? = nil,
+        positionId: String? = nil,
+        amountUSD: Double,
+        balanceAfterUSD: Double,
+        note: String
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.kindRaw = kindRaw
+        self.symbol = symbol
+        self.positionId = positionId
+        self.amountUSD = amountUSD
+        self.balanceAfterUSD = balanceAfterUSD
+        self.note = note
+    }
+
+    public func toTransaction() -> DemoWalletTransaction {
+        DemoWalletTransaction(
+            id: id,
+            timestampEpochSeconds: timestamp.timeIntervalSince1970,
+            kind: DemoTransactionKind(rawValue: kindRaw) ?? .balanceAdjustment,
+            symbol: symbol,
+            positionId: positionId,
+            amountUSD: amountUSD,
+            balanceAfterUSD: balanceAfterUSD,
+            note: note
+        )
+    }
+}
+
+
 
 

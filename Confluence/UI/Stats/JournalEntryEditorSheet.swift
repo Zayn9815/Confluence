@@ -164,11 +164,19 @@ public struct JournalEntryEditorSheet: View {
         let parsedFill = Double(actualFillText)
         let parsedExit = Double(exitPriceText)
         let parsedR = Double(manualRText) ?? autoComputedR
+        let entryRef = parsedFill ?? initialEntry.plannedEntry
+        let resolvedOutcome = TradeMonitor.deriveJournalOutcome(
+            direction: initialEntry.direction,
+            entryPrice: entryRef,
+            exitPrice: parsedExit,
+            stopLoss: initialEntry.stopLoss,
+            currentOutcome: outcome
+        )
         let parsedTags = tagsText
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        let closedAt: Date? = (outcome == .open) ? nil : (initialEntry.closedAt ?? Date())
+        let closedAt: Date? = (resolvedOutcome == .open) ? nil : (initialEntry.closedAt ?? Date())
 
         let updated = JournalEntrySnapshot(
             id: initialEntry.id,
@@ -184,7 +192,7 @@ public struct JournalEntryEditorSheet: View {
             tp2: initialEntry.tp2,
             exitPrice: parsedExit,
             positionSizeText: positionSizeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : positionSizeText.trimmingCharacters(in: .whitespacesAndNewlines),
-            outcome: outcome,
+            outcome: resolvedOutcome,
             actualRMultiple: parsedR,
             systemRMultiple: initialEntry.systemRMultiple,
             strategyIDs: initialEntry.strategyIDs,

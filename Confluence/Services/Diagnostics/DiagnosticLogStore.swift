@@ -9,6 +9,8 @@ public enum SecretRedactor {
         (#"(?i)(x-goog-api-key|authorization)\s*:\s*[^\r\n,;]+"#, "$1: [REDACTED]"),
         (#"(?i)bearer\s+[A-Za-z0-9\-_\.=]+"#, "Bearer [REDACTED]"),
         (#"AIza[0-9A-Za-z\-_]{20,}"#, "[REDACTED_GEMINI_KEY]"),
+        (#"sk-or-[A-Za-z0-9\-_]{16,}"#, "[REDACTED_OPENROUTER_KEY]"),
+        (#"sk-[A-Za-z0-9\-_]{16,}"#, "[REDACTED_API_KEY]"),
         (#"\b[a-fA-F0-9]{32,64}\b"#, "[REDACTED_HEX_TOKEN]")
     ]
 

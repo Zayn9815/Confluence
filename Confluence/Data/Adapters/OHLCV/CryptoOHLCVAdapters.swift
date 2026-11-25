@@ -50,6 +50,7 @@ public struct CryptoOHLCVRouter: Sendable {
         asset: AssetDescriptor,
         timeframe: Timeframe,
         limit: Int = 220,
+        endTimeEpochSeconds: TimeInterval? = nil,
         primary: CryptoExchangePreference = .auto,
         twelveDataKey: String? = nil,
         onLog: ProviderLogHook? = nil
@@ -72,16 +73,22 @@ public struct CryptoOHLCVRouter: Sendable {
                 let result: OHLCVFetchResult
                 switch venue {
                 case .auto, .binanceVision:
-                    result = try await fetchBinanceVision(asset: asset, timeframe: timeframe, limit: limit)
+                    result = try await fetchBinanceVision(asset: asset, timeframe: timeframe, limit: limit, endTimeEpochSeconds: endTimeEpochSeconds)
                 case .okx:
-                    result = try await fetchOKX(asset: asset, timeframe: timeframe, limit: limit)
+                    result = try await fetchOKX(asset: asset, timeframe: timeframe, limit: limit, endTimeEpochSeconds: endTimeEpochSeconds)
                 case .kraken:
                     result = try await fetchKraken(asset: asset, timeframe: timeframe)
                 case .twelveData:
                     guard let key = twelveDataKey, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw NetworkAdapterError.missingAPIKey("Twelve Data")
                     }
-                    result = try await twelveData.fetchCandles(asset: asset, timeframe: timeframe, apiKey: key)
+                    result = try await twelveData.fetchCandles(
+                        asset: asset,
+                        timeframe: timeframe,
+                        apiKey: key,
+                        outputSize: limit,
+                        endDateEpochSeconds: endTimeEpochSeconds
+                    )
                 }
                 if idx > 0 {
                     onLog?("WARN", "Fallback", "\(asset.symbol) \(timeframe.displayLabel): fell back to \(result.providerName)")
@@ -96,12 +103,21 @@ public struct CryptoOHLCVRouter: Sendable {
         throw NetworkAdapterError.allProvidersFailed(errors)
     }
 
-    private func fetchBinanceVision(asset: AssetDescriptor, timeframe: Timeframe, limit: Int) async throws -> OHLCVFetchResult {
+    private func fetchBinanceVision(
+        asset: AssetDescriptor,
+        timeframe: Timeframe,
+        limit: Int,
+        endTimeEpochSeconds: TimeInterval? = nil
+    ) async throws -> OHLCVFetchResult {
         guard let sym = asset.binanceSymbol else {
             throw NetworkAdapterError.invalidURL("Missing Binance symbol for \(asset.symbol)")
         }
         let interval = timeframe.rawValue
-        let urlStr = "https://data-api.binance.vision/api/v3/klines?symbol=\(sym)&interval=\(interval)&limit=\(min(limit, 500))"
+        var urlStr = "https://data-api.binance.vision/api/v3/klines?symbol=\(sym)&interval=\(interval)&limit=\(min(max(limit, 1), 500))"
+        if let endSec = endTimeEpochSeconds {
+            let endMs = Int64(endSec * 1000.0)
+            urlStr += "&endTime=\(endMs)"
+        }
         guard let url = URL(string: urlStr) else { throw NetworkAdapterError.invalidURL(urlStr) }
 
         var req = URLRequest(url: url)
@@ -139,7 +155,12 @@ public struct CryptoOHLCVRouter: Sendable {
         return OHLCVFetchResult(candles: out, providerName: "Binance Vision", latencyMs: res.latencyMs)
     }
 
-    private func fetchOKX(asset: AssetDescriptor, timeframe: Timeframe, limit: Int) async throws -> OHLCVFetchResult {
+    private func fetchOKX(
+        asset: AssetDescriptor,
+        timeframe: Timeframe,
+        limit: Int,
+        endTimeEpochSeconds: TimeInterval? = nil
+    ) async throws -> OHLCVFetchResult {
         let instId = "\(asset.baseCurrency)-\(asset.quoteCurrency)"
         let bar: String
         switch timeframe {
@@ -148,7 +169,11 @@ public struct CryptoOHLCVRouter: Sendable {
         case .h4: bar = "4H"
         case .d1: bar = "1Dutc"
         }
-        let urlStr = "https://www.okx.com/api/v5/market/candles?instId=\(instId)&bar=\(bar)&limit=\(min(limit, 300))"
+        var urlStr = "https://www.okx.com/api/v5/market/candles?instId=\(instId)&bar=\(bar)&limit=\(min(max(limit, 1), 300))"
+        if let endSec = endTimeEpochSeconds {
+            let afterMs = Int64(endSec * 1000.0)
+            urlStr += "&after=\(afterMs)"
+        }
         guard let url = URL(string: urlStr) else { throw NetworkAdapterError.invalidURL(urlStr) }
 
         let res = try await http.send(URLRequest(url: url), maxRetries: 2)

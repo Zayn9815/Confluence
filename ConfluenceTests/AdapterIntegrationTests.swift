@@ -925,7 +925,10 @@ final class AdapterIntegrationTests: XCTestCase {
         XCTAssertTrue(archiveText.contains("[REDACTED]"))
 
         // 2. Reject unsupported future schemaVersion
-        let badSchemaJSON = archiveText.replacingOccurrences(of: "\"schemaVersion\" : 1", with: "\"schemaVersion\" : 99")
+        let badSchemaJSON = archiveText.replacingOccurrences(
+            of: "\"schemaVersion\" : \(ConfluenceBackupArchive.currentSchemaVersion)",
+            with: "\"schemaVersion\" : 99"
+        )
         XCTAssertThrowsError(try BackupArchiveService.decodeAndValidateArchive(from: Data(badSchemaJSON.utf8)))
 
         // 3. Merge vs Replace restore

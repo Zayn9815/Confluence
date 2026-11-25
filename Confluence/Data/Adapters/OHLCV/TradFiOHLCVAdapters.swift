@@ -69,6 +69,8 @@ public struct TradFiOHLCVRouter: Sendable {
         twelveDataKey: String?,
         preference: TradFiProviderPreference = .auto,
         allowProxyForChart: Bool = false,
+        limit: Int = 200,
+        endTimeEpochSeconds: TimeInterval? = nil,
         onLog: ProviderLogHook? = nil
     ) async throws -> OHLCVFetchResult {
         let trimmedKey = twelveDataKey?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -109,7 +111,9 @@ public struct TradFiOHLCVRouter: Sendable {
                         asset: asset,
                         timeframe: timeframe,
                         apiKey: key,
-                        allowProxySymbol: allowProxyForChart
+                        allowProxySymbol: allowProxyForChart,
+                        outputSize: limit,
+                        endDateEpochSeconds: endTimeEpochSeconds
                     )
                     if let prior = firstFailedProvider {
                         onLog?("WARN", "Fallback", "\(asset.symbol) \(timeframe.displayLabel): \(prior) unavailable -> \(res.providerName)")
@@ -117,6 +121,10 @@ public struct TradFiOHLCVRouter: Sendable {
                     return res
 
                 case .biquote:
+                    if endTimeEpochSeconds != nil {
+                        // biquote.io does not expose historical end-cursor paging; fall through to Yahoo/Twelve Data
+                        continue
+                    }
                     guard let bqSym = asset.biquoteSymbol else {
                         if firstFailedProvider == nil { firstFailedProvider = "biquote.io (no symbol)" }
                         continue
@@ -126,7 +134,7 @@ public struct TradFiOHLCVRouter: Sendable {
                         continue
                     }
                     do {
-                        let res = try await fetchBiquoteOHLC(asset: asset, timeframe: timeframe)
+                        let res = try await fetchBiquoteOHLC(asset: asset, timeframe: timeframe, limit: limit)
                         if res.candles.isEmpty {
                             await biquoteCache.markUnsupported(bqSym)
                             throw NetworkAdapterError.decodingFailed("biquote.io returned 0 bars for \(bqSym)")
@@ -141,7 +149,7 @@ public struct TradFiOHLCVRouter: Sendable {
                     }
 
                 case .yahooFinance:
-                    let res = try await fetchYahooFinance(asset: asset, timeframe: timeframe)
+                    let res = try await fetchYahooFinance(asset: asset, timeframe: timeframe, endTimeEpochSeconds: endTimeEpochSeconds)
                     if let prior = firstFailedProvider {
                         onLog?("WARN", "Fallback", "\(asset.symbol) \(timeframe.displayLabel): \(prior) -> Yahoo Finance")
                     }
@@ -160,7 +168,11 @@ public struct TradFiOHLCVRouter: Sendable {
         throw NetworkAdapterError.allProvidersFailed(errors)
     }
 
-    private func fetchYahooFinance(asset: AssetDescriptor, timeframe: Timeframe) async throws -> OHLCVFetchResult {
+    private func fetchYahooFinance(
+        asset: AssetDescriptor,
+        timeframe: Timeframe,
+        endTimeEpochSeconds: TimeInterval? = nil
+    ) async throws -> OHLCVFetchResult {
         guard let rawSym = asset.yahooSymbol,
               let encoded = rawSym.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
         else {
@@ -170,23 +182,32 @@ public struct TradFiOHLCVRouter: Sendable {
         // Yahoo has no native 4h interval; fetch 1h over 60d and causally resample to UTC 4h
         let yahooInterval: String
         let yahooRange: String
+        let windowSeconds: TimeInterval
         let needs4HResample: Bool
         switch timeframe {
         case .m15:
-            yahooInterval = "15m"; yahooRange = "10d"; needs4HResample = false
+            yahooInterval = "15m"; yahooRange = "30d"; windowSeconds = 25 * 86_400; needs4HResample = false
         case .h1:
-            yahooInterval = "1h"; yahooRange = "30d"; needs4HResample = false
+            yahooInterval = "1h"; yahooRange = "60d"; windowSeconds = 55 * 86_400; needs4HResample = false
         case .h4:
-            yahooInterval = "1h"; yahooRange = "60d"; needs4HResample = true
+            yahooInterval = "1h"; yahooRange = "60d"; windowSeconds = 55 * 86_400; needs4HResample = true
         case .d1:
-            yahooInterval = "1d"; yahooRange = "1y"; needs4HResample = false
+            yahooInterval = "1d"; yahooRange = "2y"; windowSeconds = 500 * 86_400; needs4HResample = false
         }
 
         let hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
         var lastErr: Error = NetworkAdapterError.httpStatus(0, "Yahoo failed")
 
         for host in hosts {
-            let urlStr = "https://\(host)/v8/finance/chart/\(encoded)?interval=\(yahooInterval)&range=\(yahooRange)&includePrePost=false"
+            let querySuffix: String
+            if let endSec = endTimeEpochSeconds {
+                let p2 = Int64(endSec)
+                let p1 = max(0, Int64(endSec - windowSeconds))
+                querySuffix = "interval=\(yahooInterval)&period1=\(p1)&period2=\(p2)&includePrePost=false"
+            } else {
+                querySuffix = "interval=\(yahooInterval)&range=\(yahooRange)&includePrePost=false"
+            }
+            let urlStr = "https://\(host)/v8/finance/chart/\(encoded)?\(querySuffix)"
             guard let url = URL(string: urlStr) else { continue }
             var req = URLRequest(url: url)
             req.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
@@ -275,11 +296,12 @@ public struct TradFiOHLCVRouter: Sendable {
         return out
     }
 
-    private func fetchBiquoteOHLC(asset: AssetDescriptor, timeframe: Timeframe) async throws -> OHLCVFetchResult {
+    private func fetchBiquoteOHLC(asset: AssetDescriptor, timeframe: Timeframe, limit: Int = 200) async throws -> OHLCVFetchResult {
         guard let sym = asset.biquoteSymbol else {
             throw NetworkAdapterError.invalidURL("Missing biquote symbol")
         }
-        let urlStr = "https://biquote.io/api/\(sym)/ohlc?interval=\(timeframe.rawValue)&limit=200"
+        let clampedLimit = min(max(limit, 1), 500)
+        let urlStr = "https://biquote.io/api/\(sym)/ohlc?interval=\(timeframe.rawValue)&limit=\(clampedLimit)"
         guard let url = URL(string: urlStr) else { throw NetworkAdapterError.invalidURL(urlStr) }
 
         let res = try await http.send(URLRequest(url: url), maxRetries: 1)
