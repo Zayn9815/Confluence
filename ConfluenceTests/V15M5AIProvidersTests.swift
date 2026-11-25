@@ -60,14 +60,15 @@ final class V15M5AIProvidersTests: XCTestCase {
             alignedStrategies: [],
             rejectionReasons: [],
             psychologyReport: PsychologyReport(
-                headline: "Clean sweep",
-                whatHappened: "Sweep held",
-                retailCrowdDirection: .short,
+                signalCategory: .strongSignal,
                 proDirection: .long,
-                retailTrapRisk: .low,
+                retailCrowdDirection: .short,
                 provenanceBadge: "Price Action Only",
-                trappedLevelsSummary: "None",
-                positioningSummary: "Neutral"
+                whatHappened: "Sweep held above key demand.",
+                beginnerPsychology: "Sellers were caught below support.",
+                proPsychology: "Absorption confirmed on closed candle.",
+                behavioralBadges: ["Stop Hunt"],
+                evidence: []
             ),
             dataProvider: "Binance Vision"
         )
