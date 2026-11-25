@@ -364,7 +364,7 @@ public actor OpenAICompatibleJudgeClient: AIJudgeClient {
         }
 
         // Attempt 1 (full structured params); on HTTP 400 retry once with relaxed params
-        let firstResponse: HTTPResponse
+        let firstResponse: HTTPResponseData
         do {
             firstResponse = try await sendHandling429(try buildRequest(relaxed: false))
         } catch NetworkAdapterError.httpStatus(let code, _) where code == 400 {

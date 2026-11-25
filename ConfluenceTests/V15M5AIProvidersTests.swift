@@ -4,14 +4,14 @@ import XCTest
 import SignalEngine
 
 private actor MockAIHTTPTransport: HTTPTransport {
-    private var handlers: [@Sendable (URLRequest) throws -> HTTPResponse]
+    private var handlers: [@Sendable (URLRequest) throws -> HTTPResponseData]
     private(set) var recordedRequests: [URLRequest] = []
 
-    init(handlers: [@Sendable (URLRequest) throws -> HTTPResponse]) {
+    init(handlers: [@Sendable (URLRequest) throws -> HTTPResponseData]) {
         self.handlers = handlers
     }
 
-    func send(_ request: URLRequest, maxRetries: Int) async throws -> HTTPResponse {
+    func send(_ request: URLRequest, maxRetries: Int) async throws -> HTTPResponseData {
         recordedRequests.append(request)
         guard !handlers.isEmpty else {
             throw NetworkAdapterError.httpStatus(500, "No mock response left")
@@ -91,8 +91,8 @@ final class V15M5AIProvidersTests: XCTestCase {
         }
         """
         let transport = MockAIHTTPTransport(handlers: [
-            { _ in HTTPResponse(data: Data(page1.utf8), statusCode: 200, headers: [:], serverDate: Date(), latencyMs: 12) },
-            { _ in HTTPResponse(data: Data(page2.utf8), statusCode: 200, headers: [:], serverDate: Date(), latencyMs: 12) }
+            { _ in HTTPResponseData(data: Data(page1.utf8), statusCode: 200, headers: [:], serverDate: Date(), latencyMs: 12) },
+            { _ in HTTPResponseData(data: Data(page2.utf8), statusCode: 200, headers: [:], serverDate: Date(), latencyMs: 12) }
         ])
 
         let client = GeminiJudgeClient(http: transport)
@@ -119,8 +119,8 @@ final class V15M5AIProvidersTests: XCTestCase {
         // 1st call returns HTTP 400 (tests relaxed retry), 2nd returns blank content (tests DeepSeek blank retry), 3rd succeeds!
         let transport = MockAIHTTPTransport(handlers: [
             { _ in throw NetworkAdapterError.httpStatus(400, "Unsupported param") },
-            { _ in HTTPResponse(data: Data(blankResponse.utf8), statusCode: 200, headers: [:], serverDate: Date(), latencyMs: 10) },
-            { _ in HTTPResponse(data: Data(validJudgment.utf8), statusCode: 200, headers: [:], serverDate: Date(), latencyMs: 10) }
+            { _ in HTTPResponseData(data: Data(blankResponse.utf8), statusCode: 200, headers: [:], serverDate: Date(), latencyMs: 10) },
+            { _ in HTTPResponseData(data: Data(validJudgment.utf8), statusCode: 200, headers: [:], serverDate: Date(), latencyMs: 10) }
         ])
 
         let client = OpenAICompatibleJudgeClient(provider: .deepseek, http: transport, suiteName: suiteName)
@@ -152,7 +152,7 @@ final class V15M5AIProvidersTests: XCTestCase {
         }
         """
         let transport = MockAIHTTPTransport(handlers: [
-            { _ in HTTPResponse(data: Data(modelsJSON.utf8), statusCode: 200, headers: [:], serverDate: Date(), latencyMs: 8) },
+            { _ in HTTPResponseData(data: Data(modelsJSON.utf8), statusCode: 200, headers: [:], serverDate: Date(), latencyMs: 8) },
             { _ in throw NetworkAdapterError.httpStatus(429, "Too Many Requests") }
         ])
 

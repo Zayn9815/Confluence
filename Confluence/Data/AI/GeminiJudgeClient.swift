@@ -174,7 +174,7 @@ public actor GeminiJudgeClient: AIJudgeClient {
             return req
         }
 
-        let res: HTTPResponse
+        let res: HTTPResponseData
         do {
             res = try await sendHandling429(try makeRequest(includeThinking: true))
         } catch NetworkAdapterError.httpStatus(let code, _) where code == 400 {
@@ -225,7 +225,7 @@ public actor GeminiJudgeClient: AIJudgeClient {
             return req
         }
 
-        let res: HTTPResponse
+        let res: HTTPResponseData
         do {
             res = try await sendHandling429(try makeRequest(includeThinking: true))
         } catch NetworkAdapterError.httpStatus(let code, _) where code == 400 {
