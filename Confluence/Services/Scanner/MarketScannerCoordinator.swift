@@ -235,7 +235,7 @@ public final class MarketScannerCoordinator {
         let scanStart = Date()
         diagnosticLog.log(
             .info,
-            category: .scan,
+            category: isBackground ? .background : .engine,
             message: "Started \(isBackground ? "background" : "foreground") scan (\(settings.activeWatchlistAssets.count) assets)."
         )
 
@@ -519,7 +519,7 @@ public final class MarketScannerCoordinator {
         let elapsed = Date().timeIntervalSince(scanStart)
         diagnosticLog.log(
             errors.isEmpty ? .info : .warn,
-            category: .scan,
+            category: isBackground ? .background : .engine,
             message: "Scan finished in \(String(format: "%.1fs", elapsed)) · \(scannedSignals.count) setups, \(scannedTraps.count) traps, \(errors.count) errors."
         )
 
@@ -536,7 +536,7 @@ public final class MarketScannerCoordinator {
         providerChoice: ChartProviderChoice
     ) async throws -> OHLCVFetchResult {
         guard let asset = WatchlistDefaults.descriptor(for: symbol) else {
-            throw NetworkAdapterError.noData("Unknown symbol \(symbol)")
+            throw NetworkAdapterError.decodingFailed("Unknown symbol \(symbol)")
         }
         let twelveKey = await KeychainStore.shared.readEffectiveTwelveDataKey()
         let logHook: ProviderLogHook = { [weak self] sev, cat, msg in
