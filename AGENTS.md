@@ -53,9 +53,9 @@
 - Pinned dependencies in `project.yml`:
   - `EmergeTools/Pow` pinned to commit `1b4b1dda28c50b95f0872927ee2226fe8b58950e` (fixes Swift 6.1+ `.pi` ambiguity in `1.0.5`).
   - `exyte/PopupView` from `5.0.9`.
-  - `markiv/SwiftUI-Shimmer` from `1.5.1` (product `Shimmer`).
   - `tradingview/LightweightChartsIOS` from `5.2.0` (product `LightweightCharts`, Apache 2.0 attribution required in Settings -> About).
   - Keychain storage uses native Swift 6 `Security.framework` (`KeychainStore`) — zero external dependency, no `unsafeFlags`.
+  - Scan loading skeletons use native SwiftUI `NativeShimmerModifier` (honors `@Environment(\.accessibilityReduceMotion)` — zero third-party shimmer dependency).
 - **Battery:** Zero persistent WebSockets, zero continuous idle animations, `LazyVStack` on feeds, pure SwiftUI `Canvas` for Signal Card mini-charts (`LightweightCharts` instantiated lazily ONLY on full-screen sheet).
 - **Audio:** Custom `.caf` files live at the root of `Confluence.app`. Use `AVAudioSession.Category.ambient` with `.mixWithOthers` so hardware mute switch is always respected.
 

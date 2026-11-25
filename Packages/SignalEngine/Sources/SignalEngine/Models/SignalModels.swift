@@ -507,7 +507,6 @@ public enum TradeLevelMode: String, Codable, Sendable, CaseIterable, Identifiabl
 public enum StrategySelectionMode: String, Codable, Sendable, CaseIterable, Identifiable {
     case defaultAll = "Default (All Enabled)"
     case custom = "Custom (Select Strategies)"
-    case randomSubset = "Random Subset"
 
     public var id: String { rawValue }
 
@@ -515,7 +514,18 @@ public enum StrategySelectionMode: String, Codable, Sendable, CaseIterable, Iden
         switch self {
         case .defaultAll: return "All Enabled"
         case .custom: return "Custom"
-        case .randomSubset: return "Random Subset"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = (try? container.decode(String.self)) ?? ""
+        switch raw {
+        case Self.custom.rawValue, "custom":
+            self = .custom
+        default:
+            // Legacy "Random Subset" / "randomSubset" and any unknown value safely decode to .defaultAll
+            self = .defaultAll
         }
     }
 }

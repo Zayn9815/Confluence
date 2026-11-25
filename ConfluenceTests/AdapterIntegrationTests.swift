@@ -395,33 +395,46 @@ final class AdapterIntegrationTests: XCTestCase {
 
     @MainActor
     func testAppSettingsBackwardsCompatibleDecodeAndThemeToggle() throws {
-        // Legacy v1.1 payload missing all v1.2 keys
+        // Legacy v1.1/v1.3 payload with old ThemePreset + removed Random Subset mode
         let legacyJSON = """
         {
           "appearanceMode": "Dark Mode",
           "themePreset": "AMOLED Vault",
+          "strategySelectionMode": "Random Subset",
           "minimumConfidencePercent": 78.0,
           "minimumRiskReward": 2.5
         }
         """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(PersistedSettingsPayload.self, from: legacyJSON)
-        XCTAssertEqual(decoded.themePreset, .amoledVault)
-        XCTAssertEqual(decoded.lastDarkThemePreset, .amoledVault)
+        XCTAssertEqual(decoded.appearanceMode, .dark)
+        XCTAssertTrue(decoded.usePureBlackAMOLED, "Legacy AMOLED Vault must migrate to usePureBlackAMOLED = true")
+        XCTAssertEqual(decoded.strategySelectionMode, .defaultAll, "Legacy Random Subset must decode safely to .defaultAll")
+        XCTAssertFalse(decoded.showWeakFilteredSignals, "Weak / Filtered signals must default OFF")
+        XCTAssertFalse(decoded.showAdvancedSettings, "Show Advanced Settings must default OFF")
         XCTAssertEqual(decoded.minimumConfidencePercent, 78.0)
         XCTAssertEqual(decoded.levelCalculationMode, .structureATR)
-        XCTAssertEqual(decoded.strategySelectionMode, .defaultAll)
         XCTAssertEqual(decoded.calibrationWinDefinition, .tp1OrTp2)
+
+        // Legacy Porcelain Desk without explicit appearanceMode -> Light Mode + AMOLED false
+        let legacyPorcelainJSON = """
+        {
+          "themePreset": "Porcelain Desk"
+        }
+        """.data(using: .utf8)!
+        let decodedPorcelain = try JSONDecoder().decode(PersistedSettingsPayload.self, from: legacyPorcelainJSON)
+        XCTAssertEqual(decodedPorcelain.appearanceMode, .light)
+        XCTAssertFalse(decodedPorcelain.usePureBlackAMOLED)
 
         let settings = AppSettingsStore()
         settings.payload = decoded
-        // Toggle Dark (AMOLED Vault) -> Light (Porcelain Desk) -> Dark (restores AMOLED Vault!)
+        // Toggle Dark (AMOLED) -> Light -> Dark (preserves usePureBlackAMOLED = true!)
         settings.toggleDarkLightMode(currentlyDark: true)
         XCTAssertEqual(settings.payload.appearanceMode, .light)
-        XCTAssertEqual(settings.payload.themePreset, .porcelainDesk)
+        XCTAssertTrue(settings.payload.usePureBlackAMOLED)
 
         settings.toggleDarkLightMode(currentlyDark: false)
         XCTAssertEqual(settings.payload.appearanceMode, .dark)
-        XCTAssertEqual(settings.payload.themePreset, .amoledVault)
+        XCTAssertTrue(settings.payload.usePureBlackAMOLED)
     }
 
     @MainActor

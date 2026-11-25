@@ -879,4 +879,33 @@ final class ScoringAndCalibrationTests: XCTestCase {
         XCTAssertEqual(summaryWithLegacy.legacyExcludedCount, 1)
         XCTAssertEqual(summaryWithLegacy.resolvedSignals, 1, "Headline win rate must exclude pre-v1.4 legacy-immediate-fill record")
     }
+
+    // MARK: - v1.4 Phase 2 (Workstream C): Random Subset Removal & Crypto-Only Fear & Greed
+
+    func testLegacyRandomSubsetDecodesToDefaultAllAndCryptoOnlyFearGreed() throws {
+        // Legacy "Random Subset" and "randomSubset" decode cleanly to .defaultAll
+        for raw in ["\"Random Subset\"", "\"randomSubset\""] {
+            let mode = try JSONDecoder().decode(StrategySelectionMode.self, from: Data(raw.utf8))
+            XCTAssertEqual(mode, .defaultAll)
+        }
+        let customMode = try JSONDecoder().decode(StrategySelectionMode.self, from: Data("\"Custom (Select Strategies)\"".utf8))
+        XCTAssertEqual(customMode, .custom)
+        XCTAssertEqual(StrategySelectionMode.allCases.count, 2)
+
+        // Extreme Fear & Greed (value = 10) must apply ONLY to Crypto, NEVER to FX / Metals / Indices / Stocks
+        let now: TimeInterval = 1_760_000_000
+        let extremeFear = FearGreedSnapshot(value: 10, classification: "Extreme Fear", timestampEpochSeconds: now, source: "Alternative.me")
+        let btc = WatchlistDefaults.descriptor(for: "BTC/USDT")!
+        let gold = WatchlistDefaults.descriptor(for: "XAU/USD")!
+        let eur = WatchlistDefaults.descriptor(for: "EUR/USD")!
+        let aapl = WatchlistDefaults.descriptor(for: "AAPL")!
+
+        let btcCatalyst = HeadlineSentimentClassifier.analyzeNewsCatalyst(for: btc, breakingNews: [], fearGreed: extremeFear, nowEpochSeconds: now)
+        XCTAssertNotNil(btcCatalyst, "Crypto asset should reflect extreme Fear & Greed context")
+        XCTAssertTrue(btcCatalyst?.summary.contains("Fear & Greed") == true)
+
+        XCTAssertNil(HeadlineSentimentClassifier.analyzeNewsCatalyst(for: gold, breakingNews: [], fearGreed: extremeFear, nowEpochSeconds: now))
+        XCTAssertNil(HeadlineSentimentClassifier.analyzeNewsCatalyst(for: eur, breakingNews: [], fearGreed: extremeFear, nowEpochSeconds: now))
+        XCTAssertNil(HeadlineSentimentClassifier.analyzeNewsCatalyst(for: aapl, breakingNews: [], fearGreed: extremeFear, nowEpochSeconds: now))
+    }
 }

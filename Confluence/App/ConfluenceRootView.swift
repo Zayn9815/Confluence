@@ -21,8 +21,8 @@ public struct ConfluenceRootView: View {
 
     private var palette: ConfluencePalette {
         ConfluencePalette.resolve(
-            preset: coordinator.settings.payload.themePreset,
-            colorScheme: effectiveColorScheme
+            colorScheme: effectiveColorScheme,
+            usePureBlackAMOLED: coordinator.settings.payload.usePureBlackAMOLED
         )
     }
 

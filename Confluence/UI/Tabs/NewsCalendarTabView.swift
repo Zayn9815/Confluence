@@ -261,8 +261,9 @@ public struct NewsCalendarTabView: View {
     private var breakingRadarContent: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
-                // Crypto Fear & Greed Gauge
-                if let fg = coordinator.fearGreed {
+                // Crypto Fear & Greed Gauge (strictly Crypto-only)
+                if coordinator.settings.payload.enabledMarkets.contains(.crypto),
+                   let fg = coordinator.fearGreed {
                     HStack(spacing: 12) {
                         ZStack {
                             Circle()
@@ -278,9 +279,17 @@ public struct NewsCalendarTabView: View {
                         .frame(width: 44, height: 44)
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Crypto Fear & Greed Index")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.secondaryInk)
+                            HStack(spacing: 6) {
+                                Text("Crypto Fear & Greed Index")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(palette.secondaryInk)
+                                Text("CRYPTO ONLY")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(palette.macroIceBlue)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(palette.macroIceBlue.opacity(0.14), in: Capsule())
+                            }
                             Text(fg.classification)
                                 .font(.subheadline.weight(.bold))
                                 .foregroundStyle(palette.primaryInk)

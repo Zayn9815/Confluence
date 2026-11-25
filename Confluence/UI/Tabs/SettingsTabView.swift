@@ -1,8 +1,7 @@
 import SwiftUI
 import SignalEngine
 
-/// Clean, uncluttered 7-row Drill-Down Settings Hub.
-/// Zero toggles, sliders, or text fields live on the root screen — every row drills into a dedicated sub-screen.
+/// Clean 5-category Drill-Down Settings Hub with a top-level `Show Advanced Settings` toggle (default OFF).
 public struct SettingsTabView: View {
     @Bindable var coordinator: MarketScannerCoordinator
     let palette: ConfluencePalette
@@ -13,44 +12,50 @@ public struct SettingsTabView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.0"
+    }
+
+    private var themeSummary: String {
+        let mode = coordinator.settings.payload.appearanceMode.rawValue
+        if coordinator.settings.payload.appearanceMode != .light && coordinator.settings.payload.usePureBlackAMOLED {
+            return "\(mode) (AMOLED) · \(coordinator.settings.payload.cardDensity.rawValue)"
+        }
+        return "\(mode) · \(coordinator.settings.payload.cardDensity.rawValue)"
     }
 
     public var body: some View {
         NavigationStack {
             List {
-                Section("Terminal Preferences") {
+                Section {
                     NavigationLink {
-                        AppearanceSettingsView(coordinator: coordinator, palette: palette)
+                        AppearanceFeedbackSettingsView(coordinator: coordinator, palette: palette)
                     } label: {
                         settingsRow(
                             icon: "paintbrush.fill",
                             color: palette.champagneGold,
-                            title: "Appearance & Display",
-                            subtitle: "\(coordinator.settings.payload.themePreset.rawValue) · \(coordinator.settings.payload.cardDensity.rawValue)"
+                            title: "Appearance & Feedback",
+                            subtitle: themeSummary
                         )
                     }
 
                     NavigationLink {
-                        NotificationsSoundSettingsView(coordinator: coordinator, palette: palette)
+                        AlertsSettingsView(coordinator: coordinator, palette: palette)
                     } label: {
                         settingsRow(
                             icon: "bell.badge.fill",
                             color: palette.shortCrimson,
-                            title: "Notifications, Sound & Haptics",
-                            subtitle: "\(coordinator.settings.payload.soundPreset.rawValue) · \(coordinator.unreadNotificationCount) unread"
+                            title: "Alerts",
+                            subtitle: "\(coordinator.notificationStatusDescription) · \(coordinator.unreadNotificationCount) unread"
                         )
                     }
-                }
 
-                Section("Market Data & Intelligence") {
                     NavigationLink {
                         MarketsFeedsSettingsView(coordinator: coordinator, palette: palette)
                     } label: {
                         settingsRow(
                             icon: "antenna.radiowaves.left.and.right",
                             color: palette.macroIceBlue,
-                            title: "Markets, News & Data Feeds",
+                            title: "Markets & Data",
                             subtitle: "\(coordinator.settings.payload.enabledMarkets.count) markets · \(coordinator.settings.payload.tradFiProviderPreference.shortLabel) / \(coordinator.settings.payload.cryptoPrimaryExchange.shortLabel)"
                         )
                     }
@@ -58,50 +63,41 @@ public struct SettingsTabView: View {
                     NavigationLink {
                         SignalRulesSettingsView(coordinator: coordinator, palette: palette)
                     } label: {
+                        let aiBadge = coordinator.settings.payload.geminiEnabled ? "AI ON" : "Native"
                         settingsRow(
                             icon: "waveform.path.ecg",
                             color: palette.longEmerald,
-                            title: "Signal Rules, Risk & Win-Rate",
-                            subtitle: "\(coordinator.settings.payload.levelCalculationMode.shortLabel) · \(Int(coordinator.settings.payload.minimumConfidencePercent.rounded()))%+ · \(coordinator.settings.payload.strategySelectionMode.shortLabel)"
+                            title: "Signal Rules & AI",
+                            subtitle: "Score ≥\(Int(coordinator.settings.payload.minimumConfidencePercent.rounded())) · 1:\(String(format: "%.1f", coordinator.settings.payload.minimumRiskReward)) · \(aiBadge)"
                         )
                     }
 
                     NavigationLink {
-                        AISecondOpinionSettingsView(coordinator: coordinator, palette: palette)
-                    } label: {
-                        settingsRow(
-                            icon: "sparkles",
-                            color: Color(hex: 0xA855F7),
-                            title: "AI Second-Opinion",
-                            subtitle: coordinator.settings.payload.geminiEnabled
-                                ? "ON · \(coordinator.settings.payload.geminiModel.displayName)"
-                                : "OFF · 100% Native Deterministic Mode"
-                        )
-                    }
-                }
-
-                Section("Diagnostics & Info") {
-                    NavigationLink {
-                        DiagnosticsHubView(coordinator: coordinator, palette: palette)
+                        DataDiagnosticsAboutSettingsView(coordinator: coordinator, palette: palette)
                     } label: {
                         settingsRow(
                             icon: "stethoscope",
                             color: palette.trapAmber,
-                            title: "Calibration, Logs & Diagnostics",
-                            subtitle: "\(coordinator.diagnosticLog.entries.count) logs · \(coordinator.diagnosticLog.errorOnlyCount) err · \(coordinator.crashLogStore.entries.count) crashes"
+                            title: "Data, Diagnostics & About",
+                            subtitle: "v\(appVersion) · \(coordinator.diagnosticLog.errorOnlyCount) err · \(coordinator.crashLogStore.entries.count) crashes"
                         )
                     }
+                } header: {
+                    Text("Configuration")
+                }
 
-                    NavigationLink {
-                        AboutDeveloperSettingsView(palette: palette)
-                    } label: {
-                        settingsRow(
-                            icon: "info.circle.fill",
-                            color: palette.secondaryInk,
-                            title: "About & Developer",
-                            subtitle: "Confluence v\(appVersion) · Developer : Bilal"
-                        )
+                Section {
+                    Toggle(isOn: $coordinator.settings.payload.showAdvancedSettings) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show Advanced Settings")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(palette.primaryInk)
+                            Text("Provider overrides, Fixed % SL/TP, custom concept rules & model picker")
+                                .font(.caption2)
+                                .foregroundStyle(palette.secondaryInk)
+                        }
                     }
+                    .tint(palette.champagneGold)
                 }
             }
             .listStyle(.insetGrouped)

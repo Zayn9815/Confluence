@@ -18,14 +18,6 @@ public enum AppearanceMode: String, Codable, Sendable, CaseIterable, Identifiabl
     }
 }
 
-public enum ThemePreset: String, Codable, Sendable, CaseIterable, Identifiable {
-    case obsidianTerminal = "Obsidian Terminal"
-    case amoledVault = "AMOLED Vault"
-    case porcelainDesk = "Porcelain Desk"
-
-    public var id: String { rawValue }
-}
-
 public enum CardDensity: String, Codable, Sendable, CaseIterable, Identifiable {
     case standard = "Standard"
     case compact = "Compact"
@@ -62,14 +54,14 @@ public enum CalendarImpactFilter: String, Codable, Sendable, CaseIterable, Ident
 }
 
 public struct PersistedSettingsPayload: Codable, Sendable {
-    // Section 1 — Appearance & Display
+    // Section 1 — Appearance & Feedback
     public var appearanceMode: AppearanceMode = .dark
-    public var themePreset: ThemePreset = .obsidianTerminal
-    public var lastDarkThemePreset: ThemePreset = .obsidianTerminal
+    public var usePureBlackAMOLED: Bool = false
     public var cardDensity: CardDensity = .standard
     public var showMiniCharts: Bool = true
+    public var showAdvancedSettings: Bool = false
 
-    // Section 2 — Notifications, Sound & Haptics
+    // Section 2 — Alerts, Sound & Haptics
     public var inAppSignalSoundEnabled: Bool = true
     public var pushNotificationSoundEnabled: Bool = true
     public var soundPreset: SoundPreset = .terminalChime
@@ -94,7 +86,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var backgroundRefreshEnabled: Bool = true
     public var backgroundRefreshIntervalMinutes: Int = 30
 
-    // Section 4 — Signal Engine, Risk/TP & Strategy Rules
+    // Section 4 — Signal Rules, Risk/TP & Strategy Selection
     public var htfTimeframe: Timeframe = .h4
     public var entryTimeframe: Timeframe = .h1
     public var minimumConfidencePercent: Double = 70.0
@@ -111,10 +103,10 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var strategySelectionMode: StrategySelectionMode = .defaultAll
     public var selectedStrategyConcepts: Set<StrategyConcept> = Set(StrategyConcept.allCases)
     public var customStrategyMatchRule: CustomStrategyMatchRule = .anyWithMinConfluence
-    public var showWeakFilteredSignals: Bool = true
+    public var showWeakFilteredSignals: Bool = false
     public var autoSuppressCrisisAlerts: Bool = true
 
-    // Section 4b — Resolved Win Rate & Calibration Counting Rules
+    // Section 4b — Custom Calibration View Filter Rules (headline win rate always stays fixed!)
     public var calibrationWinDefinition: CalibrationWinDefinition = .tp1OrTp2
     public var calibrationCategoryScope: CalibrationCategoryScope = .strongOnly
     public var calibrationMinConfidencePercent: Double = 0.0
@@ -128,15 +120,60 @@ public struct PersistedSettingsPayload: Codable, Sendable {
 
     public init() {}
 
-    /// Custom backwards-compatible decoder so existing v1.0/v1.1 sideloaded installs keep every setting cleanly.
+    enum CodingKeys: String, CodingKey {
+        case appearanceMode, usePureBlackAMOLED, cardDensity, showMiniCharts, showAdvancedSettings
+        case inAppSignalSoundEnabled, pushNotificationSoundEnabled, soundPreset
+        case trapAlertSoundEnabled, preNewsCountdownSoundEnabled, newsReleaseImpactSoundEnabled
+        case hapticsEnabled, arrivalAnimationsEnabled
+        case enabledMarkets, watchlistSymbols, tradFiProviderPreference, cryptoPrimaryExchange
+        case economicCalendarEnabled, breakingNewsRadarEnabled, calendarPushImpactFilter
+        case preNewsLead15m, preNewsLead5m, pauseSignalsDuringPreNewsWindow
+        case positioningFeedsEnabled, backgroundRefreshEnabled, backgroundRefreshIntervalMinutes
+        case htfTimeframe, entryTimeframe, minimumConfidencePercent, minimumRiskReward
+        case maxStopLossPercentCryptoStocks, maxStopLossPercentFXMetalsIndices
+        case levelCalculationMode, fixedStopLossPercent, fixedTP1Percent, fixedTP2Percent
+        case enableTP2Target, minimumAlignedStrategies, enabledStrategyGroups
+        case strategySelectionMode, selectedStrategyConcepts, customStrategyMatchRule
+        case showWeakFilteredSignals, autoSuppressCrisisAlerts
+        case calibrationWinDefinition, calibrationCategoryScope
+        case calibrationMinConfidencePercent, calibrationMinRiskReward
+        case geminiEnabled, geminiModel, geminiDailyCallLimit, geminiConfirmationThreshold
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case themePreset
+        case lastDarkThemePreset
+    }
+
+    /// Custom backwards-compatible decoder so existing v1.0–v1.3 sideloaded installs keep every setting cleanly,
+    /// seamlessly migrating legacy `ThemePreset` (`Obsidian` / `AMOLED` / `Porcelain`) -> `appearanceMode` + `usePureBlackAMOLED`
+    /// and legacy `Random Subset` -> `.defaultAll`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
         let d = PersistedSettingsPayload()
-        appearanceMode = (try? c.decodeIfPresent(AppearanceMode.self, forKey: .appearanceMode)) ?? d.appearanceMode
-        themePreset = (try? c.decodeIfPresent(ThemePreset.self, forKey: .themePreset)) ?? d.themePreset
-        lastDarkThemePreset = (try? c.decodeIfPresent(ThemePreset.self, forKey: .lastDarkThemePreset)) ?? (themePreset == .amoledVault ? .amoledVault : d.lastDarkThemePreset)
+
+        let decodedMode = try? c.decodeIfPresent(AppearanceMode.self, forKey: .appearanceMode)
+        let legacyPreset = try? legacy.decodeIfPresent(String.self, forKey: .themePreset)
+        let legacyDarkPreset = try? legacy.decodeIfPresent(String.self, forKey: .lastDarkThemePreset)
+
+        if let mode = decodedMode {
+            appearanceMode = mode
+        } else if legacyPreset == "Porcelain Desk" {
+            appearanceMode = .light
+        } else {
+            appearanceMode = d.appearanceMode
+        }
+
+        if let explicitAMOLED = try? c.decodeIfPresent(Bool.self, forKey: .usePureBlackAMOLED) {
+            usePureBlackAMOLED = explicitAMOLED
+        } else {
+            usePureBlackAMOLED = (legacyPreset == "AMOLED Vault" || legacyDarkPreset == "AMOLED Vault")
+        }
+
         cardDensity = (try? c.decodeIfPresent(CardDensity.self, forKey: .cardDensity)) ?? d.cardDensity
         showMiniCharts = (try? c.decodeIfPresent(Bool.self, forKey: .showMiniCharts)) ?? d.showMiniCharts
+        showAdvancedSettings = (try? c.decodeIfPresent(Bool.self, forKey: .showAdvancedSettings)) ?? d.showAdvancedSettings
 
         inAppSignalSoundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .inAppSignalSoundEnabled)) ?? d.inAppSignalSoundEnabled
         pushNotificationSoundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .pushNotificationSoundEnabled)) ?? d.pushNotificationSoundEnabled
@@ -199,11 +236,6 @@ public final class AppSettingsStore {
 
     public var payload: PersistedSettingsPayload {
         didSet {
-            if payload.themePreset == .obsidianTerminal || payload.themePreset == .amoledVault {
-                if payload.lastDarkThemePreset != payload.themePreset {
-                    payload.lastDarkThemePreset = payload.themePreset
-                }
-            }
             save()
         }
     }
@@ -223,20 +255,9 @@ public final class AppSettingsStore {
         }
     }
 
-    /// Immediately flips between Dark (`Obsidian Terminal` / `AMOLED Vault`) and Light (`Porcelain Desk`),
-    /// persisting across launches and keeping Settings -> Appearance in sync.
+    /// Immediately flips between Dark and Light mode while preserving `usePureBlackAMOLED` across switches.
     public func toggleDarkLightMode(currentlyDark: Bool) {
-        if currentlyDark {
-            if payload.themePreset == .obsidianTerminal || payload.themePreset == .amoledVault {
-                payload.lastDarkThemePreset = payload.themePreset
-            }
-            payload.appearanceMode = .light
-            payload.themePreset = .porcelainDesk
-        } else {
-            let restoredDark = (payload.lastDarkThemePreset == .amoledVault) ? ThemePreset.amoledVault : ThemePreset.obsidianTerminal
-            payload.appearanceMode = .dark
-            payload.themePreset = restoredDark
-        }
+        payload.appearanceMode = currentlyDark ? .light : .dark
     }
 
     public var preNewsLeadTimesMinutes: [Int] {
@@ -263,8 +284,7 @@ public final class AppSettingsStore {
     }
 
     public func buildEngineConfig(
-        reliabilityWeights: [String: Double] = [:],
-        activeRandomConcepts: Set<StrategyConcept>? = nil
+        reliabilityWeights: [String: Double] = [:]
     ) -> EngineConfig {
         let concepts: Set<StrategyConcept>
         switch payload.strategySelectionMode {
@@ -274,8 +294,6 @@ public final class AppSettingsStore {
             concepts = payload.selectedStrategyConcepts.isEmpty
                 ? Set(StrategyConcept.allCases)
                 : payload.selectedStrategyConcepts
-        case .randomSubset:
-            concepts = activeRandomConcepts ?? Set(StrategyConcept.allCases)
         }
 
         let groups: Set<StrategyGroup> = (payload.strategySelectionMode == .defaultAll)

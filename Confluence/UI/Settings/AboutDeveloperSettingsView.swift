@@ -111,7 +111,6 @@ private struct OpenSourceAttributionSheet: View {
                 Section("SwiftUI Packages (MIT)") {
                     licenseRow("EmergeTools/Pow", "MIT License — Restrained arrival micro-interactions")
                     licenseRow("exyte/PopupView", "MIT License — Translucent floating live alert banners")
-                    licenseRow("markiv/SwiftUI-Shimmer", "MIT License — Subtle scan skeletons")
                 }
                 Section("Public Data & Research Attribution") {
                     licenseRow("CFTC Commitments of Traders", "Public Domain Socrata JSON (publicreporting.cftc.gov)")

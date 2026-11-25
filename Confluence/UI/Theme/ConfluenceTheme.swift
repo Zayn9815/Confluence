@@ -17,25 +17,14 @@ public struct ConfluencePalette: Sendable {
     public let trapAmber = Color(hex: 0xF59E0B)
     public let macroIceBlue = Color(hex: 0x38BDF8)
 
-    public static func resolve(preset: ThemePreset, colorScheme: ColorScheme) -> ConfluencePalette {
-        switch preset {
-        case .obsidianTerminal:
-            if colorScheme == .light {
-                return porcelain
-            }
-            return ConfluencePalette(
-                canvas: Color(hex: 0x0B0D11),
-                surface: Color(hex: 0x131720),
-                elevatedSurface: Color(hex: 0x1A202D),
-                border: Color(hex: 0x232A38),
-                primaryInk: Color(hex: 0xF3F5F8),
-                secondaryInk: Color(hex: 0x9CA7BA),
-                tertiaryInk: Color(hex: 0x677287)
-            )
-        case .amoledVault:
-            if colorScheme == .light {
-                return porcelain
-            }
+    public static func resolve(
+        colorScheme: ColorScheme,
+        usePureBlackAMOLED: Bool
+    ) -> ConfluencePalette {
+        if colorScheme == .light {
+            return porcelain
+        }
+        if usePureBlackAMOLED {
             return ConfluencePalette(
                 canvas: Color(hex: 0x000000),
                 surface: Color(hex: 0x0E1116),
@@ -45,9 +34,16 @@ public struct ConfluencePalette: Sendable {
                 secondaryInk: Color(hex: 0x94A3B8),
                 tertiaryInk: Color(hex: 0x64748B)
             )
-        case .porcelainDesk:
-            return porcelain
         }
+        return ConfluencePalette(
+            canvas: Color(hex: 0x0B0D11),
+            surface: Color(hex: 0x131720),
+            elevatedSurface: Color(hex: 0x1A202D),
+            border: Color(hex: 0x232A38),
+            primaryInk: Color(hex: 0xF3F5F8),
+            secondaryInk: Color(hex: 0x9CA7BA),
+            tertiaryInk: Color(hex: 0x677287)
+        )
     }
 
     public static let porcelain = ConfluencePalette(
@@ -114,9 +110,52 @@ public struct InstitutionalCardModifier: ViewModifier {
     }
 }
 
+/// Zero-dependency SwiftUI skeleton shimmer that respects `@Environment(\.accessibilityReduceMotion)`
+/// and replaces the external `SwiftUI-Shimmer` package cleanly.
+public struct NativeShimmerModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var phase: CGFloat = -0.6
+
+    public func body(content: Content) -> some View {
+        if reduceMotion {
+            content.opacity(0.65)
+        } else {
+            content
+                .overlay {
+                    GeometryReader { geo in
+                        let w = max(geo.size.width, 1)
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0.0),
+                                .init(color: Color.white.opacity(0.14), location: 0.5),
+                                .init(color: .clear, location: 1.0)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: w * 0.7)
+                        .offset(x: phase * w)
+                        .clipped()
+                    }
+                    .allowsHitTesting(false)
+                }
+                .mask(content)
+                .onAppear {
+                    withAnimation(.linear(duration: 1.35).repeatForever(autoreverses: false)) {
+                        phase = 1.4
+                    }
+                }
+        }
+    }
+}
+
 public extension View {
     func institutionalCard(palette: ConfluencePalette, accentBorder: Color? = nil) -> some View {
         modifier(InstitutionalCardModifier(palette: palette, accentBorder: accentBorder))
+    }
+
+    func nativeShimmer() -> some View {
+        modifier(NativeShimmerModifier())
     }
 }
 

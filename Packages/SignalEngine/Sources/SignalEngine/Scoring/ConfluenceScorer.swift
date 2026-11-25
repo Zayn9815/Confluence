@@ -123,12 +123,12 @@ public enum ConfluenceScorer {
             }
         }
 
-        // Apply Custom or Random Subset concept filtering deterministically
+        // Apply Custom concept filtering deterministically
         let activeConcepts: Set<StrategyConcept>
         switch config.strategySelectionMode {
         case .defaultAll:
             activeConcepts = Set(StrategyConcept.allCases)
-        case .custom, .randomSubset:
+        case .custom:
             activeConcepts = config.selectedStrategyConcepts.isEmpty
                 ? Set(StrategyConcept.allCases)
                 : config.selectedStrategyConcepts
@@ -204,8 +204,8 @@ public enum ConfluenceScorer {
         // Hard Gate Checks (all enforced in deterministic Swift code)
         var rejectionReasons: [String] = []
         let distinctGroups = Set(aligned.map(\.group))
-        let isCustomOrSubset = (config.strategySelectionMode == .custom || config.strategySelectionMode == .randomSubset)
-        let requiredAlignedCount: Int = isCustomOrSubset
+        let isCustomMode = (config.strategySelectionMode == .custom)
+        let requiredAlignedCount: Int = isCustomMode
             ? max(1, min(config.minimumAlignedStrategies, activeConcepts.count))
             : max(3, config.minimumAlignedStrategies)
 
@@ -222,7 +222,7 @@ public enum ConfluenceScorer {
                 rejectionReasons.append("Only \(aligned.count)/\(requiredAlignedCount) independent strategies aligned")
             }
             let selectedGroupCount = Set(activeConcepts.map(\.group)).count
-            let requireTwoGroups = !isCustomOrSubset || (requiredAlignedCount >= 2 && selectedGroupCount >= 2)
+            let requireTwoGroups = !isCustomMode || (requiredAlignedCount >= 2 && selectedGroupCount >= 2)
             if requireTwoGroups && distinctGroups.count < 2 && aligned.count >= requiredAlignedCount {
                 rejectionReasons.append("Lacks multi-pillar independence (only \(distinctGroups.count) strategy group)")
             }

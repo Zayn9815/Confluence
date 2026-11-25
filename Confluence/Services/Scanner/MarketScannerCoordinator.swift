@@ -86,7 +86,6 @@ public final class MarketScannerCoordinator {
     public var twelveDataLocalDailyUsed: Int = 0
     public var twelveDataTestMessage: String?
     public var isTestingTwelveData: Bool = false
-    public var lastRandomSubsetConcepts: [StrategyConcept] = []
 
     public init(settings: AppSettingsStore, store: ConfluenceDataStore) {
         self.settings = settings
@@ -361,34 +360,13 @@ public final class MarketScannerCoordinator {
             self.fearGreed = newsRes.fearGreed
         }
 
-        // 2. Build out-of-sample reliability weights & resolve strategy selection mode
+        // 2. Build out-of-sample reliability weights & engine config
         var weights: [String: Double] = [:]
         for stat in calibrationSummary.strategyRankings where stat.totalResolved >= 5 {
             weights[stat.strategyId] = max(0.65, min(1.40, 0.5 + stat.winRate))
         }
-        var randomConcepts: Set<StrategyConcept>? = nil
-        if settings.payload.strategySelectionMode == .randomSubset {
-            let pool = StrategyConcept.allCases.filter {
-                settings.payload.enabledStrategyGroups.contains($0.group)
-            }
-            let effectivePool = pool.isEmpty ? Array(StrategyConcept.allCases) : pool
-            let pickCount = min(effectivePool.count, Int.random(in: 3...min(6, max(3, effectivePool.count))))
-            let chosen = Array(effectivePool.shuffled().prefix(pickCount))
-            randomConcepts = Set(chosen)
-            self.lastRandomSubsetConcepts = chosen.sorted { $0.displayName < $1.displayName }
-            diagnosticLog.log(
-                .info,
-                category: .engine,
-                message: "Random Subset active (\(chosen.count) strategies): \(self.lastRandomSubsetConcepts.map(\.displayName).joined(separator: ", "))"
-            )
-        } else {
-            self.lastRandomSubsetConcepts = []
-        }
 
-        let engineConfig = settings.buildEngineConfig(
-            reliabilityWeights: weights,
-            activeRandomConcepts: randomConcepts
-        )
+        let engineConfig = settings.buildEngineConfig(reliabilityWeights: weights)
         let dedupHistory = store.recentDeduplicationHistory()
         let entryTF = settings.payload.entryTimeframe
         let htfTF = settings.payload.htfTimeframe
@@ -496,7 +474,7 @@ public final class MarketScannerCoordinator {
                         cftcCOTRecords: cotRecords,
                         calendarEvents: calendarEvents,
                         breakingNews: breakingNews,
-                        fearGreed: fearGreed,
+                        fearGreed: asset.marketClass == .crypto ? fearGreed : nil,
                         config: engineConfig,
                         dataProvider: entryRes.providerName,
                         serverNowEpochSeconds: serverNow,

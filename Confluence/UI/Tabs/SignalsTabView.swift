@@ -1,5 +1,4 @@
 import SwiftUI
-@preconcurrency import Shimmer
 import SignalEngine
 
 public enum SignalFeedFilter: String, CaseIterable, Identifiable {
@@ -182,6 +181,11 @@ public struct SignalsTabView: View {
                     }
                     .onChange(of: coordinator.pendingDeepLink) { _, link in
                         handlePendingDeepLink(link, proxy: proxy)
+                    }
+                    .onChange(of: coordinator.settings.payload.showWeakFilteredSignals) { _, showWeak in
+                        if !showWeak && feedFilter == .weak {
+                            feedFilter = .strong
+                        }
                     }
                 }
             }
@@ -452,7 +456,7 @@ public struct SignalsTabView: View {
         }
         .padding(14)
         .institutionalCard(palette: palette)
-        .shimmering()
+        .nativeShimmer()
     }
 
     private var emptyStateView: some View {
