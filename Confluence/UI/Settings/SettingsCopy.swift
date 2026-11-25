@@ -438,6 +438,13 @@ public struct InfoButton: View {
         self.key = key
     }
 
+    /// ScrollView has no intrinsic height inside a popover, so estimate from text length (clamped); longer text scrolls.
+    private var popoverHeight: CGFloat {
+        let chars = key.copy.helpText.count + key.copy.label.count
+        let lines = CGFloat(chars) / 34.0 + 3
+        return min(max(lines * 19 + 32, 140), 420)
+    }
+
     public var body: some View {
         Button {
             isPresented.toggle()
