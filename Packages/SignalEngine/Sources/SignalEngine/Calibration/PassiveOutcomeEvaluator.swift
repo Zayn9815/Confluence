@@ -186,6 +186,7 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
     public let filledAtEpochSeconds: TimeInterval?
     public let fillWindowBars: Int?
     public let isLegacyImmediateFill: Bool?
+    public let origin: SignalOrigin
 
     public init(
         signalId: String,
@@ -209,7 +210,8 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
         lifecycleStatus: SignalLifecycleStatus? = nil,
         filledAtEpochSeconds: TimeInterval? = nil,
         fillWindowBars: Int? = nil,
-        isLegacyImmediateFill: Bool? = nil
+        isLegacyImmediateFill: Bool? = nil,
+        origin: SignalOrigin = .scanner
     ) {
         self.signalId = signalId
         self.symbol = symbol
@@ -233,6 +235,7 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
         self.filledAtEpochSeconds = filledAtEpochSeconds
         self.fillWindowBars = fillWindowBars
         self.isLegacyImmediateFill = isLegacyImmediateFill
+        self.origin = origin
     }
 
     enum CodingKeys: String, CodingKey {
@@ -241,6 +244,7 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
         case resolvedAtEpochSeconds, regime, killzone, timeframe, dataProvider
         case riskRewardRatio, entryBarCloseEpochSeconds
         case lifecycleStatus, filledAtEpochSeconds, fillWindowBars, isLegacyImmediateFill
+        case origin
     }
 
     public init(from decoder: Decoder) throws {
@@ -267,6 +271,7 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
         filledAtEpochSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .filledAtEpochSeconds)
         fillWindowBars = try c.decodeIfPresent(Int.self, forKey: .fillWindowBars)
         isLegacyImmediateFill = try c.decodeIfPresent(Bool.self, forKey: .isLegacyImmediateFill)
+        origin = (try? c.decodeIfPresent(SignalOrigin.self, forKey: .origin)) ?? .scanner
     }
 
     public var isWin: Bool {
@@ -598,7 +603,8 @@ public enum PassiveOutcomeEvaluator {
                 lifecycleStatus: lifecycle,
                 filledAtEpochSeconds: filledAt,
                 fillWindowBars: effectiveFillWindow,
-                isLegacyImmediateFill: false
+                isLegacyImmediateFill: false,
+                origin: signal.origin
             )
         }
 

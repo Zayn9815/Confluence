@@ -227,6 +227,11 @@ public struct SignalStrengthBreakdown: Codable, Sendable, Equatable, Hashable {
     }
 }
 
+public enum SignalOrigin: String, Codable, Sendable, Equatable, Hashable, CaseIterable {
+    case scanner
+    case news
+}
+
 public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable {
     public let id: String
     public let fingerprint: String
@@ -264,6 +269,7 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
     /// NEVER replaces `confidencePercent` in the `minimumConfidencePercent` gate.
     public let calibratedProbability: Double?
     public let calibrationSampleCount: Int?
+    public let origin: SignalOrigin
 
     public init(
         id: String,
@@ -299,7 +305,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         marketClosedReason: String? = nil,
         strengthBreakdown: SignalStrengthBreakdown? = nil,
         calibratedProbability: Double? = nil,
-        calibrationSampleCount: Int? = nil
+        calibrationSampleCount: Int? = nil,
+        origin: SignalOrigin = .scanner
     ) {
         self.id = id
         self.fingerprint = fingerprint
@@ -335,6 +342,7 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         self.strengthBreakdown = strengthBreakdown
         self.calibratedProbability = calibratedProbability
         self.calibrationSampleCount = calibrationSampleCount
+        self.origin = origin
     }
 
     enum CodingKeys: String, CodingKey {
@@ -344,7 +352,7 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         case alignedStrategies, rejectionReasons, psychologyReport, preNewsBadge
         case postNewsCatalystBadge, overlays, recentCandles, aiJudgment, aiConfirmed
         case dataProvider, isMarketClosedSnapshot, marketClosedReason, strengthBreakdown
-        case calibratedProbability, calibrationSampleCount
+        case calibratedProbability, calibrationSampleCount, origin
     }
 
     public init(from decoder: Decoder) throws {
@@ -383,6 +391,7 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         strengthBreakdown = try c.decodeIfPresent(SignalStrengthBreakdown.self, forKey: .strengthBreakdown)
         calibratedProbability = try c.decodeIfPresent(Double.self, forKey: .calibratedProbability)
         calibrationSampleCount = try c.decodeIfPresent(Int.self, forKey: .calibrationSampleCount)
+        origin = (try? c.decodeIfPresent(SignalOrigin.self, forKey: .origin)) ?? .scanner
     }
 
     public func withAIJudgment(_ judgment: ReflexJudgment, threshold: Double) -> TradeSignal {
@@ -420,7 +429,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             marketClosedReason: marketClosedReason,
             strengthBreakdown: strengthBreakdown,
             calibratedProbability: calibratedProbability,
-            calibrationSampleCount: calibrationSampleCount
+            calibrationSampleCount: calibrationSampleCount,
+            origin: origin
         )
     }
 
@@ -460,7 +470,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             marketClosedReason: marketClosedReason,
             strengthBreakdown: strengthBreakdown,
             calibratedProbability: probability,
-            calibrationSampleCount: sampleCount
+            calibrationSampleCount: sampleCount,
+            origin: origin
         )
     }
 
