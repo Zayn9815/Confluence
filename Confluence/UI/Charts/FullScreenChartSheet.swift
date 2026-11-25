@@ -1266,7 +1266,7 @@ private struct LightweightChartContainer: UIViewRepresentable {
             }
         }
 
-        func didReceiveTimeScaleSizeChangeWithParameters(onTimeScale timeScale: TimeScaleApi, parameters: Rectangle?) {}
+        func didReceiveTimeScaleSizeChangeWithParameters(onTimeScale timeScale: TimeScaleApi, parameters: LightweightCharts.Rectangle?) {}
     }
 
     func makeCoordinator() -> Coordinator {
