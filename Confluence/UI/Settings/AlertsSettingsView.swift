@@ -42,31 +42,33 @@ public struct AlertsSettingsView: View {
                 }
             }
 
-            Section("Alert Categories") {
-                Toggle("Strong Signal Alerts", isOn: $coordinator.settings.payload.alertRules.allowStrongSignals)
-                Toggle("Behavioral Trap Alerts", isOn: $coordinator.settings.payload.alertRules.allowTrapAlerts)
-                Toggle("Pre-News Countdowns", isOn: $coordinator.settings.payload.alertRules.allowPreNewsCountdowns)
-                Toggle("Macro Release Impacts", isOn: $coordinator.settings.payload.alertRules.allowMacroReleases)
+            Section {
+                Toggle("Strong setup alerts", isOn: $coordinator.settings.payload.alertRules.allowStrongSignals)
+                Toggle("Behavioral trap warnings", isOn: $coordinator.settings.payload.alertRules.allowTrapAlerts)
+                Toggle("Pre-news reminders", isOn: $coordinator.settings.payload.alertRules.allowPreNewsCountdowns)
+                Toggle("Major economic release impacts", isOn: $coordinator.settings.payload.alertRules.allowMacroReleases)
+            } header: {
+                SettingsSectionHeader(SettingHelpKey.alertCategories.copy.label, helpKey: .alertCategories)
             }
 
             Section {
-                Toggle("Enable Quiet Hours", isOn: $coordinator.settings.payload.alertRules.quietHours.enabled)
+                Toggle("Enable quiet hours", isOn: $coordinator.settings.payload.alertRules.quietHours.enabled)
 
                 if coordinator.settings.payload.alertRules.quietHours.enabled {
-                    Picker("Start Hour", selection: $coordinator.settings.payload.alertRules.quietHours.startHour) {
+                    Picker("Start hour", selection: $coordinator.settings.payload.alertRules.quietHours.startHour) {
                         ForEach(0..<24, id: \.self) { h in
                             Text(String(format: "%02d:00", h)).tag(h)
                         }
                     }
 
-                    Picker("End Hour", selection: $coordinator.settings.payload.alertRules.quietHours.endHour) {
+                    Picker("End hour", selection: $coordinator.settings.payload.alertRules.quietHours.endHour) {
                         ForEach(0..<24, id: \.self) { h in
                             Text(String(format: "%02d:00", h)).tag(h)
                         }
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Active Days (\(coordinator.settings.payload.alertRules.quietHours.formattedWindow))")
+                        Text("Active days (\(coordinator.settings.payload.alertRules.quietHours.formattedWindow))")
                             .font(.caption)
                             .foregroundStyle(palette.secondaryInk)
                         HStack(spacing: 6) {
@@ -92,12 +94,12 @@ public struct AlertsSettingsView: View {
                     .padding(.vertical, 2)
                 }
             } header: {
-                Text("Quiet Hours")
+                SettingsSectionHeader(SettingHelpKey.quietHours.copy.label, helpKey: .quietHours)
             } footer: {
-                Text("When enabled, all banners, sounds, push alerts, and scheduled pre-news reminders inside the quiet window (including overnight windows like 22:00–07:00) are silenced with no exceptions.")
+                Text(SettingHelpKey.quietHours.copy.subtitle)
             }
 
-            Section("Per-Market Alert Rules") {
+            Section {
                 ForEach(MarketClass.allCases, id: \.self) { market in
                     NavigationLink {
                         MarketAlertRuleDetailView(market: market, coordinator: coordinator, palette: palette)
@@ -119,26 +121,38 @@ public struct AlertsSettingsView: View {
                         }
                     }
                 }
+            } header: {
+                SettingsSectionHeader(SettingHelpKey.perMarketAlertRules.copy.label, helpKey: .perMarketAlertRules)
             }
 
             Section {
-                Picker("Calendar Alert Impact", selection: $coordinator.settings.payload.calendarPushImpactFilter) {
+                Picker("Calendar alert impact", selection: $coordinator.settings.payload.calendarPushImpactFilter) {
                     ForEach(CalendarImpactFilter.allCases) { f in
                         Text(f.rawValue).tag(f)
                     }
                 }
 
-                Toggle("Pre-News Countdown (15m Before)", isOn: $coordinator.settings.payload.preNewsLead15m)
-                Toggle("Pre-News Countdown (5m Before)", isOn: $coordinator.settings.payload.preNewsLead5m)
-                Toggle("Pause Signals During Pre-News Window", isOn: $coordinator.settings.payload.pauseSignalsDuringPreNewsWindow)
+                Toggle("Pre-news reminder (15 min before)", isOn: $coordinator.settings.payload.preNewsLead15m)
+                Toggle("Pre-news reminder (5 min before)", isOn: $coordinator.settings.payload.preNewsLead5m)
+                Toggle(isOn: $coordinator.settings.payload.pauseSignalsDuringPreNewsWindow) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.pauseDuringPreNews.copy.label)
+                        InfoButton(.pauseDuringPreNews)
+                    }
+                }
             } header: {
-                Text("Macro & Pre-News Schedule")
+                SettingsSectionHeader(SettingHelpKey.preNewsCountdowns.copy.label, helpKey: .preNewsCountdowns)
             } footer: {
-                Text("Pre-news countdowns are scheduled strictly for exact-clock calendar events within iOS's 40-slot pre-news budget.")
+                Text(SettingHelpKey.preNewsCountdowns.copy.subtitle)
             }
 
             Section("Risk Protection") {
-                Toggle("Auto-Suppress Alerts in Crisis Regime", isOn: $coordinator.settings.payload.autoSuppressCrisisAlerts)
+                Toggle(isOn: $coordinator.settings.payload.autoSuppressCrisisAlerts) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.crisisAlertSuppression.copy.label)
+                        InfoButton(.crisisAlertSuppression)
+                    }
+                }
             }
         }
         .navigationTitle("Alerts")

@@ -12,13 +12,13 @@ public struct SettingsTabView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
     }
 
     private var themeSummary: String {
         let mode = coordinator.settings.payload.appearanceMode.rawValue
         if coordinator.settings.payload.appearanceMode != .light && coordinator.settings.payload.usePureBlackAMOLED {
-            return "\(mode) (AMOLED) · \(coordinator.settings.payload.cardDensity.rawValue)"
+            return "\(mode) (Pure Black) · \(coordinator.settings.payload.cardDensity.rawValue)"
         }
         return "\(mode) · \(coordinator.settings.payload.cardDensity.rawValue)"
     }
@@ -63,12 +63,12 @@ public struct SettingsTabView: View {
                     NavigationLink {
                         SignalRulesSettingsView(coordinator: coordinator, palette: palette)
                     } label: {
-                        let aiBadge = coordinator.settings.payload.geminiEnabled ? "AI ON" : "Native"
+                        let aiBadge = coordinator.settings.payload.geminiEnabled ? coordinator.settings.payload.aiProvider.shortLabel : "Native"
                         settingsRow(
                             icon: "waveform.path.ecg",
                             color: palette.longEmerald,
                             title: "Signal Rules & AI",
-                            subtitle: "Score ≥\(Int(coordinator.settings.payload.minimumConfidencePercent.rounded())) · 1:\(String(format: "%.1f", coordinator.settings.payload.minimumRiskReward)) · \(aiBadge)"
+                            subtitle: "Strength ≥\(Int(coordinator.settings.payload.minimumConfidencePercent.rounded())) · 1:\(String(format: "%.1f", coordinator.settings.payload.minimumRiskReward)) · \(aiBadge)"
                         )
                     }
 
@@ -79,7 +79,7 @@ public struct SettingsTabView: View {
                             icon: "stethoscope",
                             color: palette.trapAmber,
                             title: "Data, Diagnostics & About",
-                            subtitle: "v\(appVersion) · \(coordinator.diagnosticLog.errorOnlyCount) err · \(coordinator.crashLogStore.entries.count) crashes"
+                            subtitle: "v\(appVersion) · \(coordinator.diagnosticLog.errorOnlyCount) errors · \(coordinator.crashLogStore.entries.count) crashes"
                         )
                     }
                 } header: {
@@ -88,13 +88,17 @@ public struct SettingsTabView: View {
 
                 Section {
                     Toggle(isOn: $coordinator.settings.payload.showAdvancedSettings) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Show Advanced Settings")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(palette.primaryInk)
-                            Text("Provider overrides, Fixed % SL/TP, custom concept rules & model picker")
-                                .font(.caption2)
-                                .foregroundStyle(palette.secondaryInk)
+                        HStack(alignment: .center, spacing: 6) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(SettingHelpKey.showAdvancedSettings.copy.label)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(palette.primaryInk)
+                                Text(SettingHelpKey.showAdvancedSettings.copy.subtitle)
+                                    .font(.caption2)
+                                    .foregroundStyle(palette.secondaryInk)
+                            }
+                            Spacer(minLength: 4)
+                            InfoButton(.showAdvancedSettings)
                         }
                     }
                     .tint(palette.champagneGold)

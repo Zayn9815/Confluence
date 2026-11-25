@@ -9,11 +9,11 @@ public struct AboutDeveloperSettingsView: View {
     private let projectRepositoryURL = URL(string: "https://github.com/Zayn9815/Confluence")!
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
     }
 
     private var appBuild: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "5"
     }
 
     public var body: some View {
@@ -79,7 +79,7 @@ public struct AboutDeveloperSettingsView: View {
                     Label("Open-Source Licenses & Attribution", systemImage: "doc.plaintext")
                 }
 
-                Text("Confluence is strictly a read-only analytical terminal. It never executes orders, connects brokerage accounts, or stores trading private keys.")
+                Text("Confluence is strictly a read-only analytical terminal with paper-only Demo Wallet tracking. It never executes real orders, connects brokerage accounts, or stores trading private keys.")
                     .font(.caption)
                     .foregroundStyle(palette.secondaryInk)
             }
@@ -99,11 +99,11 @@ private struct OpenSourceAttributionSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Interactive Charting (Apache 2.0)") {
+                Section("Interactive Charting (Apache 2.0 & TradingView)") {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("TradingView Lightweight Charts™ (LightweightChartsIOS)")
                             .font(.subheadline.weight(.semibold))
-                        Text("Copyright (c) TradingView, Inc. Licensed under the Apache License, Version 2.0. Charts displayed in the Full-Screen Interactive Chart view use TradingView Lightweight Charts.")
+                        Text("Copyright (c) TradingView, Inc. Licensed under the Apache License, Version 2.0. Charts displayed in the Full-Screen Interactive Chart view use TradingView Lightweight Charts, with an optional embedded TradingView Advanced Chart widget.")
                             .font(.caption)
                             .foregroundStyle(palette.secondaryInk)
                     }

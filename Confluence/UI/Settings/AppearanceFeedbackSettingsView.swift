@@ -14,43 +14,74 @@ public struct AppearanceFeedbackSettingsView: View {
     public var body: some View {
         Form {
             Section {
-                Picker("Appearance Mode", selection: $coordinator.settings.payload.appearanceMode) {
-                    ForEach(AppearanceMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+                HStack(spacing: 6) {
+                    Picker(SettingHelpKey.appearanceMode.copy.label, selection: $coordinator.settings.payload.appearanceMode) {
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
                     }
+                    InfoButton(.appearanceMode)
                 }
 
                 if coordinator.settings.payload.appearanceMode != .light {
-                    Toggle("Pure Black (AMOLED)", isOn: $coordinator.settings.payload.usePureBlackAMOLED)
-                }
-
-                Toggle("Color-Blind Safe Palette (Blue / Orange)", isOn: $coordinator.settings.payload.useColorBlindSafePalette)
-            } header: {
-                Text("Theme & Accessibility")
-            } footer: {
-                Text("Color-Blind Safe replaces green/red directional cues with Okabe-Ito Blue/Orange alongside explicit directional arrows. System Increase Contrast & Reduce Motion are honored automatically.")
-            }
-
-            Section("Time Display") {
-                Toggle("24-Hour Clock (14:30 vs 2:30 PM)", isOn: $coordinator.settings.payload.use24HourTime)
-                Toggle("Show Timestamps in UTC", isOn: $coordinator.settings.payload.useUTCTimeZone)
-            }
-
-            Section("Feed Layout") {
-                Picker("Card Density", selection: $coordinator.settings.payload.cardDensity) {
-                    ForEach(CardDensity.allCases) { d in
-                        Text(d.rawValue).tag(d)
+                    Toggle(isOn: $coordinator.settings.payload.usePureBlackAMOLED) {
+                        HStack(spacing: 6) {
+                            Text(SettingHelpKey.pureBlackBackground.copy.label)
+                            InfoButton(.pureBlackBackground)
+                        }
                     }
                 }
 
-                Toggle("Show Signal Mini-Charts", isOn: $coordinator.settings.payload.showMiniCharts)
+                Toggle(isOn: $coordinator.settings.payload.useColorBlindSafePalette) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.colorBlindSafePalette.copy.label)
+                        InfoButton(.colorBlindSafePalette)
+                    }
+                }
+            } header: {
+                Text("Theme & Accessibility")
+            } footer: {
+                Text(SettingHelpKey.colorBlindSafePalette.copy.subtitle)
             }
 
-            Section("Signal & Alert Audio") {
-                Toggle("In-App Signal Sound", isOn: $coordinator.settings.payload.inAppSignalSoundEnabled)
-                Toggle("Push Notification Sound", isOn: $coordinator.settings.payload.pushNotificationSoundEnabled)
+            Section("Time Display") {
+                Toggle(isOn: $coordinator.settings.payload.use24HourTime) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.clock24Hour.copy.label)
+                        InfoButton(.clock24Hour)
+                    }
+                }
+                Toggle(isOn: $coordinator.settings.payload.useUTCTimeZone) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.universalTimeDisplay.copy.label)
+                        InfoButton(.universalTimeDisplay)
+                    }
+                }
+            }
 
-                Picker("Sound Preset", selection: $coordinator.settings.payload.soundPreset) {
+            Section("Feed Layout") {
+                HStack(spacing: 6) {
+                    Picker(SettingHelpKey.cardDensity.copy.label, selection: $coordinator.settings.payload.cardDensity) {
+                        ForEach(CardDensity.allCases) { d in
+                            Text(d.rawValue).tag(d)
+                        }
+                    }
+                    InfoButton(.cardDensity)
+                }
+
+                Toggle(isOn: $coordinator.settings.payload.showMiniCharts) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.miniCharts.copy.label)
+                        InfoButton(.miniCharts)
+                    }
+                }
+            }
+
+            Section {
+                Toggle("In-app signal sound", isOn: $coordinator.settings.payload.inAppSignalSoundEnabled)
+                Toggle("Notification sound", isOn: $coordinator.settings.payload.pushNotificationSoundEnabled)
+
+                Picker("Sound style", selection: $coordinator.settings.payload.soundPreset) {
                     ForEach(SoundPreset.allCases) { preset in
                         Text(preset.rawValue).tag(preset)
                     }
@@ -59,19 +90,31 @@ public struct AppearanceFeedbackSettingsView: View {
                 Button {
                     SignalSoundEngine.shared.previewSound(preset: coordinator.settings.payload.soundPreset)
                 } label: {
-                    Label("Preview Sound", systemImage: "speaker.wave.2.fill")
+                    Label("Preview sound", systemImage: "speaker.wave.2.fill")
                 }
 
                 if coordinator.settings.payload.showAdvancedSettings {
-                    Toggle("Trap Alert Sound", isOn: $coordinator.settings.payload.trapAlertSoundEnabled)
-                    Toggle("Pre-News Countdown Sound", isOn: $coordinator.settings.payload.preNewsCountdownSoundEnabled)
-                    Toggle("News Release Impact Sound", isOn: $coordinator.settings.payload.newsReleaseImpactSoundEnabled)
+                    Toggle("Trap warning sound", isOn: $coordinator.settings.payload.trapAlertSoundEnabled)
+                    Toggle("Pre-news reminder sound", isOn: $coordinator.settings.payload.preNewsCountdownSoundEnabled)
+                    Toggle("News release sound", isOn: $coordinator.settings.payload.newsReleaseImpactSoundEnabled)
                 }
+            } header: {
+                SettingsSectionHeader("Signal & Alert Audio", helpKey: .signalAudio)
             }
 
-            Section("Tactile & Motion") {
-                Toggle("Haptic Feedback (CoreHaptics)", isOn: $coordinator.settings.payload.hapticsEnabled)
-                Toggle("Signal Arrival Animations", isOn: $coordinator.settings.payload.arrivalAnimationsEnabled)
+            Section("Touch & Motion") {
+                Toggle(isOn: $coordinator.settings.payload.hapticsEnabled) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.haptics.copy.label)
+                        InfoButton(.haptics)
+                    }
+                }
+                Toggle(isOn: $coordinator.settings.payload.arrivalAnimationsEnabled) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.arrivalAnimations.copy.label)
+                        InfoButton(.arrivalAnimations)
+                    }
+                }
             }
         }
         .navigationTitle("Appearance & Feedback")

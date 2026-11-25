@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import LightweightCharts
 import SignalEngine
 
@@ -174,6 +175,7 @@ public struct FullScreenChartSheet: View {
     @State private var journalDraftIsExisting: Bool = false
     @State private var editingPosition: DemoPosition? = nil
     @State private var actionFeedback: String? = nil
+    @State private var chartViewMode: DefaultChartViewMode
 
     public init(
         signal: TradeSignal,
@@ -195,6 +197,9 @@ public struct FullScreenChartSheet: View {
             initialCandles: signal.recentCandles
         ))
         _activeProviderName = State(initialValue: signal.dataProvider)
+        let allowTV = coordinator?.settings.payload.showTradingViewOption ?? true
+        let preferred = coordinator?.settings.payload.defaultChartViewMode ?? .confluence
+        _chartViewMode = State(initialValue: allowTV ? preferred : .confluence)
     }
 
     public init(
@@ -218,10 +223,32 @@ public struct FullScreenChartSheet: View {
             initialCandles: replayContext.initialCandles
         ))
         _activeProviderName = State(initialValue: replayContext.providerName)
+        _chartViewMode = State(initialValue: .confluence)
     }
 
     private var isReplayMode: Bool { replayContext != nil }
     private var shouldShowSignalLevels: Bool { proxySymbolUsed == nil }
+    private var showTradingViewControls: Bool {
+        !isReplayMode && (coordinator?.settings.payload.showTradingViewOption ?? false)
+    }
+    private var effectiveChartViewMode: DefaultChartViewMode {
+        showTradingViewControls ? chartViewMode : .confluence
+    }
+
+    private func openInTradingView() {
+        let deepURL = TradingViewSymbolMapper.deepLinkURL(for: symbol, timeframe: session.timeframe)
+        let webURL = TradingViewSymbolMapper.webFallbackURL(for: symbol, timeframe: session.timeframe)
+        Task { @MainActor in
+            if let deep = deepURL {
+                let opened = await UIApplication.shared.open(deep)
+                if !opened, let fallback = webURL {
+                    _ = await UIApplication.shared.open(fallback)
+                }
+            } else if let fallback = webURL {
+                _ = await UIApplication.shared.open(fallback)
+            }
+        }
+    }
 
     private var activeQuote: LivePriceQuote? {
         guard !isReplayMode else { return nil }
@@ -328,8 +355,43 @@ public struct FullScreenChartSheet: View {
                     Divider().overlay(palette.border)
                 }
 
+                // Optional TradingView Switcher & Deep-Link Bar
+                if showTradingViewControls {
+                    HStack(spacing: 8) {
+                        Picker("Chart View", selection: $chartViewMode) {
+                            Text("Confluence").tag(DefaultChartViewMode.confluence)
+                            Text("TradingView").tag(DefaultChartViewMode.tradingView)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 210)
+
+                        Spacer()
+
+                        Button {
+                            openInTradingView()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text("Open in TradingView")
+                                    .font(.caption2.weight(.semibold))
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.system(size: 10, weight: .semibold))
+                            }
+                            .foregroundStyle(palette.primaryInk)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(palette.elevatedSurface, in: Capsule())
+                            .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(palette.surface)
+                    Divider().overlay(palette.border)
+                }
+
                 // ETF Proxy Notice Banner
-                if let proxy = proxySymbolUsed {
+                if effectiveChartViewMode == .confluence, let proxy = proxySymbolUsed {
                     HStack(spacing: 8) {
                         Image(systemName: "info.circle.fill")
                             .foregroundStyle(palette.trapAmber)
@@ -341,10 +403,22 @@ public struct FullScreenChartSheet: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
                     .background(palette.trapAmber.opacity(0.14))
+                } else if effectiveChartViewMode == .tradingView && effectiveLevels != nil {
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(palette.macroIceBlue)
+                        Text("Switch back to Confluence chart to view Entry, Stop loss, Target & Trap lines directly on candles.")
+                            .font(.caption2)
+                            .foregroundStyle(palette.secondaryInk)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(palette.macroIceBlue.opacity(0.10))
                 }
 
                 // Inline Load Error / Action Feedback
-                if let err = loadError {
+                if let err = loadError, effectiveChartViewMode == .confluence {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(palette.shortCrimson)
@@ -373,58 +447,74 @@ public struct FullScreenChartSheet: View {
                     .background(palette.longEmerald.opacity(0.14))
                 }
 
-                // Main Interactive LightweightCharts Surface
+                // Main Interactive Chart Surface (Confluence LightweightCharts vs Lazy TradingView Widget)
                 ZStack {
-                    LightweightChartContainer(
-                        closedCandles: session.closedCandles,
-                        formingCandle: session.formingCandle,
-                        dataSetRevision: session.dataSetRevision,
-                        liveUpdateToken: session.liveUpdateToken,
-                        fitRequestToken: session.fitRequestToken,
-                        levels: effectiveLevels,
-                        overlays: shouldShowSignalLevels ? overlays : ChartOverlayData(),
-                        livePrice: activeQuote?.price,
-                        breakevenPrice: (activeDemoPosition?.isStopLossAtBreakeven == true) ? activeDemoPosition?.stopLoss : nil,
-                        markers: replayMarkerBuild?.markers ?? [],
-                        pricePrecision: prec,
-                        timeframe: session.timeframe,
-                        providerTag: activeProviderName,
-                        isDark: colorScheme == .dark,
-                        onNeedOlderHistory: {
-                            Task { await loadOlderHistoryPage() }
-                        }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                    if session.isLoadingInitial || session.isLoadingOlder {
-                        VStack {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .tint(palette.champagneGold)
-                                Text(session.isLoadingOlder ? "Loading older bars..." : "Loading \(session.timeframe.displayLabel)...")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(palette.primaryInk)
+                    if effectiveChartViewMode == .tradingView {
+                        TradingViewWidgetView(
+                            symbol: symbol,
+                            timeframe: session.timeframe,
+                            isDark: colorScheme == .dark
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        LightweightChartContainer(
+                            closedCandles: session.closedCandles,
+                            formingCandle: session.formingCandle,
+                            dataSetRevision: session.dataSetRevision,
+                            liveUpdateToken: session.liveUpdateToken,
+                            fitRequestToken: session.fitRequestToken,
+                            levels: effectiveLevels,
+                            overlays: shouldShowSignalLevels ? overlays : ChartOverlayData(),
+                            livePrice: activeQuote?.price,
+                            breakevenPrice: (activeDemoPosition?.isStopLossAtBreakeven == true) ? activeDemoPosition?.stopLoss : nil,
+                            markers: replayMarkerBuild?.markers ?? [],
+                            pricePrecision: prec,
+                            timeframe: session.timeframe,
+                            providerTag: activeProviderName,
+                            isDark: colorScheme == .dark,
+                            onNeedOlderHistory: {
+                                Task { await loadOlderHistoryPage() }
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .padding(.top, 10)
-                            Spacer()
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        if session.isLoadingInitial || session.isLoadingOlder {
+                            VStack {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .tint(palette.champagneGold)
+                                    Text(session.isLoadingOlder ? "Loading older bars..." : "Loading \(session.timeframe.displayLabel)...")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(palette.primaryInk)
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 7)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .padding(.top, 10)
+                                Spacer()
+                            }
                         }
                     }
                 }
 
                 // Footer: Attribution + Loaded Bars + Exact Closed Candle Time
                 HStack(spacing: 8) {
-                    Text("TradingView Lightweight Charts")
+                    Text(effectiveChartViewMode == .tradingView ? "Chart by TradingView" : "TradingView Lightweight Charts")
                         .font(.caption2)
                         .foregroundStyle(palette.tertiaryInk)
                         .lineLimit(1)
                     Spacer()
-                    Text("\(session.closedCandles.count) bars · \(activeProviderName) · \(lastClosedUTCLabel)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(palette.secondaryInk)
-                        .lineLimit(1)
+                    if effectiveChartViewMode == .tradingView {
+                        Text(TradingViewSymbolMapper.tradingViewSymbol(for: symbol))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(palette.secondaryInk)
+                            .lineLimit(1)
+                    } else {
+                        Text("\(session.closedCandles.count) bars · \(activeProviderName) · \(lastClosedUTCLabel)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(palette.secondaryInk)
+                            .lineLimit(1)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)

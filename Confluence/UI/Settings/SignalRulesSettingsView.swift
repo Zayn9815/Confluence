@@ -52,7 +52,7 @@ public struct SignalRulesSettingsView: View {
 
                 VStack(alignment: .leading) {
                     HStack {
-                        Text("Strong Signal Raw Score Floor")
+                        Text("Minimum strength threshold")
                         Spacer()
                         Text("\(Int(coordinator.settings.payload.minimumConfidencePercent.rounded()))/100")
                             .monospacedDigit()
@@ -64,7 +64,7 @@ public struct SignalRulesSettingsView: View {
 
                 if isAdvanced {
                     Stepper(
-                        "Fine Adjust: \(Int(coordinator.settings.payload.minimumConfidencePercent.rounded()))",
+                        "Fine adjust: \(Int(coordinator.settings.payload.minimumConfidencePercent.rounded()))",
                         value: $coordinator.settings.payload.minimumConfidencePercent,
                         in: 55...95,
                         step: 1
@@ -72,16 +72,17 @@ public struct SignalRulesSettingsView: View {
                     .font(.caption)
                 }
             } header: {
-                Text("Strong Signal Score Gate")
+                SettingsSectionHeader(SettingHelpKey.strongSignalScoreGate.copy.label, helpKey: .strongSignalScoreGate)
             } footer: {
-                Text("Always evaluates the deterministic RAW confluence score (never calibrated probability). Setups below this floor are filtered out.")
+                Text(SettingHelpKey.strongSignalScoreGate.copy.subtitle)
             }
 
-            // SECTION 2 — Risk:Reward & Targets
+            // SECTION 2 — Reward-to-Risk & Targets
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text("Minimum R:R Floor")
+                        Text(SettingHelpKey.minimumRewardRatio.copy.label)
+                        InfoButton(.minimumRewardRatio)
                         Spacer()
                         Text("1 : \(String(format: "%.1f", coordinator.settings.payload.minimumRiskReward))")
                             .monospacedDigit()
@@ -106,7 +107,7 @@ public struct SignalRulesSettingsView: View {
                     }
                     if isAdvanced {
                         Stepper(
-                            "Fine R:R: 1 : \(String(format: "%.1f", coordinator.settings.payload.minimumRiskReward))",
+                            "Fine ratio: 1 : \(String(format: "%.1f", coordinator.settings.payload.minimumRiskReward))",
                             value: $coordinator.settings.payload.minimumRiskReward,
                             in: 1.0...5.0,
                             step: 0.1
@@ -115,27 +116,45 @@ public struct SignalRulesSettingsView: View {
                     }
                 }
 
-                Toggle("Enable TP2 Target Generation", isOn: $coordinator.settings.payload.enableTP2Target)
-                Toggle("Show \"Weak / Filtered Signals\" in Feed", isOn: $coordinator.settings.payload.showWeakFilteredSignals)
-                Toggle("Max 1 Signal Per Correlated Cluster", isOn: Binding(
+                Toggle(isOn: $coordinator.settings.payload.enableTP2Target) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.enableTarget2.copy.label)
+                        InfoButton(.enableTarget2)
+                    }
+                }
+                Toggle(isOn: $coordinator.settings.payload.showWeakFilteredSignals) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.showWeakFilteredSignals.copy.label)
+                        InfoButton(.showWeakFilteredSignals)
+                    }
+                }
+                Toggle(isOn: Binding(
                     get: { coordinator.settings.payload.oneSignalPerCorrelatedCluster },
                     set: { newValue in
                         coordinator.settings.payload.oneSignalPerCorrelatedCluster = newValue
                         coordinator.recomputeCorrelations()
                     }
-                ))
+                )) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.oneSignalPerCorrelatedCluster.copy.label)
+                        InfoButton(.oneSignalPerCorrelatedCluster)
+                    }
+                }
 
                 if isAdvanced {
-                    Picker("Level Calculation Mode", selection: $coordinator.settings.payload.levelCalculationMode) {
-                        ForEach(TradeLevelMode.allCases) { mode in
-                            Text(mode.rawValue).tag(mode)
+                    HStack(spacing: 6) {
+                        Picker(SettingHelpKey.levelCalculationMode.copy.label, selection: $coordinator.settings.payload.levelCalculationMode) {
+                            ForEach(TradeLevelMode.allCases) { mode in
+                                Text(SettingHelpKey.displayLabel(for: mode)).tag(mode)
+                            }
                         }
+                        InfoButton(.levelCalculationMode)
                     }
 
                     if coordinator.settings.payload.levelCalculationMode == .fixedPercent {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text("Fixed Stop Loss %")
+                                Text("Fixed Stop loss %")
                                 Spacer()
                                 Text(String(format: "%.2f%%", coordinator.settings.payload.fixedStopLossPercent))
                                     .monospacedDigit()
@@ -147,7 +166,7 @@ public struct SignalRulesSettingsView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text("Fixed TP1 %")
+                                Text("Fixed Target 1 %")
                                 Spacer()
                                 Text(String(format: "%.2f%%", coordinator.settings.payload.fixedTP1Percent))
                                     .monospacedDigit()
@@ -160,7 +179,7 @@ public struct SignalRulesSettingsView: View {
                         if coordinator.settings.payload.enableTP2Target {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
-                                    Text("Fixed TP2 %")
+                                    Text("Fixed Target 2 %")
                                     Spacer()
                                     Text(String(format: "%.2f%%", coordinator.settings.payload.fixedTP2Percent))
                                         .monospacedDigit()
@@ -172,7 +191,7 @@ public struct SignalRulesSettingsView: View {
                         }
 
                         HStack {
-                            Text("Computed Fixed R:R")
+                            Text("Computed reward-to-risk")
                             Spacer()
                             Text(fixedRatioPreview)
                                 .font(.subheadline.weight(.bold).monospacedDigit())
@@ -182,7 +201,8 @@ public struct SignalRulesSettingsView: View {
 
                     VStack(alignment: .leading) {
                         HStack {
-                            Text("Max SL % (Crypto / Stocks)")
+                            Text("Max Stop loss % (Crypto / Stocks)")
+                            InfoButton(.maxStopLossCap)
                             Spacer()
                             Text(String(format: "%.1f%%", coordinator.settings.payload.maxStopLossPercentCryptoStocks))
                                 .monospacedDigit()
@@ -192,7 +212,7 @@ public struct SignalRulesSettingsView: View {
 
                     VStack(alignment: .leading) {
                         HStack {
-                            Text("Max SL % (Forex / Gold / Indices)")
+                            Text("Max Stop loss % (Forex / Gold / Indices)")
                             Spacer()
                             Text(String(format: "%.2f%%", coordinator.settings.payload.maxStopLossPercentFXMetalsIndices))
                                 .monospacedDigit()
@@ -201,19 +221,19 @@ public struct SignalRulesSettingsView: View {
                     }
                 }
             } header: {
-                Text("Risk:Reward & Feed Visibility")
+                Text("Risk, Targets & Feed Visibility")
             } footer: {
                 Text(isAdvanced
-                     ? "Structure / ATR anchors SL beyond institutional swing/OB invalidation. Fixed % Ratio sets exact percentage SL/TP distances around Entry Mid."
-                     : "Enable \"Show Advanced Settings\" in Settings for Fixed % SL/TP tuning, custom concept filters, and custom calibration views.")
+                     ? SettingHelpKey.levelCalculationMode.copy.subtitle
+                     : "Turn on \"Show extra controls\" in Settings for fixed-percentage levels, custom rule filters, and custom stats views.")
             }
 
             // SECTION 3 — Strategy & Concept Selection (Advanced)
             if isAdvanced {
                 Section {
-                    Picker("Selection Mode", selection: $coordinator.settings.payload.strategySelectionMode) {
+                    Picker("Rule mix", selection: $coordinator.settings.payload.strategySelectionMode) {
                         ForEach(StrategySelectionMode.allCases) { mode in
-                            Text(mode.rawValue).tag(mode)
+                            Text(SettingHelpKey.displayLabel(for: mode)).tag(mode)
                         }
                     }
 
@@ -225,15 +245,15 @@ public struct SignalRulesSettingsView: View {
                             ))
                         }
                     } else {
-                        Picker("Custom Match Rule", selection: $coordinator.settings.payload.customStrategyMatchRule) {
+                        Picker("Custom match rule", selection: $coordinator.settings.payload.customStrategyMatchRule) {
                             ForEach(CustomStrategyMatchRule.allCases) { rule in
-                                Text(rule.rawValue).tag(rule)
+                                Text(SettingHelpKey.displayLabel(for: rule)).tag(rule)
                             }
                         }
 
                         if coordinator.settings.payload.customStrategyMatchRule == .anyWithMinConfluence {
                             Stepper(
-                                "Min Aligned Confluence: \(coordinator.settings.payload.minimumAlignedStrategies)",
+                                "Minimum aligned rules: \(coordinator.settings.payload.minimumAlignedStrategies)",
                                 value: $coordinator.settings.payload.minimumAlignedStrategies,
                                 in: 1...6,
                                 step: 1
@@ -241,7 +261,7 @@ public struct SignalRulesSettingsView: View {
                         }
 
                         HStack {
-                            Text("Selected Concepts (\(coordinator.settings.payload.selectedStrategyConcepts.count)/\(StrategyConcept.allCases.count))")
+                            Text("Selected rules (\(coordinator.settings.payload.selectedStrategyConcepts.count)/\(StrategyConcept.allCases.count))")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(palette.secondaryInk)
                             Spacer()
@@ -259,30 +279,30 @@ public struct SignalRulesSettingsView: View {
                         }
                     }
                 } header: {
-                    Text("Advanced Strategy & Concept Selection")
+                    SettingsSectionHeader(SettingHelpKey.strategySelection.copy.label, helpKey: .strategySelection)
                 } footer: {
                     if coordinator.settings.payload.strategySelectionMode == .custom {
-                        Text("When 1–2 custom concepts are selected, Confluence clamps the required count to match your selection so custom rules can fire cleanly.")
+                        Text("When 1–2 custom rules are selected, Confluence matches the required count to your selection so custom rules can fire cleanly.")
                     }
                 }
 
                 // SECTION 4 — Custom Calibration View Filter (Advanced — never alters Fixed Headline Win Rate)
                 Section {
-                    Picker("Win Definition", selection: $coordinator.settings.payload.calibrationWinDefinition) {
+                    Picker("Win rule", selection: $coordinator.settings.payload.calibrationWinDefinition) {
                         ForEach(CalibrationWinDefinition.allCases) { def in
-                            Text(def.rawValue).tag(def)
+                            Text(SettingHelpKey.displayLabel(for: def)).tag(def)
                         }
                     }
 
-                    Picker("Included Categories", selection: $coordinator.settings.payload.calibrationCategoryScope) {
+                    Picker("Included setups", selection: $coordinator.settings.payload.calibrationCategoryScope) {
                         ForEach(CalibrationCategoryScope.allCases) { scope in
-                            Text(scope.rawValue).tag(scope)
+                            Text(SettingHelpKey.displayLabel(for: scope)).tag(scope)
                         }
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Min Score Filter")
+                            Text("Minimum strength filter")
                             Spacer()
                             Text(coordinator.settings.payload.calibrationMinConfidencePercent > 0
                                  ? "≥\(Int(coordinator.settings.payload.calibrationMinConfidencePercent.rounded()))"
@@ -308,8 +328,8 @@ public struct SignalRulesSettingsView: View {
                         }
                     }
 
-                    Picker("Min R:R Filter", selection: $coordinator.settings.payload.calibrationMinRiskReward) {
-                        Text("Any R:R").tag(0.0)
+                    Picker("Minimum reward-to-risk filter", selection: $coordinator.settings.payload.calibrationMinRiskReward) {
+                        Text("Any ratio").tag(0.0)
                         Text("≥ 1 : 1.5").tag(1.5)
                         Text("≥ 1 : 2.0").tag(2.0)
                         Text("≥ 1 : 2.5").tag(2.5)
@@ -317,7 +337,7 @@ public struct SignalRulesSettingsView: View {
                     }
 
                     HStack {
-                        Text("Custom View Filter")
+                        Text("Active filter")
                             .font(.caption)
                             .foregroundStyle(palette.secondaryInk)
                         Spacer()
@@ -326,37 +346,45 @@ public struct SignalRulesSettingsView: View {
                             .foregroundStyle(palette.champagneGold)
                     }
                 } header: {
-                    Text("Custom Calibration View (Filtered)")
+                    SettingsSectionHeader(SettingHelpKey.customCalibrationView.copy.label, helpKey: .customCalibrationView)
                 } footer: {
-                    Text("Affects only the secondary Custom View card and strategy breakdown in Stats. The top Headline Win Rate card always stays fixed to Strong · TP1/TP2 · Filled v1.4+.")
+                    Text(SettingHelpKey.customCalibrationView.copy.subtitle)
                 }
             }
 
             // SECTION 5 — Embedded AI Second-Opinion (Optional · Always Visible Provider & Model Picker)
             Section {
-                Toggle("Enable AI Second Opinion", isOn: $coordinator.settings.payload.geminiEnabled)
+                Toggle(isOn: $coordinator.settings.payload.geminiEnabled) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.aiSecondOpinion.copy.label)
+                        InfoButton(.aiSecondOpinion)
+                    }
+                }
 
-                Picker("AI provider", selection: Binding(
-                    get: { coordinator.settings.payload.aiProvider },
-                    set: { newProvider in
-                        coordinator.settings.payload.aiProvider = newProvider
-                        let models = coordinator.availableModels(for: newProvider)
-                        if !models.contains(where: { $0.id == coordinator.settings.payload.aiModelID }) {
-                            coordinator.settings.payload.aiModelID = newProvider.defaultModelID
+                HStack(spacing: 6) {
+                    Picker("Provider", selection: Binding(
+                        get: { coordinator.settings.payload.aiProvider },
+                        set: { newProvider in
+                            coordinator.settings.payload.aiProvider = newProvider
+                            let models = coordinator.availableModels(for: newProvider)
+                            if !models.contains(where: { $0.id == coordinator.settings.payload.aiModelID }) {
+                                coordinator.settings.payload.aiModelID = newProvider.defaultModelID
+                            }
+                            Task {
+                                hasGeminiKey = await KeychainStore.shared.hasValue(for: newProvider.keychainKey)
+                            }
                         }
-                        Task {
-                            hasGeminiKey = await KeychainStore.shared.hasValue(for: newProvider.keychainKey)
+                    )) {
+                        ForEach(AIProviderOption.allCases) { provider in
+                            Text(provider.displayName).tag(provider)
                         }
                     }
-                )) {
-                    ForEach(AIProviderOption.allCases) { provider in
-                        Text(provider.displayName).tag(provider)
-                    }
+                    InfoButton(.aiProviderAndModel)
                 }
 
                 let activeProvider = coordinator.settings.payload.aiProvider
                 let models = coordinator.availableModels(for: activeProvider)
-                Picker("AI model", selection: $coordinator.settings.payload.aiModelID) {
+                Picker("Model", selection: $coordinator.settings.payload.aiModelID) {
                     ForEach(models) { m in
                         Text(m.displayName).tag(m.id)
                     }
@@ -367,7 +395,7 @@ public struct SignalRulesSettingsView: View {
 
                 HStack {
                     SecureField(
-                        hasGeminiKey ? "\(activeProvider.shortLabel) Key Encrypted in Keychain" : "Enter \(activeProvider.shortLabel) API Key",
+                        hasGeminiKey ? "\(activeProvider.shortLabel) key saved (••••)" : "Enter \(activeProvider.shortLabel) personal key",
                         text: $geminiKeyInput
                     )
                     .textInputAutocapitalization(.never)
@@ -415,28 +443,31 @@ public struct SignalRulesSettingsView: View {
                             coordinator.aiKeyTestMessage = nil
                         }
                     } label: {
-                        Label("Remove Saved \(activeProvider.shortLabel) Key", systemImage: "trash")
+                        Label("Remove saved \(activeProvider.shortLabel) key", systemImage: "trash")
                     }
                 }
 
-                Stepper(
-                    "Shared Daily AI Limit: \(coordinator.settings.payload.geminiDailyCallLimit)",
-                    value: $coordinator.settings.payload.geminiDailyCallLimit,
-                    in: 5...100,
-                    step: 5
-                )
+                HStack(spacing: 6) {
+                    Stepper(
+                        "Daily limit: \(coordinator.settings.payload.geminiDailyCallLimit)",
+                        value: $coordinator.settings.payload.geminiDailyCallLimit,
+                        in: 5...100,
+                        step: 5
+                    )
+                    InfoButton(.sharedDailyAILimit)
+                }
 
                 HStack {
-                    Text("Today's AI Usage (All Providers)")
+                    Text("Used today (all providers)")
                     Spacer()
                     Text("\(coordinator.geminiDailyCallsUsed) / \(coordinator.settings.payload.geminiDailyCallLimit)")
                         .monospacedDigit()
                         .foregroundStyle(palette.secondaryInk)
                 }
             } header: {
-                Text("AI Second-Opinion (Optional)")
+                Text("Optional Review Assistant (AI)")
             } footer: {
-                Text("Confluence works 100% natively with AI OFF. When enabled, your selected provider reviews new Strong Signals, Trap Alerts, and News setups using strict JSON, but can NEVER override deterministic Stop loss / Target levels, risk limits, or Crisis suppression.")
+                Text("Confluence works 100% natively with this off. When enabled, your selected provider reviews new Strong setups, Trap warnings, and News setups, but can NEVER override deterministic Stop loss, Target 1, Target 2, risk limits, or Crisis suppression.")
             }
         }
         .navigationTitle("Signal Rules & AI")

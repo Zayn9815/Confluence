@@ -18,39 +18,41 @@ public struct MarketsFeedsSettingsView: View {
 
     public var body: some View {
         Form {
-            Section("Enabled Markets") {
+            Section {
                 ForEach(MarketClass.allCases, id: \.self) { market in
                     Toggle(market.displayName, isOn: Binding(
                         get: { coordinator.settings.payload.enabledMarkets.contains(market) },
                         set: { _ in coordinator.settings.toggleMarket(market) }
                     ))
                 }
+            } header: {
+                SettingsSectionHeader(SettingHelpKey.enabledMarkets.copy.label, helpKey: .enabledMarkets)
             }
 
             if coordinator.settings.payload.showAdvancedSettings {
                 Section {
                     Picker("Forex / Gold / Stocks / Indices", selection: $coordinator.settings.payload.tradFiProviderPreference) {
                         ForEach(TradFiProviderPreference.allCases) { pref in
-                            Text(pref.rawValue).tag(pref)
+                            Text(SettingHelpKey.displayLabel(for: pref)).tag(pref)
                         }
                     }
 
-                    Picker("Crypto Data Venue", selection: $coordinator.settings.payload.cryptoPrimaryExchange) {
+                    Picker("Crypto data source", selection: $coordinator.settings.payload.cryptoPrimaryExchange) {
                         ForEach(CryptoExchangePreference.allCases) { venue in
-                            Text(venue.rawValue).tag(venue)
+                            Text(SettingHelpKey.displayLabel(for: venue)).tag(venue)
                         }
                     }
                 } header: {
-                    Text("Advanced Provider Overrides")
+                    SettingsSectionHeader(SettingHelpKey.advancedProviderOverrides.copy.label, helpKey: .advancedProviderOverrides)
                 } footer: {
-                    Text("TradFi Auto uses Twelve Data (when your Keychain key is saved & within quota), defaults to biquote.io, and falls back to Yahoo Finance automatically.")
+                    Text(SettingHelpKey.advancedProviderOverrides.copy.subtitle)
                 }
             }
 
             Section {
                 HStack {
                     SecureField(
-                        hasTwelveDataKey ? "Twelve Data Key Saved (••••)" : "Enter Twelve Data API Key",
+                        hasTwelveDataKey ? "Twelve Data key saved (••••)" : "Enter Twelve Data personal key",
                         text: $twelveDataKeyInput
                     )
                     .textInputAutocapitalization(.never)
@@ -70,7 +72,7 @@ public struct MarketsFeedsSettingsView: View {
                     Task { await coordinator.testTwelveDataKeyAndQuota() }
                 } label: {
                     HStack {
-                        Label("Test Key & Check Quota", systemImage: "gauge.with.dots.needle.67percent")
+                        Label("Test key & check daily limit", systemImage: "gauge.with.dots.needle.67percent")
                         Spacer()
                         if coordinator.isTestingTwelveData {
                             ProgressView().controlSize(.small)
@@ -86,7 +88,7 @@ public struct MarketsFeedsSettingsView: View {
                 }
 
                 HStack {
-                    Text("Local Calls Today")
+                    Text("Calls used today")
                     Spacer()
                     Text("\(coordinator.twelveDataLocalDailyUsed) / 780")
                         .font(.caption.monospacedDigit())
@@ -102,24 +104,24 @@ public struct MarketsFeedsSettingsView: View {
                             coordinator.twelveDataTestMessage = nil
                         }
                     } label: {
-                        Label("Remove Saved Twelve Data Key", systemImage: "trash")
+                        Label("Remove saved Twelve Data key", systemImage: "trash")
                     }
                 }
             } header: {
-                Text("Twelve Data API Key & Live Quota")
+                SettingsSectionHeader(SettingHelpKey.twelveDataKey.copy.label, helpKey: .twelveDataKey)
             } footer: {
-                Text("Keys are encrypted strictly in your iOS Keychain and never bundled in the app binary.")
+                Text(SettingHelpKey.twelveDataKey.copy.subtitle)
             }
 
-            Section("Macro, News & Positioning Feeds") {
-                Toggle("Economic Calendar", isOn: $coordinator.settings.payload.economicCalendarEnabled)
-                Toggle("Breaking News Radar", isOn: $coordinator.settings.payload.breakingNewsRadarEnabled)
-                Toggle("Pro-vs-Retail Positioning (OKX + COT)", isOn: $coordinator.settings.payload.positioningFeedsEnabled)
+            Section {
+                Toggle("Economic calendar", isOn: $coordinator.settings.payload.economicCalendarEnabled)
+                Toggle("Breaking news radar", isOn: $coordinator.settings.payload.breakingNewsRadarEnabled)
+                Toggle("Market positioning tracker", isOn: $coordinator.settings.payload.positioningFeedsEnabled)
 
                 if coordinator.settings.payload.showAdvancedSettings {
                     HStack {
                         SecureField(
-                            hasFinnhubKey ? "Finnhub Key Saved (••••)" : "Optional Finnhub News Key",
+                            hasFinnhubKey ? "Finnhub key saved (••••)" : "Optional Finnhub news key",
                             text: $finnhubKeyInput
                         )
                         .textInputAutocapitalization(.never)
@@ -137,43 +139,59 @@ public struct MarketsFeedsSettingsView: View {
                     Button {
                         Task { await coordinator.refreshCOTManually() }
                     } label: {
-                        Label("Refresh CFTC COT Data Now", systemImage: "arrow.triangle.2.circlepath")
+                        Label("Refresh weekly positioning report now", systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
+            } header: {
+                SettingsSectionHeader(SettingHelpKey.macroNewsPositioningFeeds.copy.label, helpKey: .macroNewsPositioningFeeds)
             }
 
             Section {
-                Picker("Forex, Gold & Stocks live feed", selection: Binding(
-                    get: { coordinator.settings.payload.tradFiLiveFeedMode },
-                    set: { newVal in
-                        coordinator.settings.payload.tradFiLiveFeedMode = newVal
-                        coordinator.syncLiveFeedModesFromSettings()
+                HStack(spacing: 6) {
+                    Picker(SettingHelpKey.tradFiLiveFeed.copy.label, selection: Binding(
+                        get: { coordinator.settings.payload.tradFiLiveFeedMode },
+                        set: { newVal in
+                            coordinator.settings.payload.tradFiLiveFeedMode = newVal
+                            coordinator.syncLiveFeedModesFromSettings()
+                        }
+                    )) {
+                        ForEach(TradFiLiveFeedMode.allCases) { mode in
+                            Text(mode.displayLabel).tag(mode)
+                        }
                     }
-                )) {
-                    ForEach(TradFiLiveFeedMode.allCases) { mode in
-                        Text(mode.displayLabel).tag(mode)
-                    }
+                    InfoButton(.tradFiLiveFeed)
                 }
 
-                Picker("Crypto live feed", selection: Binding(
-                    get: { coordinator.settings.payload.cryptoLiveFeedMode },
-                    set: { newVal in
-                        coordinator.settings.payload.cryptoLiveFeedMode = newVal
-                        coordinator.syncLiveFeedModesFromSettings()
+                HStack(spacing: 6) {
+                    Picker(SettingHelpKey.cryptoLiveFeed.copy.label, selection: Binding(
+                        get: { coordinator.settings.payload.cryptoLiveFeedMode },
+                        set: { newVal in
+                            coordinator.settings.payload.cryptoLiveFeedMode = newVal
+                            coordinator.syncLiveFeedModesFromSettings()
+                        }
+                    )) {
+                        ForEach(CryptoLiveFeedMode.allCases) { mode in
+                            Text(mode.displayLabel).tag(mode)
+                        }
                     }
-                )) {
-                    ForEach(CryptoLiveFeedMode.allCases) { mode in
-                        Text(mode.displayLabel).tag(mode)
-                    }
+                    InfoButton(.cryptoLiveFeed)
                 }
 
-                Picker("Default chart view", selection: $coordinator.settings.payload.defaultChartViewMode) {
-                    ForEach(DefaultChartViewMode.allCases) { mode in
-                        Text(mode.displayLabel).tag(mode)
+                HStack(spacing: 6) {
+                    Picker(SettingHelpKey.defaultChartView.copy.label, selection: $coordinator.settings.payload.defaultChartViewMode) {
+                        ForEach(DefaultChartViewMode.allCases) { mode in
+                            Text(mode.displayLabel).tag(mode)
+                        }
                     }
+                    InfoButton(.defaultChartView)
                 }
 
-                Toggle("Show TradingView option", isOn: $coordinator.settings.payload.showTradingViewOption)
+                Toggle(isOn: $coordinator.settings.payload.showTradingViewOption) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.showTradingViewOption.copy.label)
+                        InfoButton(.showTradingViewOption)
+                    }
+                }
             } header: {
                 Text("Live Price Feeds & Chart View")
             } footer: {
@@ -181,18 +199,26 @@ public struct MarketsFeedsSettingsView: View {
             }
 
             Section {
-                Toggle("Scan when opening app", isOn: $coordinator.settings.payload.scanOnOpenEnabled)
+                Toggle(isOn: $coordinator.settings.payload.scanOnOpenEnabled) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.scanOnOpen.copy.label)
+                        InfoButton(.scanOnOpen)
+                    }
+                }
 
-                Picker("Auto-scan schedule", selection: Binding(
-                    get: { ScanIntervalOption(rawValue: coordinator.settings.payload.autoScanIntervalMinutes) ?? .every30Minutes },
-                    set: { opt in
-                        coordinator.settings.payload.autoScanIntervalMinutes = opt.rawValue
-                        coordinator.restartAutoScanLoop()
+                HStack(spacing: 6) {
+                    Picker(SettingHelpKey.autoScanSchedule.copy.label, selection: Binding(
+                        get: { ScanIntervalOption(rawValue: coordinator.settings.payload.autoScanIntervalMinutes) ?? .every30Minutes },
+                        set: { opt in
+                            coordinator.settings.payload.autoScanIntervalMinutes = opt.rawValue
+                            coordinator.restartAutoScanLoop()
+                        }
+                    )) {
+                        ForEach(ScanIntervalOption.allCases) { opt in
+                            Text(opt.displayLabel).tag(opt)
+                        }
                     }
-                )) {
-                    ForEach(ScanIntervalOption.allCases) { opt in
-                        Text(opt.displayLabel).tag(opt)
-                    }
+                    InfoButton(.autoScanSchedule)
                 }
 
                 if let nextEpoch = coordinator.nextScheduledScanEpochSeconds {
@@ -217,13 +243,18 @@ public struct MarketsFeedsSettingsView: View {
                         .multilineTextAlignment(.trailing)
                 }
 
-                Toggle("Background refresh (iOS)", isOn: Binding(
+                Toggle(isOn: Binding(
                     get: { coordinator.settings.payload.backgroundRefreshEnabled },
                     set: { val in
                         coordinator.settings.payload.backgroundRefreshEnabled = val
                         coordinator.scheduleNextBackgroundRefresh()
                     }
-                ))
+                )) {
+                    HStack(spacing: 6) {
+                        Text(SettingHelpKey.backgroundRefresh.copy.label)
+                        InfoButton(.backgroundRefresh)
+                    }
+                }
             } header: {
                 Text("Auto-Scan & Refresh")
             } footer: {
@@ -231,7 +262,7 @@ public struct MarketsFeedsSettingsView: View {
             }
 
             Section {
-                Toggle("Show Broker-Adjusted Levels on Cards", isOn: $coordinator.settings.payload.showBrokerAdjustedLevels)
+                Toggle("Show broker-matched levels on cards", isOn: $coordinator.settings.payload.showBrokerAdjustedLevels)
 
                 NavigationLink {
                     BrokerPriceOffsetsCalibrationView(coordinator: coordinator, palette: palette)
@@ -245,9 +276,9 @@ public struct MarketsFeedsSettingsView: View {
                     }
                 }
             } header: {
-                Text("Match to broker price (Display Only)")
+                SettingsSectionHeader(SettingHelpKey.matchToBrokerPrice.copy.label, helpKey: .matchToBrokerPrice)
             } footer: {
-                Text("Adds your broker-vs-feed price difference to displayed Entry, Stop loss, Target 1, and Target 2 without altering engine math or calibration stats.")
+                Text(SettingHelpKey.matchToBrokerPrice.copy.subtitle)
             }
         }
         .navigationTitle("Markets & Data")

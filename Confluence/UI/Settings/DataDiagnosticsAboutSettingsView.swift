@@ -19,7 +19,7 @@ public struct DataDiagnosticsAboutSettingsView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
     }
 
     public var body: some View {
@@ -27,7 +27,7 @@ public struct DataDiagnosticsAboutSettingsView: View {
             Section {
                 if let backupURL = coordinator.exportBackupArchiveURL() {
                     ShareLink(item: backupURL) {
-                        Label("Export Backup Archive (JSON)", systemImage: "externaldrive.badge.plus")
+                        Label("Export Backup File", systemImage: "externaldrive.badge.plus")
                     }
                 }
 
@@ -40,18 +40,24 @@ public struct DataDiagnosticsAboutSettingsView: View {
                 Button {
                     showFileImporter = true
                 } label: {
-                    Label("Restore Backup from JSON File", systemImage: "square.and.arrow.down")
+                    Label("Restore Backup From File", systemImage: "square.and.arrow.down")
                 }
 
                 if let ledgerCSV = coordinator.exportTradeLedgerCSVURL() {
                     ShareLink(item: ledgerCSV) {
-                        Label("Export Trade Ledger (CSV)", systemImage: "tablecells")
+                        Label("Export Trade Ledger (Spreadsheet)", systemImage: "tablecells")
                     }
                 }
 
                 if let journalCSV = coordinator.exportJournalCSVURL() {
                     ShareLink(item: journalCSV) {
-                        Label("Export Trade Journal (CSV)", systemImage: "book.pages")
+                        Label("Export Trade Journal (Spreadsheet)", systemImage: "book.pages")
+                    }
+                }
+
+                if let demoWalletCSV = coordinator.exportDemoWalletTransactionsCSV() {
+                    ShareLink(item: demoWalletCSV) {
+                        Label("Export Demo Wallet History (Spreadsheet)", systemImage: "wallet.pass")
                     }
                 }
 
@@ -61,12 +67,12 @@ public struct DataDiagnosticsAboutSettingsView: View {
                         .foregroundStyle(backupStatusIsError ? palette.shortCrimson : palette.longEmerald)
                 }
             } header: {
-                Text("Backup, Restore & CSV Exports")
+                SettingsSectionHeader(SettingHelpKey.backupAndRestore.copy.label, helpKey: .backupAndRestore)
             } footer: {
-                Text("Backups include settings, signals, outcomes, trade ledger, and journal entries (`schemaVersion = 1`). Keychain API keys are NEVER exported, and every file passes through SecretRedactor.")
+                Text("Backups include settings, signals, outcomes, trade ledger, journal entries, and Demo Wallet history (`schemaVersion = 2`, previous v1 files remain importable). Keychain keys are NEVER exported, and every file passes through SecretRedactor.")
             }
 
-            Section("Diagnostics & Logs") {
+            Section {
                 NavigationLink {
                     DiagnosticsHubView(coordinator: coordinator, palette: palette)
                 } label: {
@@ -79,12 +85,14 @@ public struct DataDiagnosticsAboutSettingsView: View {
                             Text("Logs, Feed Health & Trade Ledger")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(palette.primaryInk)
-                            Text("\(coordinator.diagnosticLog.entries.count) logs · \(coordinator.diagnosticLog.errorOnlyCount) err · \(coordinator.crashLogStore.entries.count) crashes")
+                            Text("\(coordinator.diagnosticLog.entries.count) logs · \(coordinator.diagnosticLog.errorOnlyCount) errors · \(coordinator.crashLogStore.entries.count) crashes")
                                 .font(.caption)
                                 .foregroundStyle(palette.secondaryInk)
                         }
                     }
                 }
+            } header: {
+                SettingsSectionHeader(SettingHelpKey.diagnosticsAndLogs.copy.label, helpKey: .diagnosticsAndLogs)
             }
 
             Section("Learning, Legal & About") {

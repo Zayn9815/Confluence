@@ -16,14 +16,14 @@
    - 100% deterministic, strictly causal, non-repainting.
    - All public models conform to `Codable`, `Sendable`, `Equatable`, and align with `Specs/schemas/*.json` for future 1:1 Kotlin/Android parity.
    - **Code owns ALL numbers:** Entry Zone, Stop Loss, TP1, TP2, % risk, % gain, R:R, Confidence %, and regime/risk gating are computed exclusively in deterministic Swift code.
-2. **Optional AI Judge (`GeminiJudgeClient`):**
-   - Model ID: `gemini-4-hydrogen`, `thinkingLevel: "LOW"`, `maxOutputTokens: 2048`, strict JSON schema, API key sent exclusively via `x-goog-api-key` header (never query params, never logged).
+2. **Optional Multi-Provider AI Judge (`AIJudgeClient`: `GeminiJudgeClient`, `OpenAICompatibleJudgeClient`):**
+   - Supports Google Gemini (`gemini-4-hydrogen`, `x-goog-api-key`), DeepSeek (`deepseek-flash` / `deepseek-v4-pro`, `Authorization: Bearer`, `thinking: {type: "disabled"}`, `response_format: {type: "json_object"}`), and OpenRouter (`Authorization: Bearer`, `:free` tagging). Keys are stored per-provider in `KeychainStore`, sent exclusively in HTTPS headers (never query params, never logged), and scrubbed by `SecretRedactor` (including `sk-` and `sk-or-` tokens). Shared daily call cap applies across all providers.
    - App MUST function 100% natively with AI OFF.
-   - AI can NEVER override hard code risk limits, `crisis` suppression, confluence gate (`>= 3`), or numeric SL/TP levels.
+   - AI can NEVER override hard code risk limits, `crisis` suppression, confluence gate (`>= 3`), or numeric Stop loss / Target 1 / Target 2 levels.
    - Hard confirmation rule in code: badge = Confirmed ONLY when `agree == true && setupQuality >= 2 && confidence >= threshold && riskState == .safe`.
 
 ## 3. Causality, Hygiene & Zero-Mock-Data Invariants
-- **Closed-Candle Anti-Repainting:** Drop any open/forming bar (`closeTime > serverNow` or exchange `confirm == "0"` or `isOpen == true`) before running detectors.
+- **Closed-Candle Anti-Repainting & Display-Only Forming Bar:** Drop any open/forming bar (`closeTime > serverNow` or exchange `confirm == "0"` or `isOpen == true`) before running detectors. Live forming candles (`LiveCandleAggregator` / `LivePriceService`) are **strictly display-only** for live chart rendering and NEVER enter `SignalEngine`, `CandleHygieneEngine`, or `PassiveOutcomeEvaluator`.
 - **Prefix Invariance:** Every detector (`CausalICTDetector`, `CandlestickPatternDetector`, `TrendMomentumDetector`, `TrapLifecycleEngine`) MUST produce identical output at bar `t` whether given bars `0...t` or `0...N`.
 - **No Fake Data in UI:** Never hardcode mock signals, fake win-rates, or fabricated news prints in production views. Empty states must honestly guide the user to run a live scan.
 - **OTC Volume Honesty:** When an OTC/FX feed has no real volume (`volume == 0` or missing), store `volume: nil` and report `RVOL = N/A` (never fake `0`).
@@ -34,7 +34,7 @@
   - Respect iOS's 64-notification queue limit by capping pre-news notifications at a strict 40-slot budget (`confluence.prenews.*`).
 - **OKX OI UTC Alignment:** Always request `period=1Dutc` (never `1D`) for daily OI bars; respect 1,440-point cap.
 - **CFTC COT Lookahead Guard:** COT Tuesday snapshots are only observable after Friday 20:30 UTC release.
-- **Zero Build-Time Secret Injection:** Never inject API keys into `Info.plist` or the `.ipa` bundle. All optional user keys (Twelve Data, Gemini, Finnhub) come exclusively from user entry in `KeychainStore`. CI (`build-ipa.yml`) and Simulator tests fail if built `Info.plist` contains `ConfluenceDefaultTwelveDataKey` or any key-like string.
+- **Zero Build-Time Secret Injection:** Never inject API keys into `Info.plist` or the `.ipa` bundle. All optional user keys (Twelve Data, Gemini, DeepSeek, OpenRouter, Finnhub) come exclusively from user entry in `KeychainStore`. CI (`build-ipa.yml`) and Simulator tests fail if built `Info.plist` contains `ConfluenceDefaultTwelveDataKey` or any key-like string.
 - **DST-Correct Sessions & Algorithmic Market Holidays (`MarketHolidayCalendar`):**
   - Killzones anchor strictly to `Europe/London` (London `07:00–10:00`), `America/New_York` (NY `07:00–10:00`, London Close `10:00–12:00`), and `UTC` (Asian `00:00–07:00`, yielding `06:00 UTC` to London during BST).
   - Algorithmic NYSE full holidays + 13:00 ET early closes (Gregorian Easter / Good Friday + weekend observance rules). Index CFDs (`US500`, `NAS100`) and Metals (`XAU/USD`) treat Good Friday, Christmas, and New Year's Day as closed, and US early closes as closed/limited after 13:00 ET.
@@ -43,10 +43,16 @@
   - **Fill-Bar Rule:** On the fill bar itself, check **SL only** (pessimistic). TP1/TP2 checks begin strictly on the **next closed bar**.
   - **Same-Bar Post-Fill Rule:** If a subsequent bar touches both SL and TP, resolve pessimistically as **SL first** (unless TP1 was already hit on a strictly earlier bar).
   - Pre-v1.4 records lacking `lifecycleStatus` decode as `legacy-immediate-fill` and are excluded from the fixed v1.4 headline Win Rate (`CalibrationFilterConfig.headlineFixed`).
+- **Paper-Only Demo Wallet (`DemoWalletEngine`):**
+  - Strictly paper-only simulation — never executes real brokerage orders and never invents bid/ask spreads.
+  - Market orders are blocked when quote age > 60s (unless explicit stale override) or when `SessionCalendar` reports the market closed (Limit order suggested instead).
+  - The same pessimistic **fill-bar SL-only** and **same-bar SL-first** rules apply to Demo Wallet closed-bar reconciliation.
 - **Score Honesty & Display-Only Calibration (`ConfidenceCalibrator`):**
   - Raw confluence scores (`0–100`) are labeled `Score` (not win probability) until `N >= 100` resolved filled trades activate walk-forward Platt scaling.
   - The `minimumConfidencePercent` gate ALWAYS evaluates the **RAW score**; calibrated probability is strictly display-only.
   - Every Win Rate displays sample size `n` and exact **Wilson 95% CI**.
+- **Plain-English Settings Copy (`SettingsCopy.swift`):**
+  - All user-facing Settings labels, subtitles, enum display strings, and `(i)` popover help text live in `Confluence/UI/Settings/SettingsCopy.swift`. Never rename `Codable` keys or enum raw values when updating display copy.
 
 ## 4. Swift 6, Dependencies & Battery Discipline
 - Enable Swift 6 strict concurrency and warnings-as-errors on `SignalEngine` and `Confluence` app targets.
@@ -56,7 +62,7 @@
   - `tradingview/LightweightChartsIOS` from `5.2.0` (product `LightweightCharts`, Apache 2.0 attribution required in Settings -> About).
   - Keychain storage uses native Swift 6 `Security.framework` (`KeychainStore`) — zero external dependency, no `unsafeFlags`.
   - Scan loading skeletons use native SwiftUI `NativeShimmerModifier` (honors `@Environment(\.accessibilityReduceMotion)` — zero third-party shimmer dependency).
-- **Battery:** Zero persistent WebSockets, zero continuous idle animations, `LazyVStack` on feeds, pure SwiftUI `Canvas` for Signal Card mini-charts (`LightweightCharts` instantiated lazily ONLY on full-screen sheet).
+- **Battery:** Foreground-only live price sockets (`LivePriceService` disconnects on `scenePhase != .active`, max 8 symbols LRU, Twelve Data strictly excluded), zero continuous idle animations, `LazyVStack` on feeds, pure SwiftUI `Canvas` for Signal Card mini-charts (throttled <= 1 Hz), `LightweightCharts` & `TradingViewWidgetView` instantiated lazily ONLY on full-screen sheet with clean teardown.
 - **Audio:** Custom `.caf` files live at the root of `Confluence.app`. Use `AVAudioSession.Category.ambient` with `.mixWithOthers` so hardware mute switch is always respected.
 
 ## 5. Verification Checklist Before Shipping
