@@ -475,6 +475,46 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         )
     }
 
+    public func withOrigin(_ newOrigin: SignalOrigin) -> TradeSignal {
+        TradeSignal(
+            id: id,
+            fingerprint: fingerprint,
+            symbol: symbol,
+            displayName: displayName,
+            marketClass: marketClass,
+            timeframe: timeframe,
+            htfTimeframe: htfTimeframe,
+            category: category,
+            direction: direction,
+            trapDirection: trapDirection,
+            tier: tier,
+            confidencePercent: confidencePercent,
+            regime: regime,
+            riskState: riskState,
+            killzone: killzone,
+            htfBias: htfBias,
+            generatedAtEpochSeconds: generatedAtEpochSeconds,
+            barCloseEpochSeconds: barCloseEpochSeconds,
+            levels: levels,
+            alignedStrategies: alignedStrategies,
+            rejectionReasons: rejectionReasons,
+            psychologyReport: psychologyReport,
+            preNewsBadge: preNewsBadge,
+            postNewsCatalystBadge: postNewsCatalystBadge,
+            overlays: overlays,
+            recentCandles: recentCandles,
+            aiJudgment: aiJudgment,
+            aiConfirmed: aiConfirmed,
+            dataProvider: dataProvider,
+            isMarketClosedSnapshot: isMarketClosedSnapshot,
+            marketClosedReason: marketClosedReason,
+            strengthBreakdown: strengthBreakdown,
+            calibratedProbability: calibratedProbability,
+            calibrationSampleCount: calibrationSampleCount,
+            origin: newOrigin
+        )
+    }
+
     public func formattedCopyText(decimals: Int) -> String {
         let fmt = "%.\(decimals)f"
         let header: String

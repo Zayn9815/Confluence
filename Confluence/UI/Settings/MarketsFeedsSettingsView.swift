@@ -142,21 +142,92 @@ public struct MarketsFeedsSettingsView: View {
                 }
             }
 
-            Section("Background Refresh") {
-                Toggle("Background Refresh (BGAppRefreshTask)", isOn: Binding(
+            Section {
+                Picker("Forex, Gold & Stocks live feed", selection: Binding(
+                    get: { coordinator.settings.payload.tradFiLiveFeedMode },
+                    set: { newVal in
+                        coordinator.settings.payload.tradFiLiveFeedMode = newVal
+                        coordinator.syncLiveFeedModesFromSettings()
+                    }
+                )) {
+                    ForEach(TradFiLiveFeedMode.allCases) { mode in
+                        Text(mode.displayLabel).tag(mode)
+                    }
+                }
+
+                Picker("Crypto live feed", selection: Binding(
+                    get: { coordinator.settings.payload.cryptoLiveFeedMode },
+                    set: { newVal in
+                        coordinator.settings.payload.cryptoLiveFeedMode = newVal
+                        coordinator.syncLiveFeedModesFromSettings()
+                    }
+                )) {
+                    ForEach(CryptoLiveFeedMode.allCases) { mode in
+                        Text(mode.displayLabel).tag(mode)
+                    }
+                }
+
+                Picker("Default chart view", selection: $coordinator.settings.payload.defaultChartViewMode) {
+                    ForEach(DefaultChartViewMode.allCases) { mode in
+                        Text(mode.displayLabel).tag(mode)
+                    }
+                }
+
+                Toggle("Show TradingView option", isOn: $coordinator.settings.payload.showTradingViewOption)
+            } header: {
+                Text("Live Price Feeds & Chart View")
+            } footer: {
+                Text("Live feeds run only while the app is open (up to 8 symbols). Twelve Data is never used for live streaming or polling.")
+            }
+
+            Section {
+                Toggle("Scan when opening app", isOn: $coordinator.settings.payload.scanOnOpenEnabled)
+
+                Picker("Auto-scan schedule", selection: Binding(
+                    get: { ScanIntervalOption(rawValue: coordinator.settings.payload.autoScanIntervalMinutes) ?? .every30Minutes },
+                    set: { opt in
+                        coordinator.settings.payload.autoScanIntervalMinutes = opt.rawValue
+                        coordinator.restartAutoScanLoop()
+                    }
+                )) {
+                    ForEach(ScanIntervalOption.allCases) { opt in
+                        Text(opt.displayLabel).tag(opt)
+                    }
+                }
+
+                if let nextEpoch = coordinator.nextScheduledScanEpochSeconds {
+                    let remaining = max(0, Int((nextEpoch - Date().timeIntervalSince1970).rounded()))
+                    let mins = remaining / 60
+                    let secs = remaining % 60
+                    HStack {
+                        Text("Next scheduled scan")
+                        Spacer()
+                        Text(mins > 0 ? "In \(mins)m \(secs)s" : "In \(secs)s")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(palette.champagneGold)
+                    }
+                }
+
+                HStack {
+                    Text("Estimated daily usage")
+                    Spacer()
+                    Text(coordinator.scanUsageEstimate.summaryText)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(palette.secondaryInk)
+                        .multilineTextAlignment(.trailing)
+                }
+
+                Toggle("Background refresh (iOS)", isOn: Binding(
                     get: { coordinator.settings.payload.backgroundRefreshEnabled },
                     set: { val in
                         coordinator.settings.payload.backgroundRefreshEnabled = val
                         coordinator.scheduleNextBackgroundRefresh()
                     }
                 ))
-
-                Stepper(
-                    "Scan Interval: \(coordinator.settings.payload.backgroundRefreshIntervalMinutes)m",
-                    value: $coordinator.settings.payload.backgroundRefreshIntervalMinutes,
-                    in: 15...120,
-                    step: 15
-                )
+            } header: {
+                Text("Auto-Scan & Refresh")
+            } footer: {
+                Text("Low Power Mode automatically limits auto-scan to every 30 minutes or slower. Opening the app skips rescanning if the last scan ran less than 2 minutes ago.")
             }
 
             Section {

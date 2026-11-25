@@ -277,7 +277,7 @@ public struct NewsTradeAnalysisSheet: View {
                 let dec = PriceFormatHelper.decimals(for: sig.symbol, marketClass: sig.marketClass, referencePrice: lv.entryMid)
                 HStack(spacing: 8) {
                     levelBox("DIRECTION", sig.direction.rawValue.uppercased(), sub: "\(Int(sig.confidencePercent.rounded()))% · \(sig.strengthBreakdown?.strengthLabel ?? sig.tier.displayName)", accent: palette.color(for: sig.direction))
-                    levelBox("R:R RATIO", "1:\(String(format: "%.2f", lv.riskRewardRatio))", sub: lv.isTP2Enabled ? "TP2 1:\(String(format: "%.1f", lv.tp2RiskRewardRatio))" : "TP1 Only", accent: palette.primaryInk)
+                    levelBox("R:R RATIO", "1:\(String(format: "%.2f", lv.riskRewardRatio))", sub: lv.isTP2Enabled ? "Target 2 1:\(String(format: "%.1f", lv.tp2RiskRewardRatio))" : "Target 1 Only", accent: palette.primaryInk)
                 }
 
                 LazyVGrid(columns: [
@@ -286,8 +286,8 @@ public struct NewsTradeAnalysisSheet: View {
                 ], spacing: 8) {
                     levelBox("ENTRY ZONE", "\(PriceFormatHelper.format(lv.entryLow, decimals: dec))\nto \(PriceFormatHelper.format(lv.entryHigh, decimals: dec))", sub: "Mid \(PriceFormatHelper.format(lv.entryMid, decimals: dec))", accent: palette.champagneGold)
                     levelBox("STOP LOSS", PriceFormatHelper.format(lv.stopLoss, decimals: dec), sub: "-\(String(format: "%.2f", lv.riskPercent))% Risk", accent: palette.shortCrimson)
-                    levelBox("TP1 TARGET", PriceFormatHelper.format(lv.tp1, decimals: dec), sub: "+\(String(format: "%.2f", lv.reward1Percent))%", accent: palette.longEmerald)
-                    levelBox("TP2 TARGET", lv.isTP2Enabled ? PriceFormatHelper.format(lv.tp2, decimals: dec) : "Disabled", sub: lv.isTP2Enabled ? "+\(String(format: "%.2f", lv.reward2Percent))%" : "Settings -> Rules", accent: palette.macroIceBlue)
+                    levelBox("TARGET 1", PriceFormatHelper.format(lv.tp1, decimals: dec), sub: "+\(String(format: "%.2f", lv.reward1Percent))%", accent: palette.longEmerald)
+                    levelBox("TARGET 2", lv.isTP2Enabled ? PriceFormatHelper.format(lv.tp2, decimals: dec) : "Disabled", sub: lv.isTP2Enabled ? "+\(String(format: "%.2f", lv.reward2Percent))%" : "Settings -> Rules", accent: palette.macroIceBlue)
                 }
             }
 

@@ -2,8 +2,9 @@ import SwiftUI
 import SignalEngine
 
 public enum StatsSubTab: String, CaseIterable, Identifiable {
-    case calibration = "System Calibration"
-    case journal = "Trade Journal"
+    case calibration = "Calibration"
+    case journal = "Journal"
+    case wallet = "Demo Wallet"
     public var id: String { rawValue }
 }
 
@@ -29,25 +30,22 @@ public struct StatsCalibrationTabView: View {
             filterConfig.minimumRiskReward > 0
         )
 
-        let headlineBreakdownSub = "\(headline.tp1Hits) TP1 · \(headline.tp2Hits) TP2 · \(headline.slHits) SL"
+        let headlineBreakdownSub = "\(headline.tp1Hits) Target 1 · \(headline.tp2Hits) Target 2 · \(headline.slHits) Stop loss"
         let customBreakdownSub: String = {
             if filterConfig.winDefinition == .tp2Only {
                 if custom.tp1PartialsExcluded > 0 {
-                    return "\(custom.tp2Hits) TP2 · \(custom.slHits) SL (\(custom.tp1PartialsExcluded) TP1 Partial)"
+                    return "\(custom.tp2Hits) Target 2 · \(custom.slHits) Stop loss (\(custom.tp1PartialsExcluded) Target 1 Partial)"
                 }
-                return "\(custom.tp2Hits) TP2 · \(custom.slHits) SL"
+                return "\(custom.tp2Hits) Target 2 · \(custom.slHits) Stop loss"
             }
-            return "\(custom.tp1Hits) TP1 · \(custom.tp2Hits) TP2 · \(custom.slHits) SL"
+            return "\(custom.tp1Hits) Target 1 · \(custom.tp2Hits) Target 2 · \(custom.slHits) Stop loss"
         }()
 
         NavigationStack {
             VStack(spacing: 0) {
                 Picker("Stats Mode", selection: $activeTab) {
                     ForEach(StatsSubTab.allCases) { tab in
-                        Text(tab == .journal && !coordinator.journalEntries.isEmpty
-                             ? "\(tab.rawValue) (\(coordinator.journalEntries.count))"
-                             : tab.rawValue)
-                        .tag(tab)
+                        Text(tab.rawValue).tag(tab)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -57,10 +55,19 @@ public struct StatsCalibrationTabView: View {
 
                 if activeTab == .journal {
                     TradeJournalView(coordinator: coordinator, palette: palette)
+                } else if activeTab == .wallet {
+                    DemoWalletView(coordinator: coordinator, palette: palette)
                 } else {
             ScrollView {
                 VStack(spacing: 14) {
-                    // 1. Fixed Un-Cherry-Pickable Headline Calibration KPI Grid (Strong · TP1/TP2 · Filled v1.4+)
+                    // 0. Three Origin Win-Rate Cards (Strong signals / Traps and filtered / News setups) + Score Strength Buckets
+                    WinRateBreakdownView(
+                        originStats: coordinator.originWinRates,
+                        strengthBuckets: coordinator.strengthBuckets,
+                        palette: palette
+                    )
+
+                    // 1. Fixed Un-Cherry-Pickable Headline Calibration KPI Grid (Strong · Target 1/2 · Filled v1.4+)
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                         headlineWinRateKPICard(
                             summary: headline,

@@ -153,4 +153,27 @@ public final class PreNewsNotificationScheduler {
         let req = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
         try? await center.add(req)
     }
+
+    /// Posts an immediate local notification when a paper Demo Wallet trade hits Stop loss, Target 1, or Target 2.
+    /// Uses `confluence.demo.close.*` identifier so it never counts against the 40-slot `confluence.prenews.*` budget.
+    public func postDemoPositionClosedNotification(
+        _ event: DemoPositionCloseEvent,
+        settings: PersistedSettingsPayload
+    ) async {
+        let content = UNMutableNotificationContent()
+        let id = "confluence.demo.close.\(event.position.id)"
+        content.title = event.title
+        content.body = event.body
+        content.userInfo = [
+            NotificationUserInfoKey.type: NotificationItemType.strongSignal.rawValue,
+            NotificationUserInfoKey.notificationID: id,
+            NotificationUserInfoKey.symbol: event.position.symbol
+        ]
+        if settings.pushNotificationSoundEnabled, let caf = settings.soundPreset.cafFileName {
+            content.sound = UNNotificationSound(named: UNNotificationSoundName(caf))
+        }
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let req = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
+        try? await center.add(req)
+    }
 }

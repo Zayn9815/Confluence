@@ -95,7 +95,19 @@ public final class MarketScannerCoordinator {
     public let livePriceService: LivePriceService
     public var demoWallet: DemoWallet = DemoWallet()
     public var manualTradeSuggestions: [String: ManualTradeLevelSuggestion] = [:]
+    public var originWinRates: [OriginWinRateStat] = WinRateBreakdown.byOrigin(records: [])
+    public var strengthBuckets: [StrengthBucketStat] = WinRateBreakdown.byStrengthBucket(records: [])
+    public var nextScheduledScanEpochSeconds: TimeInterval? = nil
     private var dismissedManualSuggestionIds: Set<String> = []
+    private var autoScanTask: Task<Void, Never>?
+
+    public var scanUsageEstimate: ScanUsageEstimate {
+        ScanSchedulePolicy.estimateDailyUsage(
+            symbolCount: max(1, settings.activeWatchlistAssets.count),
+            configuredMinutes: settings.payload.autoScanIntervalMinutes,
+            isLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled
+        )
+    }
 
     public init(settings: AppSettingsStore, store: ConfluenceDataStore) {
         self.settings = settings
@@ -143,7 +155,74 @@ public final class MarketScannerCoordinator {
         if isActive {
             syncLiveFeedModesFromSettings()
             acquireActivePositionsLiveFeed()
+            scanOnOpenIfDue()
+            restartAutoScanLoop()
+        } else {
+            stopAutoScanLoop()
         }
+    }
+
+    public func scanOnOpenIfDue(nowEpochSeconds: TimeInterval = Date().timeIntervalSince1970) {
+        guard !isScanning else { return }
+        let due = ScanSchedulePolicy.shouldScanOnOpen(
+            enabled: settings.payload.scanOnOpenEnabled,
+            lastScanEpochSeconds: lastScanDate?.timeIntervalSince1970,
+            nowEpochSeconds: nowEpochSeconds
+        )
+        guard due else { return }
+        Task { [weak self] in
+            await self?.scanAllMarkets(isBackground: false)
+        }
+    }
+
+    public func restartAutoScanLoop() {
+        stopAutoScanLoop()
+        let effectiveMinutes = ScanSchedulePolicy.effectiveIntervalMinutes(
+            configuredMinutes: settings.payload.autoScanIntervalMinutes,
+            isLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled
+        )
+        guard effectiveMinutes > 0 else {
+            nextScheduledScanEpochSeconds = nil
+            return
+        }
+        let now = Date().timeIntervalSince1970
+        nextScheduledScanEpochSeconds = ScanSchedulePolicy.nextScanEpochSeconds(
+            lastScanEpochSeconds: lastScanDate?.timeIntervalSince1970,
+            configuredMinutes: settings.payload.autoScanIntervalMinutes,
+            isLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            nowEpochSeconds: now
+        )
+        autoScanTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let minutes = ScanSchedulePolicy.effectiveIntervalMinutes(
+                    configuredMinutes: self.settings.payload.autoScanIntervalMinutes,
+                    isLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled
+                )
+                guard minutes > 0 else {
+                    self.nextScheduledScanEpochSeconds = nil
+                    return
+                }
+                let nextEpoch = ScanSchedulePolicy.nextScanEpochSeconds(
+                    lastScanEpochSeconds: self.lastScanDate?.timeIntervalSince1970,
+                    configuredMinutes: self.settings.payload.autoScanIntervalMinutes,
+                    isLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                    nowEpochSeconds: Date().timeIntervalSince1970
+                )
+                self.nextScheduledScanEpochSeconds = nextEpoch
+                let sleepSec = max(15.0, (nextEpoch ?? (Date().timeIntervalSince1970 + Double(minutes * 60))) - Date().timeIntervalSince1970)
+                try? await Task.sleep(for: .seconds(sleepSec))
+                if Task.isCancelled { return }
+                if !self.isScanning {
+                    await self.scanAllMarkets(isBackground: false)
+                }
+            }
+        }
+    }
+
+    public func stopAutoScanLoop() {
+        autoScanTask?.cancel()
+        autoScanTask = nil
     }
 
     public func acquireActivePositionsLiveFeed() {
@@ -169,6 +248,10 @@ public final class MarketScannerCoordinator {
         }
         for event in events {
             diagnosticLog.log(.info, category: .engine, message: "\(event.title) — \(event.body)")
+            let currentSettings = settings.payload
+            Task {
+                await PreNewsNotificationScheduler.shared.postDemoPositionClosedNotification(event, settings: currentSettings)
+            }
         }
 
         let alerts = TradeMonitor.evaluateManualJournalAlerts(
@@ -409,7 +492,8 @@ public final class MarketScannerCoordinator {
                 lifecycleStatus: rec.lifecycleStatus,
                 filledAtEpochSeconds: rec.filledAtEpochSeconds,
                 fillWindowBars: rec.fillWindowBars,
-                isLegacyImmediateFill: rec.isLegacyImmediateFill
+                isLegacyImmediateFill: rec.isLegacyImmediateFill,
+                origin: sig?.origin ?? rec.origin
             )
         }
         self.confidenceCalibrator = ConfidenceCalibrator.fit(records: enriched, filter: .headlineFixed)
@@ -417,6 +501,18 @@ public final class MarketScannerCoordinator {
         self.calibrationSummary = PassiveOutcomeEvaluator.summarize(records: enriched, filter: filter)
         self.strategyBreakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: enriched, filter: filter)
         self.outcomeBySignalId = Dictionary(uniqueKeysWithValues: enriched.map { ($0.signalId, $0) })
+        let trapSummaryItems = trapLogs.map {
+            TrapOutcomeSummaryItem(id: $0.trapKey, outcome: $0.postTrapOutcome)
+        }
+        self.originWinRates = WinRateBreakdown.byOrigin(
+            records: enriched,
+            trapOutcomes: trapSummaryItems,
+            filter: .headlineFixed
+        )
+        self.strengthBuckets = WinRateBreakdown.byStrengthBucket(
+            records: enriched,
+            filter: .headlineFixed
+        )
         recomputeJournalSummary()
     }
 
@@ -796,10 +892,12 @@ public final class MarketScannerCoordinator {
             }
         }
 
-        // 4. Passively evaluate prior signals strictly against sanitized closed candles (zero lookahead)
+        // 4. Passively evaluate prior signals (strong, traps, weak/filtered for stats, and news setups)
+        // strictly against sanitized closed candles (zero lookahead). Weak/filtered signals stay hidden from
+        // the feed and never fire notifications when "Show Weak / Filtered" is OFF.
         let existingOutcomesById = Dictionary(uniqueKeysWithValues: store.fetchOutcomeRecords().map { ($0.signalId, $0) })
-        let persisted = store.fetchSignals(limit: 200)
-        for prior in persisted where prior.category == .strongSignal || prior.category == .trapAlert {
+        let persisted = store.fetchSignals(limit: 250)
+        for prior in persisted where prior.levels != nil {
             if let existing = existingOutcomesById[prior.fingerprint], existing.isTerminal {
                 continue
             }
@@ -807,7 +905,6 @@ public final class MarketScannerCoordinator {
             let outcome = PassiveOutcomeEvaluator.evaluate(signal: prior, subsequentClosedCandles: freshBars)
             if outcome.status != .pending {
                 store.updateOutcome(outcome)
-                // Save merged pre-entry + post-entry/exit candles for instant Win/Loss Chart Replay
                 let mergedWindow = Self.buildReplayWindow(
                     preEntryCandles: prior.recentCandles,
                     subsequentCandles: freshBars,
@@ -822,6 +919,24 @@ public final class MarketScannerCoordinator {
                     candles: mergedWindow
                 )
             }
+        }
+
+        // Reconcile active Demo Wallet positions against closed bars (pessimistic same-bar SL-first)
+        var reconciledWallet = demoWallet
+        var closedDemoEvents: [DemoPositionCloseEvent] = []
+        for (sym, bars) in sanitizedClosedBySymbol {
+            let (nextW, evs) = TradeMonitor.reconcileDemoWallet(wallet: reconciledWallet, symbol: sym, closedCandles: bars)
+            reconciledWallet = nextW
+            closedDemoEvents.append(contentsOf: evs)
+        }
+        if reconciledWallet != demoWallet {
+            demoWallet = reconciledWallet
+            store.saveDemoWallet(reconciledWallet)
+            acquireActivePositionsLiveFeed()
+        }
+        for ev in closedDemoEvents {
+            diagnosticLog.log(.info, category: .engine, message: "\(ev.title) — \(ev.body)")
+            await PreNewsNotificationScheduler.shared.postDemoPositionClosedNotification(ev, settings: settings.payload)
         }
 
         self.cachedClosedCandlesBySymbol = sanitizedClosedBySymbol
@@ -978,7 +1093,7 @@ public final class MarketScannerCoordinator {
         let clockSkew = await http.estimatedClockSkewSeconds()
         let serverNow = Date().timeIntervalSince1970 + clockSkew
 
-        return NewsTradeAnalyzer.evaluateTrade(
+        let eval = NewsTradeAnalyzer.evaluateTrade(
             summary: summary,
             asset: asset,
             rawEntryCandles: entryCandles,
@@ -994,6 +1109,21 @@ public final class MarketScannerCoordinator {
             dataProvider: providerName,
             serverNowEpochSeconds: serverNow
         )
+
+        if eval.verdict == .actionableSetup, let sig = eval.signal, sig.levels != nil {
+            let newsSignal = sig.withOrigin(.news)
+            store.upsertSignal(newsSignal)
+            return NewsTradeEvaluation(
+                symbol: eval.symbol,
+                newsBias: eval.newsBias,
+                verdict: eval.verdict,
+                signal: newsSignal,
+                headlineSummary: eval.headlineSummary,
+                alignmentNotes: eval.alignmentNotes,
+                requiredConfirmations: eval.requiredConfirmations
+            )
+        }
+        return eval
     }
 
     // MARK: - Strategy Trade History & Trade Outcome Chart Replay
