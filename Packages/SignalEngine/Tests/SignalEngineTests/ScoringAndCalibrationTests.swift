@@ -243,7 +243,11 @@ final class ScoringAndCalibrationTests: XCTestCase {
             closeTimeEpochSeconds: base,
             open: 100.0, high: 100.5, low: 99.5, close: 100.0, volume: 1000, isClosed: true
         )
-        let emptyICT = ICTAnalysis(swings: [], structureBreaks: [], sweeps: [], fvgs: [], orderBlocks: [], equilibriumPrice: nil, currentStructureBias: .long, contributions: [])
+        let emptyICT = ICTAnalysis(
+            swings: [], structureBreaks: [], fvgs: [], orderBlocks: [], liquiditySweeps: [],
+            currentStructureBias: .long, equilibriumPrice: nil, dealingRangeHigh: nil,
+            dealingRangeLow: nil, dealingZone: nil, contributions: []
+        )
 
         let lv = TradeLevelCalculator.calculate(
             direction: .long,
@@ -358,9 +362,16 @@ final class ScoringAndCalibrationTests: XCTestCase {
         let asset = WatchlistDefaults.descriptor(for: "GBP/USD")!
         let bar = Candle(openTimeEpochSeconds: base - 3600, closeTimeEpochSeconds: base, open: 1.3090, high: 1.3105, low: 1.3088, close: 1.3100, volume: nil, isClosed: true)
         let fvgContrib = StrategyContribution(id: "ict_fvg", name: "Bullish FVG", group: .ictSmc, direction: .long, weight: 1.4, historicalWinRate: 0.65, detail: "FVG")
-        let ict = ICTAnalysis(swings: [], structureBreaks: [], sweeps: [], fvgs: [], orderBlocks: [], equilibriumPrice: 1.3110, currentStructureBias: .long, contributions: [fvgContrib])
+        let ict = ICTAnalysis(
+            swings: [], structureBreaks: [], fvgs: [], orderBlocks: [], liquiditySweeps: [],
+            currentStructureBias: .long, equilibriumPrice: 1.3110, dealingRangeHigh: nil,
+            dealingRangeLow: nil, dealingZone: nil, contributions: [fvgContrib]
+        )
         let mom = TrendMomentumSnapshot(ema20: 1.3095, ema50: 1.3090, ema200: 1.3070, rsi14: 58, atr14: 0.0012, rvol: nil, htfTrendDirection: .long, contributions: [])
-        let regime = RegimeAssessment(regime: .trending, riskState: .safe, adx14: 30, atrPercentile: 0.45, detail: "Trending")
+        let regime = RegimeAssessment(
+            regime: .trending, riskState: .safe, atrPercent: 0.35, atrZScore: 0.2,
+            efficiencyRatio: 0.65, rollingDrawdownPercent: 0.4, summary: "Trending"
+        )
 
         // Custom mode with 1 selected strategy (`ictFVG`) + Fixed % SL/TP + 60% confidence gate -> fires as Strong Signal
         var cfg = EngineConfig(
