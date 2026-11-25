@@ -63,6 +63,12 @@ public final class PreNewsNotificationScheduler {
             content.subtitle = "\(slot.event.name) in \(slot.leadMinutes)m"
             content.body = "High-impact \(slot.event.currency) release ahead. Expect spreads & stop-hunt whipsaws."
             content.categoryIdentifier = "PRE_NEWS_SHIELD"
+            content.userInfo = [
+                NotificationUserInfoKey.type: NotificationItemType.preNews.rawValue,
+                NotificationUserInfoKey.notificationID: slot.identifier,
+                NotificationUserInfoKey.eventID: slot.event.id,
+                NotificationUserInfoKey.symbol: slot.event.currency
+            ]
             if settings.pushNotificationSoundEnabled && settings.preNewsCountdownSoundEnabled {
                 content.sound = UNNotificationSound(named: UNNotificationSoundName("news_release_ping.caf"))
             }
@@ -83,6 +89,8 @@ public final class PreNewsNotificationScheduler {
 
     public func postSignalNotification(_ signal: TradeSignal, settings: PersistedSettingsPayload) async {
         let content = UNMutableNotificationContent()
+        let notifId = "confluence.signal.\(signal.fingerprint)"
+        let itemType: NotificationItemType = (signal.category == .trapAlert) ? .trapAlert : .strongSignal
         if signal.category == .trapAlert, let trap = signal.trapDirection {
             content.title = "\(trap.rawValue) · \(signal.symbol) (\(signal.timeframe.displayLabel))"
             content.body = signal.psychologyReport.whatHappened
@@ -98,21 +106,38 @@ public final class PreNewsNotificationScheduler {
                 content.sound = UNNotificationSound(named: UNNotificationSoundName(caf))
             }
         }
+        content.userInfo = [
+            NotificationUserInfoKey.type: itemType.rawValue,
+            NotificationUserInfoKey.notificationID: notifId,
+            NotificationUserInfoKey.signalFingerprint: signal.fingerprint,
+            NotificationUserInfoKey.symbol: signal.symbol,
+            NotificationUserInfoKey.market: signal.marketClass.rawValue,
+            NotificationUserInfoKey.category: signal.category.rawValue,
+            NotificationUserInfoKey.timeframe: signal.timeframe.rawValue,
+            NotificationUserInfoKey.direction: signal.direction.rawValue,
+            NotificationUserInfoKey.confidence: String(format: "%.1f", signal.confidencePercent)
+        ]
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-        let req = UNNotificationRequest(identifier: "confluence.signal.\(signal.fingerprint)", content: content, trigger: trigger)
+        let req = UNNotificationRequest(identifier: notifId, content: content, trigger: trigger)
         try? await center.add(req)
     }
 
     public func postMacroReleaseNotification(_ cluster: MacroClusterImpulse, settings: PersistedSettingsPayload) async {
         let content = UNMutableNotificationContent()
+        let id = "confluence.macro.\(cluster.currency).\(Int(cluster.clusterEpochSeconds))"
         content.title = "Macro Release · \(cluster.currency)"
         content.body = cluster.headlineStrip
+        content.userInfo = [
+            NotificationUserInfoKey.type: NotificationItemType.newsRelease.rawValue,
+            NotificationUserInfoKey.notificationID: id,
+            NotificationUserInfoKey.symbol: cluster.currency,
+            NotificationUserInfoKey.eventID: cluster.events.first?.id ?? id
+        ]
         if settings.pushNotificationSoundEnabled && settings.newsReleaseImpactSoundEnabled {
             content.sound = UNNotificationSound(named: UNNotificationSoundName("news_release_ping.caf"))
         }
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-        let id = "confluence.macro.\(cluster.currency).\(Int(cluster.clusterEpochSeconds))"
         let req = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
         try? await center.add(req)
     }

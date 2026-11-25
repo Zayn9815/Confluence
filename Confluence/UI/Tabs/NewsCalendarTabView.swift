@@ -52,12 +52,21 @@ public struct NewsCalendarTabView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await coordinator.scanAllMarkets() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+                    HStack(spacing: 10) {
+                        Button {
+                            Task { await coordinator.scanAllMarkets() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(coordinator.isScanning)
+
+                        NotificationBellButton(
+                            unreadCount: coordinator.unreadNotificationCount,
+                            palette: palette
+                        ) {
+                            coordinator.isNotificationInboxPresented = true
+                        }
                     }
-                    .disabled(coordinator.isScanning)
                 }
             }
         }

@@ -143,4 +143,72 @@ final class ScoringAndCalibrationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(report.calibration.brierScore, 0.0)
         XCTAssertLessThanOrEqual(report.calibration.brierScore, 1.0)
     }
+
+    func testStrategyPerformanceBreakdownAndFailureModes() {
+        let records: [SignalOutcomeRecord] = [
+            SignalOutcomeRecord(
+                signalId: "s1", symbol: "XAU/USD", marketClass: .metals, category: .strongSignal,
+                direction: .long, predictedProbability: 0.80, status: .hitTP2,
+                netReturnPercent: 3.0, rMultiple: 2.5, strategyIds: ["ict_sweep"],
+                hadMacroCatalyst: false, resolvedAtEpochSeconds: 1_760_010_000,
+                regime: .trending, killzone: .london, timeframe: .h1, dataProvider: "Twelve Data"
+            ),
+            SignalOutcomeRecord(
+                signalId: "s2", symbol: "XAU/USD", marketClass: .metals, category: .strongSignal,
+                direction: .long, predictedProbability: 0.80, status: .hitTP1,
+                netReturnPercent: 2.0, rMultiple: 1.5, strategyIds: ["ict_sweep"],
+                hadMacroCatalyst: false, resolvedAtEpochSeconds: 1_760_020_000,
+                regime: .trending, killzone: .newYork, timeframe: .h1, dataProvider: "Twelve Data"
+            ),
+            SignalOutcomeRecord(
+                signalId: "s3", symbol: "USD/JPY", marketClass: .forex, category: .strongSignal,
+                direction: .short, predictedProbability: 0.70, status: .hitSL,
+                netReturnPercent: -1.0, rMultiple: -1.0, strategyIds: ["ict_sweep"],
+                hadMacroCatalyst: false, resolvedAtEpochSeconds: 1_760_030_000,
+                regime: .highVol, killzone: .asia, timeframe: .h1, dataProvider: "biquote.io"
+            )
+        ]
+
+        let breakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: records)
+        XCTAssertEqual(breakdowns.count, 1)
+        let ict = breakdowns[0]
+        XCTAssertEqual(ict.strategyId, "ict_sweep")
+        XCTAssertEqual(ict.wins, 2)
+        XCTAssertEqual(ict.losses, 1)
+        XCTAssertEqual(ict.winRate, 2.0 / 3.0, accuracy: 1e-6)
+        XCTAssertTrue(ict.bestPairs.contains("XAU/USD"))
+        XCTAssertTrue(ict.worstPairs.contains("USD/JPY"))
+        XCTAssertTrue(ict.bestRegimes.contains(MarketRegime.trending.badgeLabel))
+        XCTAssertTrue(ict.worstRegimes.contains(MarketRegime.highVol.badgeLabel))
+    }
+
+    func testTrapRespectEvaluation() {
+        let base: TimeInterval = 1_760_000_000
+        let bullTrap = BehavioralTrap(
+            symbol: "BTC/USDT",
+            direction: .bullTrap,
+            triggerKind: .roundNumberCluster,
+            state: .active,
+            level: 70_000.0,
+            triggerBarIndex: 10,
+            triggerEpochSeconds: base,
+            description: "Round-number sweep failed"
+        )
+
+        let respectedBars = [
+            Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 69_900, high: 69_980, low: 69_200, close: 69_300, volume: 500, isClosed: true)
+        ]
+        XCTAssertEqual(
+            TrapEvaluationHelper.evaluateTrapRespect(trap: bullTrap, subsequentClosedCandles: respectedBars, atrReference: 400.0),
+            .respected
+        )
+
+        let invalidatedBars = [
+            Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 69_950, high: 70_500, low: 69_900, close: 70_350, volume: 900, isClosed: true)
+        ]
+        XCTAssertEqual(
+            TrapEvaluationHelper.evaluateTrapRespect(trap: bullTrap, subsequentClosedCandles: invalidatedBars, atrReference: 400.0),
+            .invalidated
+        )
+    }
 }

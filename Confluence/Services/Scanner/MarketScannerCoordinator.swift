@@ -32,8 +32,10 @@ public final class MarketScannerCoordinator {
 
     public var settings: AppSettingsStore
     public let store: ConfluenceDataStore
+    public let diagnosticLog: DiagnosticLogStore
 
     private let http: URLSessionHTTPClient
+    private let twelveData: TwelveDataAdapter
     private let cryptoRouter: CryptoOHLCVRouter
     private let tradFiRouter: TradFiOHLCVRouter
     private let okxPositioning: OKXPositioningAdapter
@@ -52,8 +54,18 @@ public final class MarketScannerCoordinator {
     public var fearGreed: FearGreedSnapshot?
     public var calibrationSummary: CalibrationSummary = PassiveOutcomeEvaluator.summarize(records: [])
     public var outcomeRecords: [SignalOutcomeRecord] = []
+    public var strategyBreakdowns: [StrategyDiagnosticBreakdown] = []
+    public var tradeLedger: [TradeLedgerSnapshot] = []
+    public var trapLogs: [TrapLogSnapshot] = []
 
-    // Scanning & Diagnostics state
+    // Notification Bell Inbox & Deep-Link Routing
+    public var notifications: [NotificationItemSnapshot] = []
+    public var unreadNotificationCount: Int = 0
+    public var isNotificationInboxPresented: Bool = false
+    public var pendingDeepLink: NavigationDeepLink?
+    public var highlightedSignalFingerprint: String?
+
+    // Scanning, Quota & Diagnostics state
     public var isScanning: Bool = false
     public var scanProgressByMarket: [MarketClass: String] = [:]
     public var lastScanDate: Date?
@@ -65,30 +77,113 @@ public final class MarketScannerCoordinator {
     public var feedHealthResults: [FeedHealthEntry] = []
     public var isCheckingHealth: Bool = false
     public var geminiDailyCallsUsed: Int = 0
+    public var twelveDataQuota: TwelveDataQuotaStatus?
+    public var twelveDataLocalDailyUsed: Int = 0
+    public var twelveDataTestMessage: String?
+    public var isTestingTwelveData: Bool = false
 
     public init(settings: AppSettingsStore, store: ConfluenceDataStore) {
         self.settings = settings
         self.store = store
+        self.diagnosticLog = DiagnosticLogStore(store: store)
         let client = URLSessionHTTPClient()
         self.http = client
-        self.cryptoRouter = CryptoOHLCVRouter(http: client)
-        self.tradFiRouter = TradFiOHLCVRouter(http: client)
+        let td = TwelveDataAdapter(http: client)
+        self.twelveData = td
+        self.cryptoRouter = CryptoOHLCVRouter(http: client, twelveData: td)
+        self.tradFiRouter = TradFiOHLCVRouter(http: client, twelveData: td)
         self.okxPositioning = OKXPositioningAdapter(http: client)
         self.cftcCOT = CFTCCOTAdapter(http: client)
         self.calendarService = EconomicCalendarService(http: client)
         self.newsService = BreakingNewsService(http: client)
         self.geminiClient = GeminiJudgeClient(http: client)
 
+        wireNotificationRouter()
         loadPersistedState()
+    }
+
+    private func wireNotificationRouter() {
+        let router = NotificationCenterRouter.shared
+        router.onForegroundSystemNotification = { [weak self] snapshot in
+            guard let self else { return }
+            self.recordNotification(snapshot)
+        }
+        router.onMarkReadById = { [weak self] id in
+            guard let self else { return }
+            self.markNotificationRead(id: id)
+        }
+        router.onDeepLink = { [weak self] link in
+            guard let self else { return }
+            self.pendingDeepLink = link
+        }
     }
 
     public func loadPersistedState() {
         self.signals = store.fetchSignals(limit: 150)
         self.outcomeRecords = store.fetchOutcomeRecords()
         self.calibrationSummary = PassiveOutcomeEvaluator.summarize(records: outcomeRecords)
+        self.strategyBreakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: outcomeRecords)
+        self.tradeLedger = store.fetchTradeLedger(limit: 300)
+        self.trapLogs = store.fetchTrapLogs(limit: 300)
+        reloadNotifications()
         Task {
             self.geminiDailyCallsUsed = await geminiClient.dailyUsageCount()
+            self.twelveDataLocalDailyUsed = await twelveData.localDailyUsage()
+            self.twelveDataQuota = await twelveData.cachedQuotaStatus()
             await refreshNotificationStatus()
+        }
+    }
+
+    // MARK: - Notification Bell Inbox
+
+    public func reloadNotifications() {
+        self.notifications = store.fetchNotifications()
+        self.unreadNotificationCount = store.unreadNotificationCount()
+        NotificationCenterRouter.shared.syncAppBadgeCount(unreadNotificationCount)
+    }
+
+    @discardableResult
+    public func recordNotification(_ item: NotificationItemSnapshot) -> Bool {
+        let inserted = store.saveNotification(item)
+        if inserted {
+            reloadNotifications()
+        }
+        return inserted
+    }
+
+    public func markNotificationRead(id: String, read: Bool = true) {
+        store.markNotificationRead(id: id, read: read)
+        reloadNotifications()
+    }
+
+    public func markAllNotificationsRead() {
+        store.markAllNotificationsRead()
+        reloadNotifications()
+    }
+
+    public func deleteNotification(id: String) {
+        store.deleteNotification(id: id)
+        reloadNotifications()
+    }
+
+    public func clearAllNotifications() {
+        store.clearAllNotifications()
+        reloadNotifications()
+    }
+
+    public func handleNotificationTap(_ item: NotificationItemSnapshot) {
+        markNotificationRead(id: item.id)
+        isNotificationInboxPresented = false
+        if let fp = item.signalFingerprint, !fp.isEmpty {
+            let category: SignalCategory? = (item.type == .trapAlert) ? .trapAlert : .strongSignal
+            pendingDeepLink = .signal(
+                fingerprint: fp,
+                category: category,
+                market: item.marketClass,
+                symbol: item.symbol
+            )
+        } else {
+            pendingDeepLink = .news(eventID: item.eventID)
         }
     }
 
@@ -128,6 +223,8 @@ public final class MarketScannerCoordinator {
         return nil
     }
 
+    // MARK: - Live Multi-Market Scan
+
     public func scanAllMarkets(isBackground: Bool = false) async {
         guard !isScanning else { return }
         isScanning = true
@@ -135,28 +232,79 @@ public final class MarketScannerCoordinator {
         newlyArrivedSignalIds = []
         scanProgressByMarket = [:]
 
+        let scanStart = Date()
+        diagnosticLog.log(
+            .info,
+            category: .scan,
+            message: "Started \(isBackground ? "background" : "foreground") scan (\(settings.activeWatchlistAssets.count) assets)."
+        )
+
         defer {
             isScanning = false
             lastScanDate = Date()
         }
 
         let assets = settings.activeWatchlistAssets
-        let twelveKey = await KeychainStore.shared.read(.twelveDataAPIKey)
+        let twelveKey = await KeychainStore.shared.readEffectiveTwelveDataKey()
         let finnhubKey = await KeychainStore.shared.read(.finnhubAPIKey)
         let geminiKey = await KeychainStore.shared.read(.geminiAPIKey)
 
-        // 1. Refresh Economic Calendar & Breaking News Radar concurrently
+        let logHook: ProviderLogHook = { [weak self] sev, cat, msg in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let severity = DiagnosticSeverity(rawValue: sev) ?? .info
+                let category = DiagnosticCategory(rawValue: cat) ?? .feed
+                self.diagnosticLog.log(severity, category: category, message: msg)
+            }
+        }
+
+        // 1. Refresh Economic Calendar & Breaking News Radar
         if settings.payload.economicCalendarEnabled {
             let calResult = await calendarService.fetchCalendarEvents(minimumImportance: .medium)
             self.calendarEvents = calResult.events
             self.calendarSourceLabel = calResult.sourceLabel
             let nowEpoch = Date().timeIntervalSince1970
-            self.calendarClusters = MacroSurpriseEngine.buildClusters(events: calResult.events, nowEpochSeconds: nowEpoch)
+            let clusters = MacroSurpriseEngine.buildClusters(events: calResult.events, nowEpochSeconds: nowEpoch)
+            self.calendarClusters = clusters
             self.scheduledPreNewsCount = await PreNewsNotificationScheduler.shared.reschedulePreNewsCountdowns(
                 events: calResult.events,
                 settings: settings.payload,
                 nowEpochSeconds: nowEpoch
             )
+
+            // Persist newly published macro release impulses into Bell Inbox (deduplicated by cluster ID)
+            for cluster in clusters where abs(nowEpoch - cluster.clusterEpochSeconds) <= 3600 {
+                let id = "confluence.macro.\(cluster.currency).\(Int(cluster.clusterEpochSeconds))"
+                let item = NotificationItemSnapshot(
+                    id: id,
+                    createdAt: Date(timeIntervalSince1970: cluster.clusterEpochSeconds),
+                    type: .newsRelease,
+                    title: "Macro Release · \(cluster.currency)",
+                    subtitle: cluster.headlineStrip,
+                    symbol: cluster.currency,
+                    eventID: cluster.events.first?.id ?? id,
+                    isRead: false
+                )
+                if recordNotification(item), isBackground {
+                    await PreNewsNotificationScheduler.shared.postMacroReleaseNotification(cluster, settings: settings.payload)
+                }
+            }
+
+            // Persist imminent exact-clock high-impact pre-news warning into Bell Inbox (deduplicated)
+            if let shield = imminentPreNewsEvent, shield.minutesUntilRelease <= 15 {
+                let id = "confluence.prenews.imminent.\(shield.event.id)"
+                let item = NotificationItemSnapshot(
+                    id: id,
+                    createdAt: Date(),
+                    type: .preNews,
+                    title: "Pre-News Volatility Shield · \(shield.event.currency)",
+                    subtitle: "\(shield.event.name) in \(max(1, shield.minutesUntilRelease))m",
+                    symbol: shield.event.currency,
+                    eventID: shield.event.id,
+                    isRead: false
+                )
+                recordNotification(item)
+            }
         }
 
         if settings.payload.breakingNewsRadarEnabled {
@@ -175,12 +323,13 @@ public final class MarketScannerCoordinator {
         let entryTF = settings.payload.entryTimeframe
         let htfTF = settings.payload.htfTimeframe
         let cryptoPrimary = settings.payload.cryptoPrimaryExchange
+        let tradFiPref = settings.payload.tradFiProviderPreference
         let positioningOn = settings.payload.positioningFeedsEnabled
 
-        // 3. Scan each enabled asset & update passive outcomes against latest closed candles
+        // 3. Scan each enabled asset & update passive outcomes against sanitized closed candles
         var scannedSignals: [TradeSignal] = []
         var scannedTraps: [BehavioralTrap] = []
-        var latestClosedCandlesBySymbol: [String: [Candle]] = [:]
+        var sanitizedClosedBySymbol: [String: [Candle]] = [:]
         var errors: [String] = []
 
         for market in MarketClass.allCases where settings.payload.enabledMarkets.contains(market) {
@@ -195,12 +344,38 @@ public final class MarketScannerCoordinator {
                     let htfRes: OHLCVFetchResult
 
                     if asset.marketClass == .crypto {
-                        async let eTask = cryptoRouter.fetchCandles(asset: asset, timeframe: entryTF, primary: cryptoPrimary)
-                        async let hTask = cryptoRouter.fetchCandles(asset: asset, timeframe: htfTF, primary: cryptoPrimary)
+                        async let eTask = cryptoRouter.fetchCandles(
+                            asset: asset,
+                            timeframe: entryTF,
+                            primary: cryptoPrimary,
+                            twelveDataKey: twelveKey,
+                            onLog: logHook
+                        )
+                        async let hTask = cryptoRouter.fetchCandles(
+                            asset: asset,
+                            timeframe: htfTF,
+                            primary: cryptoPrimary,
+                            twelveDataKey: twelveKey,
+                            onLog: logHook
+                        )
                         (entryRes, htfRes) = try await (eTask, hTask)
                     } else {
-                        async let eTask = tradFiRouter.fetchCandles(asset: asset, timeframe: entryTF, twelveDataKey: twelveKey)
-                        async let hTask = tradFiRouter.fetchCandles(asset: asset, timeframe: htfTF, twelveDataKey: twelveKey)
+                        async let eTask = tradFiRouter.fetchCandles(
+                            asset: asset,
+                            timeframe: entryTF,
+                            twelveDataKey: twelveKey,
+                            preference: tradFiPref,
+                            allowProxyForChart: false,
+                            onLog: logHook
+                        )
+                        async let hTask = tradFiRouter.fetchCandles(
+                            asset: asset,
+                            timeframe: htfTF,
+                            twelveDataKey: twelveKey,
+                            preference: tradFiPref,
+                            allowProxyForChart: false,
+                            onLog: logHook
+                        )
                         (entryRes, htfRes) = try await (eTask, hTask)
                     }
 
@@ -220,7 +395,25 @@ public final class MarketScannerCoordinator {
 
                     let clockSkew = await http.estimatedClockSkewSeconds()
                     let serverNow = Date().timeIntervalSince1970 + clockSkew
-                    latestClosedCandlesBySymbol[asset.symbol] = entryRes.candles
+
+                    let sanitizedEntry = CandleHygieneEngine.sanitize(
+                        rawCandles: entryRes.candles,
+                        symbol: asset.symbol,
+                        marketClass: asset.marketClass,
+                        timeframe: entryTF,
+                        providerName: entryRes.providerName,
+                        serverNowEpochSeconds: serverNow,
+                        clockSkewSeconds: clockSkew
+                    )
+                    sanitizedClosedBySymbol[asset.symbol] = sanitizedEntry.candles
+
+                    if sanitizedEntry.report.droppedOpenBars > 0 {
+                        diagnosticLog.log(
+                            .info,
+                            category: .engine,
+                            message: "\(asset.symbol) \(entryTF.displayLabel) (\(entryRes.providerName)): dropped \(sanitizedEntry.report.droppedOpenBars) forming bar(s)."
+                        )
+                    }
 
                     let output = SignalEngine.analyze(
                         asset: asset,
@@ -237,6 +430,23 @@ public final class MarketScannerCoordinator {
                         clockSkewSeconds: clockSkew
                     )
 
+                    // Record 4-stage Behavioral Traps + evaluate post-trap respect
+                    let atrApprox = sanitizedEntry.candles.suffix(14).map { $0.high - $0.low }.reduce(0, +) / Double(max(1, min(14, sanitizedEntry.candles.count)))
+                    let posContext = okxSnap.map { "OKX Funding \(String(format: "%.4f%%", $0.currentFundingRate * 100))" }
+                        ?? (!cotRecords.isEmpty ? "CFTC COT Active" : "Price-Action Only")
+                    for trap in output.activeTraps {
+                        let respect = TrapEvaluationHelper.evaluateTrapRespect(
+                            trap: trap,
+                            subsequentClosedCandles: sanitizedEntry.candles,
+                            atrReference: atrApprox
+                        )
+                        store.upsertTrapLog(
+                            trap: trap,
+                            timeframe: entryTF,
+                            positioningContext: posContext,
+                            postTrapOutcome: respect
+                        )
+                    }
                     scannedTraps.append(contentsOf: output.activeTraps)
 
                     if var signal = output.signal {
@@ -249,7 +459,7 @@ public final class MarketScannerCoordinator {
                             cooldownSeconds: engineConfig.signalCooldownSeconds
                         )
 
-                        // Optional Gemini 4 Hydrogen second-opinion ONLY on new Strong Signals or Trap Alerts when enabled
+                        // Optional Gemini AI second-opinion ONLY on new Strong Signals or Trap Alerts when enabled
                         if isNew,
                            settings.payload.geminiEnabled,
                            let key = geminiKey, !key.isEmpty,
@@ -257,10 +467,13 @@ public final class MarketScannerCoordinator {
                             if let judgment = try? await geminiClient.judgeSignal(
                                 signal,
                                 apiKey: key,
-                                dailyLimit: settings.payload.geminiDailyCallLimit
+                                dailyLimit: settings.payload.geminiDailyCallLimit,
+                                modelID: settings.payload.geminiModel.rawValue
                             ) {
                                 signal = signal.withAIJudgment(judgment, threshold: settings.payload.geminiConfirmationThreshold)
                                 self.geminiDailyCallsUsed = await geminiClient.dailyUsageCount()
+                            } else {
+                                diagnosticLog.log(.warn, category: .ai, message: "Gemini second-opinion skipped or failed for \(signal.symbol).")
                             }
                         }
 
@@ -273,7 +486,9 @@ public final class MarketScannerCoordinator {
                         }
                     }
                 } catch {
-                    errors.append("\(asset.symbol): \(error.localizedDescription)")
+                    let msg = "\(asset.symbol): \(error.localizedDescription)"
+                    errors.append(msg)
+                    diagnosticLog.log(.error, category: .feed, message: msg)
                 }
 
                 done += 1
@@ -281,10 +496,10 @@ public final class MarketScannerCoordinator {
             }
         }
 
-        // 4. Passively evaluate prior signals against newly fetched closed candles (zero lookahead)
+        // 4. Passively evaluate prior signals strictly against sanitized closed candles (zero lookahead)
         let persisted = store.fetchSignals(limit: 200)
         for prior in persisted where prior.category == .strongSignal || prior.category == .trapAlert {
-            guard let freshBars = latestClosedCandlesBySymbol[prior.symbol], !freshBars.isEmpty else { continue }
+            guard let freshBars = sanitizedClosedBySymbol[prior.symbol], !freshBars.isEmpty else { continue }
             let outcome = PassiveOutcomeEvaluator.evaluate(signal: prior, subsequentClosedCandles: freshBars)
             if outcome.status != .pending {
                 store.updateOutcome(outcome)
@@ -295,8 +510,133 @@ public final class MarketScannerCoordinator {
         self.signals = store.fetchSignals(limit: 150)
         self.outcomeRecords = store.fetchOutcomeRecords()
         self.calibrationSummary = PassiveOutcomeEvaluator.summarize(records: outcomeRecords)
+        self.strategyBreakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: outcomeRecords)
+        self.tradeLedger = store.fetchTradeLedger(limit: 300)
+        self.trapLogs = store.fetchTrapLogs(limit: 300)
+        self.twelveDataLocalDailyUsed = await twelveData.localDailyUsage()
+        self.twelveDataQuota = await twelveData.cachedQuotaStatus()
+
+        let elapsed = Date().timeIntervalSince(scanStart)
+        diagnosticLog.log(
+            errors.isEmpty ? .info : .warn,
+            category: .scan,
+            message: "Scan finished in \(String(format: "%.1fs", elapsed)) · \(scannedSignals.count) setups, \(scannedTraps.count) traps, \(errors.count) errors."
+        )
+
         if !errors.isEmpty {
             self.lastScanError = errors.prefix(2).joined(separator: " • ")
+        }
+    }
+
+    // MARK: - Live In-Chart Provider & Timeframe Switcher
+
+    public func fetchChartCandles(
+        symbol: String,
+        timeframe: Timeframe,
+        providerChoice: ChartProviderChoice
+    ) async throws -> OHLCVFetchResult {
+        guard let asset = WatchlistDefaults.descriptor(for: symbol) else {
+            throw NetworkAdapterError.noData("Unknown symbol \(symbol)")
+        }
+        let twelveKey = await KeychainStore.shared.readEffectiveTwelveDataKey()
+        let logHook: ProviderLogHook = { [weak self] sev, cat, msg in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.diagnosticLog.log(
+                    DiagnosticSeverity(rawValue: sev) ?? .info,
+                    category: DiagnosticCategory(rawValue: cat) ?? .feed,
+                    message: "[Chart] \(msg)"
+                )
+            }
+        }
+
+        let res: OHLCVFetchResult
+        if asset.marketClass == .crypto {
+            let pref: CryptoExchangePreference
+            switch providerChoice {
+            case .auto: pref = settings.payload.cryptoPrimaryExchange
+            case .binanceVision: pref = .binanceVision
+            case .okx: pref = .okx
+            case .kraken: pref = .kraken
+            case .twelveData: pref = .twelveData
+            default: pref = .auto
+            }
+            res = try await cryptoRouter.fetchCandles(
+                asset: asset,
+                timeframe: timeframe,
+                limit: 220,
+                primary: pref,
+                twelveDataKey: twelveKey,
+                onLog: logHook
+            )
+        } else {
+            let pref: TradFiProviderPreference
+            switch providerChoice {
+            case .auto: pref = settings.payload.tradFiProviderPreference
+            case .twelveData: pref = .twelveData
+            case .biquote: pref = .biquote
+            case .yahooFinance: pref = .yahooFinance
+            default: pref = .auto
+            }
+            res = try await tradFiRouter.fetchCandles(
+                asset: asset,
+                timeframe: timeframe,
+                twelveDataKey: twelveKey,
+                preference: pref,
+                allowProxyForChart: (providerChoice == .twelveData),
+                onLog: logHook
+            )
+        }
+
+        let clockSkew = await http.estimatedClockSkewSeconds()
+        let serverNow = Date().timeIntervalSince1970 + clockSkew
+        let sanitized = CandleHygieneEngine.sanitize(
+            rawCandles: res.candles,
+            symbol: asset.symbol,
+            marketClass: asset.marketClass,
+            timeframe: timeframe,
+            providerName: res.providerName,
+            serverNowEpochSeconds: serverNow,
+            clockSkewSeconds: clockSkew,
+            enforceMinimumBars: false
+        )
+
+        self.twelveDataLocalDailyUsed = await twelveData.localDailyUsage()
+        diagnosticLog.log(
+            .info,
+            category: .feed,
+            message: "Chart loaded \(symbol) \(timeframe.displayLabel) via \(res.providerName) (\(sanitized.candles.count) closed bars)."
+        )
+
+        return OHLCVFetchResult(
+            candles: sanitized.candles,
+            providerName: res.providerName,
+            latencyMs: res.latencyMs,
+            proxySymbolUsed: res.proxySymbolUsed
+        )
+    }
+
+    // MARK: - Twelve Data Quota Check & Feed Health
+
+    public func testTwelveDataKeyAndQuota() async {
+        guard !isTestingTwelveData else { return }
+        isTestingTwelveData = true
+        twelveDataTestMessage = nil
+        defer { isTestingTwelveData = false }
+
+        guard let key = await KeychainStore.shared.readEffectiveTwelveDataKey(), !key.isEmpty else {
+            twelveDataTestMessage = "No Twelve Data API key saved."
+            return
+        }
+        do {
+            let status = try await twelveData.testKeyAndQuota(apiKey: key)
+            self.twelveDataQuota = status
+            self.twelveDataLocalDailyUsed = await twelveData.localDailyUsage()
+            self.twelveDataTestMessage = "Connected · \(status.summaryText)"
+            diagnosticLog.log(.info, category: .feed, message: "Twelve Data /api_usage OK: \(status.summaryText)")
+        } catch {
+            self.twelveDataTestMessage = error.localizedDescription
+            diagnosticLog.log(.error, category: .feed, message: "Twelve Data /api_usage failed: \(error.localizedDescription)")
         }
     }
 
@@ -312,11 +652,17 @@ public final class MarketScannerCoordinator {
         var results: [FeedHealthEntry] = []
         let btc = WatchlistDefaults.descriptor(for: "BTC/USDT")!
         let gold = WatchlistDefaults.descriptor(for: "XAU/USD")!
-        let twelveKey = await KeychainStore.shared.read(.twelveDataAPIKey)
+        let twelveKey = await KeychainStore.shared.readEffectiveTwelveDataKey()
 
         // 1. Crypto OHLCV
         do {
-            let res = try await cryptoRouter.fetchCandles(asset: btc, timeframe: .h1, limit: 10, primary: settings.payload.cryptoPrimaryExchange)
+            let res = try await cryptoRouter.fetchCandles(
+                asset: btc,
+                timeframe: .h1,
+                limit: 10,
+                primary: settings.payload.cryptoPrimaryExchange,
+                twelveDataKey: twelveKey
+            )
             results.append(FeedHealthEntry(name: "Crypto OHLCV (\(res.providerName))", healthy: true, latencyMs: res.latencyMs, detail: "\(res.candles.count) bars"))
         } catch {
             results.append(FeedHealthEntry(name: "Crypto OHLCV", healthy: false, latencyMs: 0, detail: error.localizedDescription))
@@ -324,7 +670,12 @@ public final class MarketScannerCoordinator {
 
         // 2. FX / Gold / Equities OHLCV
         do {
-            let res = try await tradFiRouter.fetchCandles(asset: gold, timeframe: .h1, twelveDataKey: twelveKey)
+            let res = try await tradFiRouter.fetchCandles(
+                asset: gold,
+                timeframe: .h1,
+                twelveDataKey: twelveKey,
+                preference: settings.payload.tradFiProviderPreference
+            )
             results.append(FeedHealthEntry(name: "Metals/FX/Stocks (\(res.providerName))", healthy: true, latencyMs: res.latencyMs, detail: "\(res.candles.count) bars"))
         } catch {
             results.append(FeedHealthEntry(name: "Metals/FX/Stocks OHLCV", healthy: false, latencyMs: 0, detail: error.localizedDescription))
@@ -364,24 +715,44 @@ public final class MarketScannerCoordinator {
         results.append(FeedHealthEntry(name: "Breaking News & Sentiment", healthy: !news.items.isEmpty, latencyMs: newsMs, detail: "\(news.items.count) headlines"))
 
         self.feedHealthResults = results
+        diagnosticLog.log(.info, category: .feed, message: "Feed health check completed: \(results.filter(\.healthy).count)/\(results.count) healthy.")
     }
 
+    // MARK: - Arrival Feedback & Persistent Notification Sync
+
     private func dispatchArrivalFeedback(for signal: TradeSignal, isBackground: Bool) async {
+        let title: String
+        if signal.category == .trapAlert, let td = signal.trapDirection {
+            title = "\(td.rawValue) · \(signal.symbol)"
+        } else {
+            title = "\(signal.direction.rawValue.uppercased()) \(signal.symbol) · \(Int(signal.confidencePercent.rounded()))%"
+        }
+
+        let item = NotificationItemSnapshot(
+            id: "confluence.signal.\(signal.fingerprint)",
+            createdAt: Date(timeIntervalSince1970: signal.generatedAtEpochSeconds),
+            type: (signal.category == .trapAlert) ? .trapAlert : .strongSignal,
+            title: title,
+            subtitle: signal.psychologyReport.whatHappened,
+            symbol: signal.symbol,
+            marketClass: signal.marketClass,
+            timeframe: signal.timeframe,
+            direction: signal.direction,
+            confidence: signal.confidencePercent,
+            signalFingerprint: signal.fingerprint,
+            isRead: false
+        )
+        recordNotification(item)
+
         if isBackground {
             await PreNewsNotificationScheduler.shared.postSignalNotification(signal, settings: settings.payload)
         } else {
             let bannerKind: AlertBannerKind = (signal.category == .trapAlert) ? .trapAlert : .strongSignal(signal.direction)
-            let title: String
-            if signal.category == .trapAlert, let td = signal.trapDirection {
-                title = "\(td.rawValue) · \(signal.symbol)"
-            } else {
-                title = "\(signal.direction.rawValue.uppercased()) \(signal.symbol) · \(Int(signal.confidencePercent.rounded()))%"
-            }
             self.activeBanner = FloatingAlertBanner(
                 kind: bannerKind,
                 title: title,
                 subtitle: signal.psychologyReport.whatHappened,
-                targetSignalId: signal.id
+                targetSignalId: signal.fingerprint
             )
 
             let audioKind: AlertAudioKind = (signal.category == .trapAlert)

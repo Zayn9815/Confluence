@@ -60,7 +60,13 @@ jobs:
             DEVELOPMENT_TEAM=""
 
       - name: Build Unsigned Release iphoneos App
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
         run: |
+          if [ -n "$TWELVE_DATA_API_KEY" ]; then
+            /usr/libexec/PlistBuddy -c "Delete :ConfluenceDefaultTwelveDataKey" Confluence/Resources/Info.plist 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :ConfluenceDefaultTwelveDataKey string $TWELVE_DATA_API_KEY" Confluence/Resources/Info.plist
+          fi
           xcodebuild build \
             -project Confluence.xcodeproj \
             -scheme Confluence \

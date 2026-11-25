@@ -17,6 +17,7 @@ public struct SignalsTabView: View {
     @State private var selectedMarket: MarketClass? = nil // nil == All
     @State private var feedFilter: SignalFeedFilter = .strong
     @State private var chartSignal: TradeSignal?
+    @State private var preNewsTick: Date = Date()
 
     public init(coordinator: MarketScannerCoordinator, palette: ConfluencePalette) {
         self.coordinator = coordinator
@@ -37,6 +38,7 @@ public struct SignalsTabView: View {
     }
 
     public var body: some View {
+        let _ = preNewsTick // lightweight 30s refresh trigger only when an imminent pre-news event is visible
         NavigationStack {
             VStack(spacing: 0) {
                 // Sticky compact Pre-News Countdown Strip whenever a high-impact event is < 60m away
@@ -109,34 +111,49 @@ public struct SignalsTabView: View {
                 .padding(.vertical, 10)
                 .background(palette.canvas)
 
-                // Lazy Scroll Feed
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        if coordinator.isScanning && filteredSignals.isEmpty {
-                            ForEach(0..<3, id: \.self) { _ in
-                                skeletonCard
-                            }
-                        } else if filteredSignals.isEmpty {
-                            emptyStateView
-                        } else {
-                            ForEach(filteredSignals) { sig in
-                                SignalCardView(
-                                    signal: sig,
-                                    palette: palette,
-                                    density: coordinator.settings.payload.cardDensity,
-                                    showMiniChart: coordinator.settings.payload.showMiniCharts,
-                                    animateArrival: coordinator.settings.payload.arrivalAnimationsEnabled && coordinator.newlyArrivedSignalIds.contains(sig.id),
-                                    hapticsEnabled: coordinator.settings.payload.hapticsEnabled,
-                                    onOpenChart: { chartSignal = sig }
-                                )
+                // Lazy Scroll Feed with Deep-Link ScrollViewReader
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            if coordinator.isScanning && filteredSignals.isEmpty {
+                                ForEach(0..<3, id: \.self) { _ in
+                                    skeletonCard
+                                }
+                            } else if filteredSignals.isEmpty {
+                                emptyStateView
+                            } else {
+                                ForEach(filteredSignals) { sig in
+                                    let isHighlighted = (coordinator.highlightedSignalFingerprint == sig.fingerprint)
+                                    SignalCardView(
+                                        signal: sig,
+                                        palette: palette,
+                                        density: coordinator.settings.payload.cardDensity,
+                                        showMiniChart: coordinator.settings.payload.showMiniCharts,
+                                        animateArrival: coordinator.settings.payload.arrivalAnimationsEnabled && coordinator.newlyArrivedSignalIds.contains(sig.id),
+                                        hapticsEnabled: coordinator.settings.payload.hapticsEnabled,
+                                        onOpenChart: { chartSignal = sig }
+                                    )
+                                    .id(sig.fingerprint)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .strokeBorder(isHighlighted ? palette.champagneGold : Color.clear, lineWidth: isHighlighted ? 2.0 : 0)
+                                            .animation(.easeInOut(duration: 0.35), value: isHighlighted)
+                                    )
+                                }
                             }
                         }
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 24)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 24)
-                }
-                .refreshable {
-                    await coordinator.scanAllMarkets()
+                    .refreshable {
+                        await coordinator.scanAllMarkets()
+                    }
+                    .onAppear {
+                        handlePendingDeepLink(coordinator.pendingDeepLink, proxy: proxy)
+                    }
+                    .onChange(of: coordinator.pendingDeepLink) { _, link in
+                        handlePendingDeepLink(link, proxy: proxy)
+                    }
                 }
             }
             .background(palette.canvas)
@@ -151,22 +168,60 @@ public struct SignalsTabView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await coordinator.scanAllMarkets() }
-                    } label: {
-                        if coordinator.isScanning {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Label("Scan", systemImage: "waveform.path.ecg")
-                                .font(.caption.weight(.semibold))
+                    HStack(spacing: 10) {
+                        Button {
+                            Task { await coordinator.scanAllMarkets() }
+                        } label: {
+                            if coordinator.isScanning {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Label("Scan", systemImage: "waveform.path.ecg")
+                                    .font(.caption.weight(.semibold))
+                            }
+                        }
+                        .disabled(coordinator.isScanning)
+
+                        NotificationBellButton(
+                            unreadCount: coordinator.unreadNotificationCount,
+                            palette: palette
+                        ) {
+                            coordinator.isNotificationInboxPresented = true
                         }
                     }
-                    .disabled(coordinator.isScanning)
                 }
             }
             .sheet(item: $chartSignal) { sig in
-                FullScreenChartSheet(signal: sig, palette: palette)
+                FullScreenChartSheet(signal: sig, palette: palette, coordinator: coordinator)
+            }
+            .task(id: coordinator.imminentPreNewsEvent?.event.id) {
+                guard coordinator.imminentPreNewsEvent != nil else { return }
+                while !Task.isCancelled && coordinator.imminentPreNewsEvent != nil {
+                    try? await Task.sleep(for: .seconds(30))
+                    preNewsTick = Date()
+                }
+            }
+        }
+    }
+
+    private func handlePendingDeepLink(_ link: NavigationDeepLink?, proxy: ScrollViewProxy) {
+        guard case let .signal(fp, category, _, _) = link else { return }
+        selectedMarket = nil
+        if category == .trapAlert {
+            feedFilter = .traps
+        } else {
+            feedFilter = .strong
+        }
+        coordinator.highlightedSignalFingerprint = fp
+        coordinator.pendingDeepLink = nil
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            withAnimation(.easeInOut(duration: 0.35)) {
+                proxy.scrollTo(fp, anchor: .top)
+            }
+            try? await Task.sleep(for: .seconds(2.2))
+            if coordinator.highlightedSignalFingerprint == fp {
+                coordinator.highlightedSignalFingerprint = nil
             }
         }
     }

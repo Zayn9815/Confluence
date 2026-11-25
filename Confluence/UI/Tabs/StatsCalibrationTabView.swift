@@ -110,6 +110,16 @@ public struct StatsCalibrationTabView: View {
             .background(palette.canvas)
             .navigationTitle("Calibration Stats")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NotificationBellButton(
+                        unreadCount: coordinator.unreadNotificationCount,
+                        palette: palette
+                    ) {
+                        coordinator.isNotificationInboxPresented = true
+                    }
+                }
+            }
         }
     }
 

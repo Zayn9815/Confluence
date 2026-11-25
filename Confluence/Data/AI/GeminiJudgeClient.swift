@@ -6,6 +6,30 @@ import SignalEngine
 /// - Uses `thinkingLevel: "LOW"` and `maxOutputTokens: 2048` (thought tokens count toward maxOutputTokens).
 /// - Enforces strict JSON schema and user-configured daily call limit persisted locally.
 /// - Never overrides deterministic code risk/confluence gates.
+public enum GeminiModelOption: String, Codable, Sendable, CaseIterable, Identifiable {
+    case hydrogen = "gemini-4-hydrogen"
+    case neon = "gemini-4-neon"
+    case carbon = "gemini-4-carbon"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .hydrogen: return "Gemini 4 Hydrogen (Fast · Default)"
+        case .neon: return "Gemini 4 Neon (Balanced)"
+        case .carbon: return "Gemini 4 Carbon (Deep)"
+        }
+    }
+
+    public var shortLabel: String {
+        switch self {
+        case .hydrogen: return "Gemini 4 Hydrogen"
+        case .neon: return "Gemini 4 Neon"
+        case .carbon: return "Gemini 4 Carbon"
+        }
+    }
+}
+
 public actor GeminiJudgeClient {
     public static let modelID = "gemini-4-hydrogen"
     private let http: any HTTPTransport
@@ -21,15 +45,16 @@ public actor GeminiJudgeClient {
     public func judgeSignal(
         _ signal: TradeSignal,
         apiKey: String,
-        dailyLimit: Int
+        dailyLimit: Int,
+        modelID: String = GeminiJudgeClient.modelID
     ) async throws -> ReflexJudgment {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanKey.isEmpty else {
-            throw NetworkAdapterError.missingAPIKey("Gemini 4 Hydrogen")
+            throw NetworkAdapterError.missingAPIKey("Gemini")
         }
         let used = dailyUsageCount()
         guard used < dailyLimit else {
-            throw NetworkAdapterError.dailyLimitReached("Gemini 4 Hydrogen (\(used)/\(dailyLimit))")
+            throw NetworkAdapterError.dailyLimitReached("Gemini (\(used)/\(dailyLimit))")
         }
 
         let compactSnapshot = SignalEngine.buildCompactReflexPrompt(for: signal)
@@ -69,7 +94,7 @@ public actor GeminiJudgeClient {
             ]
         ]
 
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(Self.modelID):generateContent")!
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelID):generateContent")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -90,11 +115,12 @@ public actor GeminiJudgeClient {
         headline: String,
         affectedAssets: [String],
         apiKey: String,
-        dailyLimit: Int
+        dailyLimit: Int,
+        modelID: String = GeminiJudgeClient.modelID
     ) async throws -> String {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanKey.isEmpty else { throw NetworkAdapterError.missingAPIKey("Gemini 4 Hydrogen") }
-        guard dailyUsageCount() < dailyLimit else { throw NetworkAdapterError.dailyLimitReached("Gemini 4 Hydrogen") }
+        guard !cleanKey.isEmpty else { throw NetworkAdapterError.missingAPIKey("Gemini") }
+        guard dailyUsageCount() < dailyLimit else { throw NetworkAdapterError.dailyLimitReached("Gemini") }
 
         let prompt = "In 1 crisp sentence (<=22 words), state immediate market impact and whipsaw risk for \(affectedAssets.joined(separator: ", ")): \"\(headline)\""
         let body: [String: Any] = [
@@ -105,7 +131,7 @@ public actor GeminiJudgeClient {
                 "thinkingConfig": ["thinkingLevel": "LOW"]
             ]
         ]
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(Self.modelID):generateContent")!
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelID):generateContent")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

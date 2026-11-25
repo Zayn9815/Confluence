@@ -55,6 +55,20 @@ public struct ConfluenceRootView: View {
         }
         .tint(palette.champagneGold)
         .preferredColorScheme(coordinator.settings.payload.appearanceMode.colorScheme)
+        .sheet(isPresented: $coordinator.isNotificationInboxPresented) {
+            NotificationInboxSheet(coordinator: coordinator, palette: palette)
+        }
+        .onChange(of: coordinator.pendingDeepLink) { _, link in
+            guard let link else { return }
+            switch link {
+            case .signal(let fingerprint, _, _, _):
+                selectedTab = 0
+                coordinator.highlightedSignalFingerprint = fingerprint
+            case .news:
+                selectedTab = 1
+                coordinator.pendingDeepLink = nil
+            }
+        }
         .popup(isPresented: isBannerPresented) {
             if let banner = coordinator.activeBanner {
                 floatingBannerView(banner)
@@ -80,7 +94,13 @@ public struct ConfluenceRootView: View {
         }()
 
         return Button {
-            selectedTab = (banner.kind == .macroRelease) ? 1 : 0
+            if let fp = banner.targetSignalId {
+                let category: SignalCategory = (banner.kind == .trapAlert) ? .trapAlert : .strongSignal
+                coordinator.pendingDeepLink = .signal(fingerprint: fp, category: category, market: nil, symbol: nil)
+                selectedTab = 0
+            } else {
+                selectedTab = (banner.kind == .macroRelease) ? 1 : 0
+            }
             coordinator.activeBanner = nil
         } label: {
             HStack(spacing: 10) {

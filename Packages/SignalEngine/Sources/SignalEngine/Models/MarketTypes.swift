@@ -186,6 +186,7 @@ public struct AssetDescriptor: Codable, Sendable, Equatable, Hashable, Identifia
     public let yahooSymbol: String?
     public let biquoteSymbol: String?
     public let twelveDataSymbol: String?
+    public let twelveDataProxySymbol: String?
     public let cftcContractCode: String?
     public let cftcDataset: String?
     public let roundNumberStep: Double
@@ -203,6 +204,7 @@ public struct AssetDescriptor: Codable, Sendable, Equatable, Hashable, Identifia
         yahooSymbol: String? = nil,
         biquoteSymbol: String? = nil,
         twelveDataSymbol: String? = nil,
+        twelveDataProxySymbol: String? = nil,
         cftcContractCode: String? = nil,
         cftcDataset: String? = nil,
         roundNumberStep: Double,
@@ -219,6 +221,7 @@ public struct AssetDescriptor: Codable, Sendable, Equatable, Hashable, Identifia
         self.yahooSymbol = yahooSymbol
         self.biquoteSymbol = biquoteSymbol
         self.twelveDataSymbol = twelveDataSymbol
+        self.twelveDataProxySymbol = twelveDataProxySymbol
         self.cftcContractCode = cftcContractCode
         self.cftcDataset = cftcDataset
         self.roundNumberStep = roundNumberStep
@@ -351,7 +354,7 @@ public enum WatchlistDefaults {
             roundNumberStep: 10.0,
             priceDecimals: 2
         ),
-        // Indices
+        // Indices & Index ETFs
         AssetDescriptor(
             symbol: "US500",
             displayName: "S&P 500 Index",
@@ -361,6 +364,7 @@ public enum WatchlistDefaults {
             yahooSymbol: "^GSPC",
             biquoteSymbol: "US500",
             twelveDataSymbol: "SPX",
+            twelveDataProxySymbol: "SPY",
             cftcContractCode: "13874A",
             cftcDataset: "gpe5-46if",
             roundNumberStep: 50.0,
@@ -375,9 +379,38 @@ public enum WatchlistDefaults {
             yahooSymbol: "^NDX",
             biquoteSymbol: "USTEC",
             twelveDataSymbol: "NDX",
+            twelveDataProxySymbol: "QQQ",
             cftcContractCode: "209742",
             cftcDataset: "gpe5-46if",
             roundNumberStep: 100.0,
+            priceDecimals: 2
+        ),
+        AssetDescriptor(
+            symbol: "SPY",
+            displayName: "SPDR S&P 500 ETF",
+            marketClass: .indices,
+            baseCurrency: "SPY",
+            quoteCurrency: "USD",
+            yahooSymbol: "SPY",
+            biquoteSymbol: nil,
+            twelveDataSymbol: "SPY",
+            cftcContractCode: "13874A",
+            cftcDataset: "gpe5-46if",
+            roundNumberStep: 5.0,
+            priceDecimals: 2
+        ),
+        AssetDescriptor(
+            symbol: "QQQ",
+            displayName: "Invesco Nasdaq 100 ETF",
+            marketClass: .indices,
+            baseCurrency: "QQQ",
+            quoteCurrency: "USD",
+            yahooSymbol: "QQQ",
+            biquoteSymbol: nil,
+            twelveDataSymbol: "QQQ",
+            cftcContractCode: "209742",
+            cftcDataset: "gpe5-46if",
+            roundNumberStep: 5.0,
             priceDecimals: 2
         ),
         // US Stocks

@@ -214,6 +214,16 @@ public struct MarketsScannerTabView: View {
             .background(palette.canvas)
             .navigationTitle("Markets & Scanner")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NotificationBellButton(
+                        unreadCount: coordinator.unreadNotificationCount,
+                        palette: palette
+                    ) {
+                        coordinator.isNotificationInboxPresented = true
+                    }
+                }
+            }
         }
     }
 }

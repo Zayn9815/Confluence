@@ -6,6 +6,7 @@ public struct ConfluenceApp: App {
     @State private var coordinator: MarketScannerCoordinator
 
     public init() {
+        NotificationCenterRouter.shared.registerAsDelegate()
         let settings = AppSettingsStore()
         let store = ConfluenceDataStore()
         let coord = MarketScannerCoordinator(settings: settings, store: store)

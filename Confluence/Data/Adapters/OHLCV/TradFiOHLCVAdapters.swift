@@ -1,47 +1,159 @@
 import Foundation
 import SignalEngine
 
+public enum TradFiProviderPreference: String, Codable, Sendable, CaseIterable, Identifiable {
+    case auto = "Auto (Recommended)"
+    case twelveData = "Twelve Data"
+    case biquote = "biquote.io"
+    case yahooFinance = "Yahoo Finance"
+
+    public var id: String { rawValue }
+
+    public var shortLabel: String {
+        switch self {
+        case .auto: return "Auto"
+        case .twelveData: return "Twelve Data"
+        case .biquote: return "biquote.io"
+        case .yahooFinance: return "Yahoo Finance"
+        }
+    }
+}
+
+public enum ChartProviderChoice: String, Codable, Sendable, CaseIterable, Identifiable {
+    case auto = "Auto"
+    case twelveData = "Twelve Data"
+    case biquote = "biquote.io"
+    case yahooFinance = "Yahoo Finance"
+    case binanceVision = "Binance Vision"
+    case okx = "OKX"
+    case kraken = "Kraken"
+
+    public var id: String { rawValue }
+
+    public static func choices(for marketClass: MarketClass) -> [ChartProviderChoice] {
+        if marketClass == .crypto {
+            return [.auto, .binanceVision, .okx, .kraken, .twelveData]
+        }
+        return [.auto, .twelveData, .biquote, .yahooFinance]
+    }
+}
+
+private actor BiquoteAvailabilityCache {
+    private var unsupportedSymbols: Set<String> = []
+
+    func isUnsupported(_ symbol: String) -> Bool {
+        unsupportedSymbols.contains(symbol.uppercased())
+    }
+
+    func markUnsupported(_ symbol: String) {
+        unsupportedSymbols.insert(symbol.uppercased())
+    }
+}
+
 public struct TradFiOHLCVRouter: Sendable {
     private let http: any HTTPTransport
-    private let twelveDataPacer: ProviderRatePacer
+    private let twelveData: TwelveDataAdapter
+    private let biquoteCache = BiquoteAvailabilityCache()
 
     public init(
         http: any HTTPTransport,
-        twelveDataPacer: ProviderRatePacer = ProviderRatePacer(providerKey: "twelvedata", maxPerMinute: 7, maxPerUTCDay: 760)
+        twelveData: TwelveDataAdapter? = nil
     ) {
         self.http = http
-        self.twelveDataPacer = twelveDataPacer
+        self.twelveData = twelveData ?? TwelveDataAdapter(http: http)
     }
 
     public func fetchCandles(
         asset: AssetDescriptor,
         timeframe: Timeframe,
-        twelveDataKey: String?
+        twelveDataKey: String?,
+        preference: TradFiProviderPreference = .auto,
+        allowProxyForChart: Bool = false,
+        onLog: ProviderLogHook? = nil
     ) async throws -> OHLCVFetchResult {
+        let trimmedKey = twelveDataKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasTwelveKey = !(trimmedKey ?? "").isEmpty
+
+        let order: [TradFiProviderPreference]
+        switch preference {
+        case .auto:
+            // Default Auto Failover:
+            // 1. Twelve Data (if key saved & within daily quota)
+            // 2. biquote.io (default keyless primary)
+            // 3. Yahoo Finance (automatic fallback for unsupported biquote pairs like US equities)
+            order = hasTwelveKey ? [.twelveData, .biquote, .yahooFinance] : [.biquote, .yahooFinance]
+        case .twelveData:
+            order = [.twelveData, .biquote, .yahooFinance]
+        case .biquote:
+            order = [.biquote, .yahooFinance, .twelveData]
+        case .yahooFinance:
+            order = [.yahooFinance, .biquote, .twelveData]
+        }
+
         var errors: [String] = []
+        var firstFailedProvider: String?
 
-        // 1. Optional Twelve Data REST adapter when user supplies their free key (paced at <=7/min, <=760/day)
-        if let key = twelveDataKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
+        for provider in order {
             do {
-                return try await fetchTwelveData(asset: asset, timeframe: timeframe, apiKey: key)
-            } catch {
-                errors.append("Twelve Data: \(error.localizedDescription)")
-            }
-        }
+                switch provider {
+                case .auto:
+                    continue
+                case .twelveData:
+                    guard let key = trimmedKey, !key.isEmpty else {
+                        if preference == .twelveData {
+                            throw NetworkAdapterError.missingAPIKey("Twelve Data")
+                        }
+                        continue
+                    }
+                    let res = try await twelveData.fetchCandles(
+                        asset: asset,
+                        timeframe: timeframe,
+                        apiKey: key,
+                        allowProxySymbol: allowProxyForChart
+                    )
+                    if let prior = firstFailedProvider {
+                        onLog?("WARN", "Fallback", "\(asset.symbol) \(timeframe.displayLabel): \(prior) unavailable -> \(res.providerName)")
+                    }
+                    return res
 
-        // 2. Keyless Yahoo Finance v8/finance/chart (minimal User-Agent: Mozilla/5.0 + query1->query2 + causal 1h->4h resample)
-        do {
-            return try await fetchYahooFinance(asset: asset, timeframe: timeframe)
-        } catch {
-            errors.append("Yahoo Finance: \(error.localizedDescription)")
-        }
+                case .biquote:
+                    guard let bqSym = asset.biquoteSymbol else {
+                        if firstFailedProvider == nil { firstFailedProvider = "biquote.io (no symbol)" }
+                        continue
+                    }
+                    if await biquoteCache.isUnsupported(bqSym) {
+                        if firstFailedProvider == nil { firstFailedProvider = "biquote.io (cached unsupported)" }
+                        continue
+                    }
+                    do {
+                        let res = try await fetchBiquoteOHLC(asset: asset, timeframe: timeframe)
+                        if res.candles.isEmpty {
+                            await biquoteCache.markUnsupported(bqSym)
+                            throw NetworkAdapterError.decodingFailed("biquote.io returned 0 bars for \(bqSym)")
+                        }
+                        if let prior = firstFailedProvider {
+                            onLog?("WARN", "Fallback", "\(asset.symbol) \(timeframe.displayLabel): \(prior) -> biquote.io")
+                        }
+                        return res
+                    } catch NetworkAdapterError.httpStatus(let code, _) where code == 404 {
+                        await biquoteCache.markUnsupported(bqSym)
+                        throw NetworkAdapterError.httpStatus(404, "biquote.io unsupported symbol \(bqSym)")
+                    }
 
-        // 3. Keyless biquote.io OHLC fallback (strong for EURUSD, GBPUSD, USDJPY, XAUUSD, US500)
-        if asset.biquoteSymbol != nil {
-            do {
-                return try await fetchBiquoteOHLC(asset: asset, timeframe: timeframe)
+                case .yahooFinance:
+                    let res = try await fetchYahooFinance(asset: asset, timeframe: timeframe)
+                    if let prior = firstFailedProvider {
+                        onLog?("WARN", "Fallback", "\(asset.symbol) \(timeframe.displayLabel): \(prior) -> Yahoo Finance")
+                    }
+                    return res
+                }
             } catch {
-                errors.append("biquote OHLC: \(error.localizedDescription)")
+                if firstFailedProvider == nil {
+                    firstFailedProvider = provider.shortLabel
+                }
+                let reason = "\(provider.shortLabel): \(error.localizedDescription)"
+                errors.append(reason)
+                onLog?("WARN", "Feed", "\(asset.symbol) \(timeframe.displayLabel) \(reason)")
             }
         }
 
@@ -77,20 +189,20 @@ public struct TradFiOHLCVRouter: Sendable {
             let urlStr = "https://\(host)/v8/finance/chart/\(encoded)?interval=\(yahooInterval)&range=\(yahooRange)&includePrePost=false"
             guard let url = URL(string: urlStr) else { continue }
             var req = URLRequest(url: url)
-            // Verified Oct 2026 fix: minimal Mozilla/5.0 avoids Yahoo ATS desktop-UA 429 false blocks
             req.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
             req.setValue("application/json", forHTTPHeaderField: "Accept")
 
             do {
                 let res = try await http.send(req, maxRetries: 1)
+                let serverNow = (res.serverDate ?? Date()).timeIntervalSince1970
                 let candles = try Self.parseYahooChartJSON(
                     data: res.data,
                     timeframe: needs4HResample ? .h1 : timeframe,
                     marketClass: asset.marketClass,
-                    serverNowEpochSeconds: (res.serverDate ?? Date()).timeIntervalSince1970
+                    serverNowEpochSeconds: serverNow
                 )
                 let finalBars = needs4HResample
-                    ? CandleHygieneEngine.resample1HTo4H(hourlyCandles: candles, serverNowEpochSeconds: (res.serverDate ?? Date()).timeIntervalSince1970)
+                    ? CandleHygieneEngine.resample1HTo4H(hourlyCandles: candles, serverNowEpochSeconds: serverNow)
                     : candles
                 return OHLCVFetchResult(candles: finalBars, providerName: "Yahoo Finance", latencyMs: res.latencyMs)
             } catch {
@@ -204,80 +316,5 @@ public struct TradFiOHLCVRouter: Sendable {
             ))
         }
         return OHLCVFetchResult(candles: out.sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }, providerName: "biquote.io", latencyMs: res.latencyMs)
-    }
-
-    private func fetchTwelveData(asset: AssetDescriptor, timeframe: Timeframe, apiKey: String) async throws -> OHLCVFetchResult {
-        guard let sym = asset.twelveDataSymbol else {
-            throw NetworkAdapterError.invalidURL("Missing Twelve Data symbol")
-        }
-        try await twelveDataPacer.acquireSlot()
-
-        let interval: String
-        switch timeframe {
-        case .m15: interval = "15min"
-        case .h1: interval = "1h"
-        case .h4: interval = "4h"
-        case .d1: interval = "1day"
-        }
-
-        var comps = URLComponents(string: "https://api.twelvedata.com/time_series")!
-        comps.queryItems = [
-            URLQueryItem(name: "symbol", value: sym),
-            URLQueryItem(name: "interval", value: interval),
-            URLQueryItem(name: "outputsize", value: "200"),
-            URLQueryItem(name: "timezone", value: "UTC"),
-            URLQueryItem(name: "apikey", value: apiKey)
-        ]
-        guard let url = comps.url else { throw NetworkAdapterError.invalidURL("Twelve Data") }
-
-        let res = try await http.send(URLRequest(url: url), maxRetries: 1)
-        struct TDResp: Decodable {
-            struct Bar: Decodable {
-                let datetime: String
-                let open: String
-                let high: String
-                let low: String
-                let close: String
-                let volume: String?
-            }
-            let status: String?
-            let message: String?
-            let values: [Bar]?
-        }
-        let decoded = try JSONDecoder().decode(TDResp.self, from: res.data)
-        guard let values = decoded.values else {
-            throw NetworkAdapterError.decodingFailed(decoded.message ?? "Twelve Data returned no values")
-        }
-
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(secondsFromGMT: 0)
-        df.dateFormat = "yyyy-MM-dd HH:mm:ss"
-
-        let dfDate = DateFormatter()
-        dfDate.locale = Locale(identifier: "en_US_POSIX")
-        dfDate.timeZone = TimeZone(secondsFromGMT: 0)
-        dfDate.dateFormat = "yyyy-MM-dd"
-
-        let nowSec = (res.serverDate ?? Date()).timeIntervalSince1970
-        var out: [Candle] = []
-        for v in values.reversed() {
-            guard let date = df.date(from: v.datetime) ?? dfDate.date(from: v.datetime),
-                  let o = Double(v.open), let h = Double(v.high),
-                  let l = Double(v.low), let c = Double(v.close)
-            else { continue }
-            let openSec = date.timeIntervalSince1970
-            let closeSec = openSec + timeframe.seconds
-            let volRaw = v.volume.flatMap(Double.init)
-            let cleanVol = (asset.marketClass.isOTCVolumeUnavailable && (volRaw ?? 0) <= 0) ? nil : volRaw
-            out.append(Candle(
-                openTimeEpochSeconds: openSec,
-                closeTimeEpochSeconds: closeSec,
-                open: o, high: h, low: l, close: c,
-                volume: cleanVol,
-                isClosed: closeSec <= nowSec
-            ))
-        }
-        return OHLCVFetchResult(candles: out, providerName: "Twelve Data", latencyMs: res.latencyMs)
     }
 }

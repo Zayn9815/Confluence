@@ -2,58 +2,95 @@ import Foundation
 import SignalEngine
 
 public enum CryptoExchangePreference: String, Codable, Sendable, CaseIterable, Identifiable {
+    case auto = "Auto (Binance -> OKX -> Kraken)"
     case binanceVision = "Binance Vision"
     case okx = "OKX"
     case kraken = "Kraken"
+    case twelveData = "Twelve Data"
 
     public var id: String { rawValue }
+
+    public var shortLabel: String {
+        switch self {
+        case .auto: return "Auto"
+        case .binanceVision: return "Binance"
+        case .okx: return "OKX"
+        case .kraken: return "Kraken"
+        case .twelveData: return "Twelve Data"
+        }
+    }
 }
 
 public struct OHLCVFetchResult: Sendable {
     public let candles: [Candle]
     public let providerName: String
     public let latencyMs: Double
+    public let proxySymbolUsed: String?
 
-    public init(candles: [Candle], providerName: String, latencyMs: Double) {
+    public init(candles: [Candle], providerName: String, latencyMs: Double, proxySymbolUsed: String? = nil) {
         self.candles = candles
         self.providerName = providerName
         self.latencyMs = latencyMs
+        self.proxySymbolUsed = proxySymbolUsed
     }
 }
 
+public typealias ProviderLogHook = @Sendable (_ severity: String, _ category: String, _ message: String) -> Void
+
 public struct CryptoOHLCVRouter: Sendable {
     private let http: any HTTPTransport
+    private let twelveData: TwelveDataAdapter
 
-    public init(http: any HTTPTransport) {
+    public init(http: any HTTPTransport, twelveData: TwelveDataAdapter? = nil) {
         self.http = http
+        self.twelveData = twelveData ?? TwelveDataAdapter(http: http)
     }
 
     public func fetchCandles(
         asset: AssetDescriptor,
         timeframe: Timeframe,
         limit: Int = 220,
-        primary: CryptoExchangePreference = .binanceVision
+        primary: CryptoExchangePreference = .auto,
+        twelveDataKey: String? = nil,
+        onLog: ProviderLogHook? = nil
     ) async throws -> OHLCVFetchResult {
         let order: [CryptoExchangePreference]
         switch primary {
-        case .binanceVision: order = [.binanceVision, .okx, .kraken]
-        case .okx: order = [.okx, .binanceVision, .kraken]
-        case .kraken: order = [.kraken, .binanceVision, .okx]
+        case .auto, .binanceVision:
+            order = [.binanceVision, .okx, .kraken]
+        case .okx:
+            order = [.okx, .binanceVision, .kraken]
+        case .kraken:
+            order = [.kraken, .binanceVision, .okx]
+        case .twelveData:
+            order = [.twelveData, .binanceVision, .okx, .kraken]
         }
 
         var errors: [String] = []
-        for venue in order {
+        for (idx, venue) in order.enumerated() {
             do {
+                let result: OHLCVFetchResult
                 switch venue {
-                case .binanceVision:
-                    return try await fetchBinanceVision(asset: asset, timeframe: timeframe, limit: limit)
+                case .auto, .binanceVision:
+                    result = try await fetchBinanceVision(asset: asset, timeframe: timeframe, limit: limit)
                 case .okx:
-                    return try await fetchOKX(asset: asset, timeframe: timeframe, limit: limit)
+                    result = try await fetchOKX(asset: asset, timeframe: timeframe, limit: limit)
                 case .kraken:
-                    return try await fetchKraken(asset: asset, timeframe: timeframe)
+                    result = try await fetchKraken(asset: asset, timeframe: timeframe)
+                case .twelveData:
+                    guard let key = twelveDataKey, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw NetworkAdapterError.missingAPIKey("Twelve Data")
+                    }
+                    result = try await twelveData.fetchCandles(asset: asset, timeframe: timeframe, apiKey: key)
                 }
+                if idx > 0 {
+                    onLog?("WARN", "Fallback", "\(asset.symbol) \(timeframe.displayLabel): fell back to \(result.providerName)")
+                }
+                return result
             } catch {
-                errors.append("\(venue.rawValue): \(error.localizedDescription)")
+                let reason = "\(venue.shortLabel): \(error.localizedDescription)"
+                errors.append(reason)
+                onLog?("WARN", "Feed", "\(asset.symbol) \(timeframe.displayLabel) \(reason)")
             }
         }
         throw NetworkAdapterError.allProvidersFailed(errors)

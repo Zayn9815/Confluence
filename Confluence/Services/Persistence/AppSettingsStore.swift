@@ -68,7 +68,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var cardDensity: CardDensity = .standard
     public var showMiniCharts: Bool = true
 
-    // Section 2 — Sound, Haptics & Animations
+    // Section 2 — Notifications, Sound & Haptics
     public var inAppSignalSoundEnabled: Bool = true
     public var pushNotificationSoundEnabled: Bool = true
     public var soundPreset: SoundPreset = .terminalChime
@@ -81,7 +81,8 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     // Section 3 — Markets, News & Data Feeds
     public var enabledMarkets: Set<MarketClass> = Set(MarketClass.allCases)
     public var watchlistSymbols: [String] = WatchlistDefaults.assets.map(\.symbol)
-    public var cryptoPrimaryExchange: CryptoExchangePreference = .binanceVision
+    public var tradFiProviderPreference: TradFiProviderPreference = .auto
+    public var cryptoPrimaryExchange: CryptoExchangePreference = .auto
     public var economicCalendarEnabled: Bool = true
     public var breakingNewsRadarEnabled: Bool = true
     public var calendarPushImpactFilter: CalendarImpactFilter = .highOnly
@@ -105,10 +106,59 @@ public struct PersistedSettingsPayload: Codable, Sendable {
 
     // Section 5 — AI Second-Opinion (Optional)
     public var geminiEnabled: Bool = false
+    public var geminiModel: GeminiModelOption = .hydrogen
     public var geminiDailyCallLimit: Int = 25
     public var geminiConfirmationThreshold: Double = 0.80
 
     public init() {}
+
+    /// Custom backwards-compatible decoder so existing v1.0 sideloaded installs keep every setting cleanly.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PersistedSettingsPayload()
+        appearanceMode = (try? c.decodeIfPresent(AppearanceMode.self, forKey: .appearanceMode)) ?? d.appearanceMode
+        themePreset = (try? c.decodeIfPresent(ThemePreset.self, forKey: .themePreset)) ?? d.themePreset
+        cardDensity = (try? c.decodeIfPresent(CardDensity.self, forKey: .cardDensity)) ?? d.cardDensity
+        showMiniCharts = (try? c.decodeIfPresent(Bool.self, forKey: .showMiniCharts)) ?? d.showMiniCharts
+
+        inAppSignalSoundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .inAppSignalSoundEnabled)) ?? d.inAppSignalSoundEnabled
+        pushNotificationSoundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .pushNotificationSoundEnabled)) ?? d.pushNotificationSoundEnabled
+        soundPreset = (try? c.decodeIfPresent(SoundPreset.self, forKey: .soundPreset)) ?? d.soundPreset
+        trapAlertSoundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .trapAlertSoundEnabled)) ?? d.trapAlertSoundEnabled
+        preNewsCountdownSoundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .preNewsCountdownSoundEnabled)) ?? d.preNewsCountdownSoundEnabled
+        newsReleaseImpactSoundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .newsReleaseImpactSoundEnabled)) ?? d.newsReleaseImpactSoundEnabled
+        hapticsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .hapticsEnabled)) ?? d.hapticsEnabled
+        arrivalAnimationsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .arrivalAnimationsEnabled)) ?? d.arrivalAnimationsEnabled
+
+        enabledMarkets = (try? c.decodeIfPresent(Set<MarketClass>.self, forKey: .enabledMarkets)) ?? d.enabledMarkets
+        watchlistSymbols = (try? c.decodeIfPresent([String].self, forKey: .watchlistSymbols)) ?? d.watchlistSymbols
+        tradFiProviderPreference = (try? c.decodeIfPresent(TradFiProviderPreference.self, forKey: .tradFiProviderPreference)) ?? d.tradFiProviderPreference
+        cryptoPrimaryExchange = (try? c.decodeIfPresent(CryptoExchangePreference.self, forKey: .cryptoPrimaryExchange)) ?? d.cryptoPrimaryExchange
+        economicCalendarEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .economicCalendarEnabled)) ?? d.economicCalendarEnabled
+        breakingNewsRadarEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .breakingNewsRadarEnabled)) ?? d.breakingNewsRadarEnabled
+        calendarPushImpactFilter = (try? c.decodeIfPresent(CalendarImpactFilter.self, forKey: .calendarPushImpactFilter)) ?? d.calendarPushImpactFilter
+        preNewsLead15m = (try? c.decodeIfPresent(Bool.self, forKey: .preNewsLead15m)) ?? d.preNewsLead15m
+        preNewsLead5m = (try? c.decodeIfPresent(Bool.self, forKey: .preNewsLead5m)) ?? d.preNewsLead5m
+        pauseSignalsDuringPreNewsWindow = (try? c.decodeIfPresent(Bool.self, forKey: .pauseSignalsDuringPreNewsWindow)) ?? d.pauseSignalsDuringPreNewsWindow
+        positioningFeedsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .positioningFeedsEnabled)) ?? d.positioningFeedsEnabled
+        backgroundRefreshEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .backgroundRefreshEnabled)) ?? d.backgroundRefreshEnabled
+        backgroundRefreshIntervalMinutes = (try? c.decodeIfPresent(Int.self, forKey: .backgroundRefreshIntervalMinutes)) ?? d.backgroundRefreshIntervalMinutes
+
+        htfTimeframe = (try? c.decodeIfPresent(Timeframe.self, forKey: .htfTimeframe)) ?? d.htfTimeframe
+        entryTimeframe = (try? c.decodeIfPresent(Timeframe.self, forKey: .entryTimeframe)) ?? d.entryTimeframe
+        minimumConfidencePercent = (try? c.decodeIfPresent(Double.self, forKey: .minimumConfidencePercent)) ?? d.minimumConfidencePercent
+        minimumRiskReward = (try? c.decodeIfPresent(Double.self, forKey: .minimumRiskReward)) ?? d.minimumRiskReward
+        maxStopLossPercentCryptoStocks = (try? c.decodeIfPresent(Double.self, forKey: .maxStopLossPercentCryptoStocks)) ?? d.maxStopLossPercentCryptoStocks
+        maxStopLossPercentFXMetalsIndices = (try? c.decodeIfPresent(Double.self, forKey: .maxStopLossPercentFXMetalsIndices)) ?? d.maxStopLossPercentFXMetalsIndices
+        enabledStrategyGroups = (try? c.decodeIfPresent(Set<StrategyGroup>.self, forKey: .enabledStrategyGroups)) ?? d.enabledStrategyGroups
+        showWeakFilteredSignals = (try? c.decodeIfPresent(Bool.self, forKey: .showWeakFilteredSignals)) ?? d.showWeakFilteredSignals
+        autoSuppressCrisisAlerts = (try? c.decodeIfPresent(Bool.self, forKey: .autoSuppressCrisisAlerts)) ?? d.autoSuppressCrisisAlerts
+
+        geminiEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .geminiEnabled)) ?? d.geminiEnabled
+        geminiModel = (try? c.decodeIfPresent(GeminiModelOption.self, forKey: .geminiModel)) ?? d.geminiModel
+        geminiDailyCallLimit = (try? c.decodeIfPresent(Int.self, forKey: .geminiDailyCallLimit)) ?? d.geminiDailyCallLimit
+        geminiConfirmationThreshold = (try? c.decodeIfPresent(Double.self, forKey: .geminiConfirmationThreshold)) ?? d.geminiConfirmationThreshold
+    }
 }
 
 @MainActor
