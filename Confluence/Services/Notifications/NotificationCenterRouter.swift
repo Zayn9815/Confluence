@@ -59,7 +59,7 @@ public final class NotificationCenterRouter: NSObject, UNUserNotificationCenterD
         let subtitle = content.subtitle.isEmpty ? content.body : "\(content.subtitle) · \(content.body)"
         let info = Self.extractStrings(from: content.userInfo)
 
-        let itemType = NotificationItemType(rawValue: info[NotificationUserInfoKey.type] ?? "") ?? .preNews
+        let itemType = NotificationItemType(rawValue: info[NotificationUserInfoKey.type] ?? "") ?? .preNewsCountdown
         let market = info[NotificationUserInfoKey.market].flatMap(MarketClass.init(rawValue:))
         let tf = info[NotificationUserInfoKey.timeframe].flatMap(Timeframe.init(rawValue:))
         let dir = info[NotificationUserInfoKey.direction].flatMap(TradeDirection.init(rawValue:))
@@ -87,7 +87,7 @@ public final class NotificationCenterRouter: NSObject, UNUserNotificationCenterD
 
         // Foreground signal/trap/macro alerts are rendered by Confluence's translucent PopupView;
         // scheduled Pre-News local triggers also present a clean system banner & sound.
-        if itemType == .preNews {
+        if itemType == .preNewsCountdown {
             return [.banner, .list, .sound]
         }
         return [.list]
@@ -141,7 +141,7 @@ public final class NotificationCenterRouter: NSObject, UNUserNotificationCenterD
             return .news(eventID: eventID)
         }
         let type = info[NotificationUserInfoKey.type]
-        if type == NotificationItemType.preNews.rawValue || type == NotificationItemType.newsRelease.rawValue {
+        if type == NotificationItemType.preNewsCountdown.rawValue || type == NotificationItemType.newsReleaseImpact.rawValue {
             return .news(eventID: nil)
         }
         return nil

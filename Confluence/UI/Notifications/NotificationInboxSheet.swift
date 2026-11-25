@@ -26,7 +26,7 @@ public struct NotificationInboxSheet: View {
             case .all: return true
             case .signals: return item.type == .strongSignal
             case .traps: return item.type == .trapAlert
-            case .news: return item.type == .preNews || item.type == .newsRelease
+            case .news: return item.type == .preNewsCountdown || item.type == .newsReleaseImpact
             }
         }
     }
@@ -244,9 +244,9 @@ public struct NotificationInboxSheet: View {
             return item.direction == .short ? "arrow.down.right.circle.fill" : "arrow.up.right.circle.fill"
         case .trapAlert:
             return "exclamationmark.triangle.fill"
-        case .preNews:
+        case .preNewsCountdown:
             return "clock.badge.exclamationmark.fill"
-        case .newsRelease:
+        case .newsReleaseImpact:
             return "newspaper.fill"
         }
     }
@@ -257,9 +257,9 @@ public struct NotificationInboxSheet: View {
             return item.direction == .short ? palette.shortCrimson : palette.longEmerald
         case .trapAlert:
             return palette.trapAmber
-        case .preNews:
+        case .preNewsCountdown:
             return palette.champagneGold
-        case .newsRelease:
+        case .newsReleaseImpact:
             return palette.macroIceBlue
         }
     }

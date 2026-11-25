@@ -278,11 +278,11 @@ public final class MarketScannerCoordinator {
                 let item = NotificationItemSnapshot(
                     id: id,
                     createdAt: Date(timeIntervalSince1970: cluster.clusterEpochSeconds),
-                    type: .newsRelease,
+                    type: .newsReleaseImpact,
                     title: "Macro Release · \(cluster.currency)",
                     subtitle: cluster.headlineStrip,
                     symbol: cluster.currency,
-                    eventID: cluster.events.first?.id ?? id,
+                    eventID: cluster.results.first?.event.id ?? id,
                     isRead: false
                 )
                 if recordNotification(item), isBackground {
@@ -296,7 +296,7 @@ public final class MarketScannerCoordinator {
                 let item = NotificationItemSnapshot(
                     id: id,
                     createdAt: Date(),
-                    type: .preNews,
+                    type: .preNewsCountdown,
                     title: "Pre-News Volatility Shield · \(shield.event.currency)",
                     subtitle: "\(shield.event.name) in \(max(1, shield.minutesUntilRelease))m",
                     symbol: shield.event.currency,

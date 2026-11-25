@@ -64,7 +64,7 @@ public final class PreNewsNotificationScheduler {
             content.body = "High-impact \(slot.event.currency) release ahead. Expect spreads & stop-hunt whipsaws."
             content.categoryIdentifier = "PRE_NEWS_SHIELD"
             content.userInfo = [
-                NotificationUserInfoKey.type: NotificationItemType.preNews.rawValue,
+                NotificationUserInfoKey.type: NotificationItemType.preNewsCountdown.rawValue,
                 NotificationUserInfoKey.notificationID: slot.identifier,
                 NotificationUserInfoKey.eventID: slot.event.id,
                 NotificationUserInfoKey.symbol: slot.event.currency
@@ -129,10 +129,10 @@ public final class PreNewsNotificationScheduler {
         content.title = "Macro Release · \(cluster.currency)"
         content.body = cluster.headlineStrip
         content.userInfo = [
-            NotificationUserInfoKey.type: NotificationItemType.newsRelease.rawValue,
+            NotificationUserInfoKey.type: NotificationItemType.newsReleaseImpact.rawValue,
             NotificationUserInfoKey.notificationID: id,
             NotificationUserInfoKey.symbol: cluster.currency,
-            NotificationUserInfoKey.eventID: cluster.events.first?.id ?? id
+            NotificationUserInfoKey.eventID: cluster.results.first?.event.id ?? id
         ]
         if settings.pushNotificationSoundEnabled && settings.newsReleaseImpactSoundEnabled {
             content.sound = UNNotificationSound(named: UNNotificationSoundName("news_release_ping.caf"))
