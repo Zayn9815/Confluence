@@ -199,6 +199,34 @@ public struct ReflexJudgment: Codable, Sendable, Equatable, Hashable {
     }
 }
 
+public struct SignalStrengthBreakdown: Codable, Sendable, Equatable, Hashable {
+    public let technicalScore: Double
+    public let psychologyScore: Double
+    public let newsMacroScore: Double
+    public let regimeRiskAdjustment: Double
+    public let finalConfidencePercent: Double
+    public let strengthLabel: String
+    public let notes: [String]
+
+    public init(
+        technicalScore: Double,
+        psychologyScore: Double,
+        newsMacroScore: Double,
+        regimeRiskAdjustment: Double,
+        finalConfidencePercent: Double,
+        strengthLabel: String,
+        notes: [String] = []
+    ) {
+        self.technicalScore = technicalScore
+        self.psychologyScore = psychologyScore
+        self.newsMacroScore = newsMacroScore
+        self.regimeRiskAdjustment = regimeRiskAdjustment
+        self.finalConfidencePercent = finalConfidencePercent
+        self.strengthLabel = strengthLabel
+        self.notes = notes
+    }
+}
+
 public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable {
     public let id: String
     public let fingerprint: String
@@ -230,6 +258,7 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
     public let aiConfirmed: Bool
     public let dataProvider: String
     public let isMarketClosedSnapshot: Bool
+    public let strengthBreakdown: SignalStrengthBreakdown?
 
     public init(
         id: String,
@@ -261,7 +290,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         aiJudgment: ReflexJudgment? = nil,
         aiConfirmed: Bool = false,
         dataProvider: String,
-        isMarketClosedSnapshot: Bool = false
+        isMarketClosedSnapshot: Bool = false,
+        strengthBreakdown: SignalStrengthBreakdown? = nil
     ) {
         self.id = id
         self.fingerprint = fingerprint
@@ -293,6 +323,7 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         self.aiConfirmed = aiConfirmed
         self.dataProvider = dataProvider
         self.isMarketClosedSnapshot = isMarketClosedSnapshot
+        self.strengthBreakdown = strengthBreakdown
     }
 
     public func withAIJudgment(_ judgment: ReflexJudgment, threshold: Double) -> TradeSignal {
@@ -326,7 +357,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             aiJudgment: judgment,
             aiConfirmed: judgment.isConfirmedByCodeRule(minimumConfidence: threshold),
             dataProvider: dataProvider,
-            isMarketClosedSnapshot: isMarketClosedSnapshot
+            isMarketClosedSnapshot: isMarketClosedSnapshot,
+            strengthBreakdown: strengthBreakdown
         )
     }
 

@@ -114,54 +114,76 @@ public enum TrendMomentumDetector {
             }
         }
 
-        // 2. Causal RSI(14) Divergence over recent 14-bar lookback
-        if rsiSeries.count >= 16, let currentRSI = rsi {
+        // 2. Causal RSI(14) Divergence over recent 14-bar lookback (verifies genuine 3-bar local pivot)
+        if rsiSeries.count >= 16, let currentRSI = rsi, currentRSI.isFinite {
             let lookback = 12
-            let windowStart = lastIdx - lookback
-            var priorLowIdx = windowStart
-            var priorHighIdx = windowStart
-            for i in windowStart..<(lastIdx - 2) {
-                if candles[i].low < candles[priorLowIdx].low { priorLowIdx = i }
-                if candles[i].high > candles[priorHighIdx].high { priorHighIdx = i }
-            }
-            let rsiOffset = lastIdx - (rsiSeries.count - 1)
-            let priorLowRSIIndex = priorLowIdx - rsiOffset
-            let priorHighRSIIndex = priorHighIdx - rsiOffset
+            let windowStart = max(1, lastIdx - lookback)
+            let windowEnd = lastIdx - 2
+            var priorLowIdx: Int? = nil
+            var priorHighIdx: Int? = nil
 
-            if priorLowRSIIndex >= 0 && priorLowRSIIndex < rsiSeries.count {
-                let priorRSI = rsiSeries[priorLowRSIIndex]
-                // Regular bullish divergence: lower price low + higher RSI low in oversold/neutral zone
-                if lastBar.low < candles[priorLowIdx].low && currentRSI > priorRSI + 3.5 && priorRSI < 40.0 {
-                    let id = "momentum_rsi_divergence"
-                    contributions.append(
-                        StrategyContribution(
-                            id: id,
-                            name: "Bullish RSI Divergence",
-                            group: .trendMomentum,
-                            direction: .long,
-                            weight: weights[id] ?? 1.0,
-                            historicalWinRate: 0.56,
-                            detail: "Lower price low with higher RSI(14) (\(String(format: "%.1f", priorRSI)) -> \(String(format: "%.1f", currentRSI)))."
-                        )
-                    )
+            if windowStart < windowEnd {
+                for i in windowStart..<windowEnd {
+                    let isLocalLow = candles[i].low <= candles[i - 1].low && candles[i].low <= candles[i + 1].low
+                    let isLocalHigh = candles[i].high >= candles[i - 1].high && candles[i].high >= candles[i + 1].high
+                    if isLocalLow {
+                        if let best = priorLowIdx {
+                            if candles[i].low < candles[best].low { priorLowIdx = i }
+                        } else {
+                            priorLowIdx = i
+                        }
+                    }
+                    if isLocalHigh {
+                        if let best = priorHighIdx {
+                            if candles[i].high > candles[best].high { priorHighIdx = i }
+                        } else {
+                            priorHighIdx = i
+                        }
+                    }
                 }
             }
-            if priorHighRSIIndex >= 0 && priorHighRSIIndex < rsiSeries.count {
-                let priorRSI = rsiSeries[priorHighRSIIndex]
-                // Regular bearish divergence: higher price high + lower RSI high in overbought/neutral zone
-                if lastBar.high > candles[priorHighIdx].high && currentRSI < priorRSI - 3.5 && priorRSI > 60.0 {
-                    let id = "momentum_rsi_divergence"
-                    contributions.append(
-                        StrategyContribution(
-                            id: id,
-                            name: "Bearish RSI Divergence",
-                            group: .trendMomentum,
-                            direction: .short,
-                            weight: weights[id] ?? 1.0,
-                            historicalWinRate: 0.56,
-                            detail: "Higher price high with lower RSI(14) (\(String(format: "%.1f", priorRSI)) -> \(String(format: "%.1f", currentRSI)))."
+
+            let rsiOffset = lastIdx - (rsiSeries.count - 1)
+            if let lowIdx = priorLowIdx {
+                let priorLowRSIIndex = lowIdx - rsiOffset
+                if priorLowRSIIndex >= 0 && priorLowRSIIndex < rsiSeries.count {
+                    let priorRSI = rsiSeries[priorLowRSIIndex]
+                    // Regular bullish divergence: lower price low + higher RSI low in oversold/neutral zone
+                    if priorRSI.isFinite && lastBar.low < candles[lowIdx].low && currentRSI > priorRSI + 3.5 && priorRSI < 40.0 {
+                        let id = "momentum_rsi_divergence"
+                        contributions.append(
+                            StrategyContribution(
+                                id: id,
+                                name: "Bullish RSI Divergence",
+                                group: .trendMomentum,
+                                direction: .long,
+                                weight: weights[id] ?? 1.0,
+                                historicalWinRate: 0.56,
+                                detail: "Lower price low with higher RSI(14) (\(String(format: "%.1f", priorRSI)) -> \(String(format: "%.1f", currentRSI)))."
+                            )
                         )
-                    )
+                    }
+                }
+            }
+            if let highIdx = priorHighIdx {
+                let priorHighRSIIndex = highIdx - rsiOffset
+                if priorHighRSIIndex >= 0 && priorHighRSIIndex < rsiSeries.count {
+                    let priorRSI = rsiSeries[priorHighRSIIndex]
+                    // Regular bearish divergence: higher price high + lower RSI high in overbought/neutral zone
+                    if priorRSI.isFinite && lastBar.high > candles[highIdx].high && currentRSI < priorRSI - 3.5 && priorRSI > 60.0 {
+                        let id = "momentum_rsi_divergence"
+                        contributions.append(
+                            StrategyContribution(
+                                id: id,
+                                name: "Bearish RSI Divergence",
+                                group: .trendMomentum,
+                                direction: .short,
+                                weight: weights[id] ?? 1.0,
+                                historicalWinRate: 0.56,
+                                detail: "Higher price high with lower RSI(14) (\(String(format: "%.1f", priorRSI)) -> \(String(format: "%.1f", currentRSI)))."
+                            )
+                        )
+                    }
                 }
             }
         }
@@ -260,7 +282,14 @@ public enum TrendMomentumDetector {
         avgLoss /= Double(period)
 
         var out: [Double] = []
-        let firstRS = avgLoss == 0 ? 100.0 : (100.0 - (100.0 / (1.0 + avgGain / avgLoss)))
+        let firstRS: Double
+        if avgGain == 0 && avgLoss == 0 {
+            firstRS = 50.0
+        } else if avgLoss == 0 {
+            firstRS = 100.0
+        } else {
+            firstRS = 100.0 - (100.0 / (1.0 + avgGain / avgLoss))
+        }
         out.append(firstRS)
 
         for i in (period + 1)..<closes.count {
@@ -269,7 +298,14 @@ public enum TrendMomentumDetector {
             let loss = max(-diff, 0.0)
             avgGain = (avgGain * Double(period - 1) + gain) / Double(period)
             avgLoss = (avgLoss * Double(period - 1) + loss) / Double(period)
-            let rsi = avgLoss == 0 ? 100.0 : (100.0 - (100.0 / (1.0 + avgGain / avgLoss)))
+            let rsi: Double
+            if avgGain == 0 && avgLoss == 0 {
+                rsi = 50.0
+            } else if avgLoss == 0 {
+                rsi = 100.0
+            } else {
+                rsi = 100.0 - (100.0 / (1.0 + avgGain / avgLoss))
+            }
             out.append(rsi)
         }
         return out

@@ -9,10 +9,15 @@ public struct SignalCardView: View {
     let showMiniChart: Bool
     let animateArrival: Bool
     let hapticsEnabled: Bool
+    let isSelecting: Bool
+    let isSelected: Bool
+    let onToggleSelect: (() -> Void)?
+    let onDelete: (() -> Void)?
     let onOpenChart: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showStrategies = false
+    @State private var showBreakdown = false
     @State private var showPsychology = true
     @State private var arrivalTriggerCount = 0
     @State private var didCopy = false
@@ -24,6 +29,10 @@ public struct SignalCardView: View {
         showMiniChart: Bool,
         animateArrival: Bool,
         hapticsEnabled: Bool,
+        isSelecting: Bool = false,
+        isSelected: Bool = false,
+        onToggleSelect: (() -> Void)? = nil,
+        onDelete: (() -> Void)? = nil,
         onOpenChart: @escaping () -> Void
     ) {
         self.signal = signal
@@ -32,20 +41,36 @@ public struct SignalCardView: View {
         self.showMiniChart = showMiniChart
         self.animateArrival = animateArrival
         self.hapticsEnabled = hapticsEnabled
+        self.isSelecting = isSelecting
+        self.isSelected = isSelected
+        self.onToggleSelect = onToggleSelect
+        self.onDelete = onDelete
         self.onOpenChart = onOpenChart
     }
 
     public var body: some View {
         let dec = PriceFormatHelper.decimals(for: signal.symbol, marketClass: signal.marketClass, referencePrice: signal.levels?.entryMid)
         let accentBorder: Color? = {
+            if isSelecting && isSelected { return palette.shortCrimson.opacity(0.85) }
             if signal.tier == .aPlusInstitutional { return palette.champagneGold.opacity(0.65) }
             if signal.category == .trapAlert { return palette.trapAmber.opacity(0.65) }
             return nil
         }()
 
         VStack(alignment: .leading, spacing: density == .compact ? 10 : 13) {
-            // 1. Header Row: Market, Pair, Direction/Trap Badge, Confidence % Gauge
+            // 1. Header Row: Selection Checkmark (when selecting), Market, Pair, Direction/Trap Badge, Confidence % Gauge
             HStack(alignment: .center, spacing: 10) {
+                if isSelecting {
+                    Button {
+                        onToggleSelect?()
+                    } label: {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundStyle(isSelected ? palette.shortCrimson : palette.tertiaryInk)
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
                         badgePill(signal.marketClass.displayName.uppercased(), color: palette.secondaryInk, fill: palette.elevatedSurface)
@@ -56,9 +81,20 @@ public struct SignalCardView: View {
                         Text(signal.symbol)
                             .font(.headline.weight(.bold))
                             .foregroundStyle(palette.primaryInk)
-                        Text(signal.tier.displayName)
+                        Text(signal.strengthBreakdown?.strengthLabel ?? signal.tier.displayName)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(palette.color(for: signal.tier))
+                    }
+                    // Persisted signal generation date, local time & relative age
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(palette.tertiaryInk)
+                        Text(Self.formattedGeneratedStamp(epochSeconds: signal.generatedAtEpochSeconds))
+                            .font(.system(size: 10, weight: .medium).monospacedDigit())
+                            .foregroundStyle(palette.secondaryInk)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
                 }
                 Spacer()
@@ -72,7 +108,7 @@ public struct SignalCardView: View {
                     badgePill(signal.killzone.displayName, color: palette.secondaryInk, fill: palette.elevatedSurface)
                     badgePill("HTF \(signal.htfTimeframe.displayLabel): \(signal.htfBias.rawValue.uppercased())", color: palette.color(for: signal.htfBias), fill: palette.elevatedSurface)
                     if signal.isMarketClosedSnapshot {
-                        badgePill("Market Closed · Last Bar", color: palette.tertiaryInk, fill: palette.elevatedSurface)
+                        badgePill("Market Closed · Last Bar", color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
                     }
                     if let pre = signal.preNewsBadge {
                         badgePill(pre, color: palette.macroIceBlue, fill: palette.macroIceBlue.opacity(0.14))
@@ -85,7 +121,13 @@ public struct SignalCardView: View {
 
             // 3. Pure SwiftUI Canvas Mini-Chart (tap -> full-screen LightweightCharts)
             if showMiniChart && !signal.recentCandles.isEmpty {
-                Button(action: onOpenChart) {
+                Button {
+                    if isSelecting {
+                        onToggleSelect?()
+                    } else {
+                        onOpenChart()
+                    }
+                } label: {
                     ZStack(alignment: .topTrailing) {
                         MiniCandlestickCanvas(
                             candles: signal.recentCandles,
@@ -106,7 +148,7 @@ public struct SignalCardView: View {
                 .buttonStyle(.plain)
             }
 
-            // 4. Numeric Execution Grid (Code owns ALL numbers, monospaced digits)
+            // 4. Numeric Execution Grid (Code owns ALL numbers, zero truncation)
             if let lv = signal.levels {
                 let levelDec = PriceFormatHelper.decimals(for: signal.symbol, marketClass: signal.marketClass, referencePrice: lv.entryMid)
                 LazyVGrid(columns: [
@@ -114,11 +156,10 @@ public struct SignalCardView: View {
                     GridItem(.flexible(), spacing: 8),
                     GridItem(.flexible(), spacing: 8)
                 ], spacing: 8) {
-                    metricCell(
-                        title: "ENTRY ZONE",
-                        value: "\(PriceFormatHelper.format(lv.entryLow, decimals: levelDec))–\(PriceFormatHelper.format(lv.entryHigh, decimals: levelDec))",
-                        sub: "Mid \(PriceFormatHelper.format(lv.entryMid, decimals: levelDec))",
-                        accent: palette.champagneGold
+                    entryZoneCell(
+                        low: PriceFormatHelper.format(lv.entryLow, decimals: levelDec),
+                        high: PriceFormatHelper.format(lv.entryHigh, decimals: levelDec),
+                        mid: PriceFormatHelper.format(lv.entryMid, decimals: levelDec)
                     )
                     metricCell(
                         title: "STOP LOSS",
@@ -162,7 +203,57 @@ public struct SignalCardView: View {
                 }
             }
 
-            // 5. Aligned Strategies Chips (Expandable with weight & historical win-rate)
+            // 5. Expandable Signal Strength Breakdown (4 transparent quantitative pillars)
+            if let bd = signal.strengthBreakdown {
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { showBreakdown.toggle() }
+                    } label: {
+                        HStack {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.caption2)
+                                .foregroundStyle(palette.macroIceBlue)
+                            Text("Signal Strength Breakdown · \(bd.strengthLabel)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.secondaryInk)
+                            Spacer()
+                            Image(systemName: showBreakdown ? "chevron.up" : "chevron.down")
+                                .font(.caption2)
+                                .foregroundStyle(palette.tertiaryInk)
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    if showBreakdown {
+                        VStack(alignment: .leading, spacing: 6) {
+                            breakdownRow("Technical Math (ICT / Trend / HTF)", score: bd.technicalScore)
+                            breakdownRow("Psychology & Positioning", score: bd.psychologyScore)
+                            breakdownRow("News & Macro Catalyst", score: bd.newsMacroScore)
+                            breakdownRow("Regime & Session Risk Adj.", score: bd.regimeRiskAdjustment)
+                            Divider().overlay(palette.border)
+                            HStack {
+                                Text("Calibrated Confidence")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(palette.primaryInk)
+                                Spacer()
+                                Text("\(Int(bd.finalConfidencePercent.rounded()))% · \(bd.strengthLabel)")
+                                    .font(.caption2.weight(.bold).monospacedDigit())
+                                    .foregroundStyle(palette.color(for: signal.tier))
+                            }
+                            if !bd.notes.isEmpty {
+                                Text(bd.notes.joined(separator: " · "))
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(palette.tertiaryInk)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(10)
+                        .background(palette.elevatedSurface.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            }
+
+            // 6. Aligned Strategies Chips (Expandable with weight & historical win-rate)
             if !signal.alignedStrategies.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Button {
@@ -219,10 +310,10 @@ public struct SignalCardView: View {
                 }
             }
 
-            // 6. Market Psychology & Pro-vs-Beginner Module
+            // 7. Market Psychology & Pro-vs-Beginner Module
             psychologyModule
 
-            // 7. Optional Gemini 4 Hydrogen 1-line Bear / Invalidation Badge
+            // 8. Optional Gemini 4 Hydrogen 1-line Bear / Invalidation Badge
             if let ai = signal.aiJudgment {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: signal.aiConfirmed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
@@ -242,12 +333,30 @@ public struct SignalCardView: View {
                 .background(palette.elevatedSurface.opacity(0.8), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
 
-            // 8. Footer Actions: Timestamp + One-Tap Copy Setup
-            HStack {
-                Text("Closed \(Date(timeIntervalSince1970: signal.barCloseEpochSeconds).formatted(date: .omitted, time: .shortened))")
+            // 9. Footer Actions: Closed Bar Timestamp + Delete + One-Tap Copy Setup
+            HStack(spacing: 8) {
+                Text("Bar \(Date(timeIntervalSince1970: signal.barCloseEpochSeconds).formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(palette.tertiaryInk)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 Spacer()
+                if !isSelecting, let onDelete {
+                    Button(role: .destructive) {
+                        onDelete()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.shortCrimson.opacity(0.85))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 6)
+                            .background(palette.elevatedSurface, in: Capsule())
+                            .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Delete signal")
+                }
+
                 Button {
                     UIPasteboard.general.string = signal.formattedCopyText(decimals: dec)
                     SignalSoundEngine.shared.playCopyConfirmationHaptic(enabled: hapticsEnabled)
@@ -270,12 +379,94 @@ public struct SignalCardView: View {
         }
         .padding(density == .compact ? 12 : 15)
         .institutionalCard(palette: palette, accentBorder: accentBorder)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isSelecting {
+                onToggleSelect?()
+            }
+        }
+        .contextMenu {
+            Button {
+                onOpenChart()
+            } label: {
+                Label("Open Interactive Chart", systemImage: "chart.xyaxis.line")
+            }
+            Button {
+                UIPasteboard.general.string = signal.formattedCopyText(decimals: dec)
+            } label: {
+                Label("Copy Setup", systemImage: "doc.on.doc")
+            }
+            if let onDelete {
+                Divider()
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Label("Delete Signal", systemImage: "trash")
+                }
+            }
+        }
         // One-shot metallic Pow shine on arrival (respects Reduce Motion, then settles static to save battery)
         .changeEffect(.shine(duration: 0.9), value: arrivalTriggerCount, isEnabled: animateArrival && !reduceMotion)
         .onAppear {
             if animateArrival && !reduceMotion && arrivalTriggerCount == 0 {
                 arrivalTriggerCount = 1
             }
+        }
+    }
+
+    private static func formattedGeneratedStamp(epochSeconds: TimeInterval) -> String {
+        let date = Date(timeIntervalSince1970: epochSeconds)
+        let dateTime = date.formatted(date: .abbreviated, time: .shortened)
+        let ageSeconds = max(0, Date().timeIntervalSince1970 - epochSeconds)
+        let ageText: String
+        if ageSeconds < 60 {
+            ageText = "just now"
+        } else if ageSeconds < 3_600 {
+            ageText = "\(Int(ageSeconds / 60))m ago"
+        } else if ageSeconds < 86_400 {
+            ageText = "\(Int(ageSeconds / 3_600))h ago"
+        } else {
+            ageText = "\(Int(ageSeconds / 86_400))d ago"
+        }
+        return "Generated \(dateTime) · \(ageText)"
+    }
+
+    private func entryZoneCell(low: String, high: String, mid: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("ENTRY ZONE")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(palette.tertiaryInk)
+            Text(low)
+                .font(.system(size: 11, weight: .bold).monospacedDigit())
+                .foregroundStyle(palette.champagneGold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text("to \(high)")
+                .font(.system(size: 11, weight: .bold).monospacedDigit())
+                .foregroundStyle(palette.champagneGold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text("Mid \(mid)")
+                .font(.system(size: 9).monospacedDigit())
+                .foregroundStyle(palette.secondaryInk)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(palette.elevatedSurface.opacity(0.65), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private func breakdownRow(_ title: String, score: Double) -> some View {
+        let color: Color = score > 0.05 ? palette.longEmerald : (score < -0.05 ? palette.shortCrimson : palette.secondaryInk)
+        return HStack {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(palette.secondaryInk)
+            Spacer()
+            Text(String(format: "%+.1f pts", score))
+                .font(.caption2.weight(.bold).monospacedDigit())
+                .foregroundStyle(color)
         }
     }
 
@@ -335,29 +526,51 @@ public struct SignalCardView: View {
             }
             .buttonStyle(.plain)
 
-            // Pro vs Beginner Direction Strip
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("PRO / SMART MONEY")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(palette.tertiaryInk)
-                    Text(psych.proDirection.rawValue.uppercased())
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(palette.color(for: psych.proDirection))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // Intraday Pro Flow vs Beginner Direction Strip (plus separate Weekly Macro COT row when present)
+            VStack(spacing: 7) {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("INTRADAY PRO FLOW")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(palette.tertiaryInk)
+                        Text(psych.proDirection.rawValue.uppercased())
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(palette.color(for: psych.proDirection))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                Divider().frame(height: 22).overlay(palette.border)
+                    Divider().frame(height: 22).overlay(palette.border)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("RETAIL / BEGINNER CROWD")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(palette.tertiaryInk)
-                    Text(psych.retailCrowdDirection.rawValue.uppercased())
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(palette.color(for: psych.retailCrowdDirection))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("RETAIL / BEGINNER CROWD")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(palette.tertiaryInk)
+                        Text(psych.retailCrowdDirection.rawValue.uppercased())
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(palette.color(for: psych.retailCrowdDirection))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let macroDir = psych.macroPositioningDirection, macroDir != .neutral {
+                    Divider().overlay(palette.border)
+                    HStack(spacing: 6) {
+                        Text((psych.macroPositioningLabel ?? "MACRO COT BIAS").uppercased())
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(palette.tertiaryInk)
+                        Text(macroDir.rawValue.uppercased())
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(palette.color(for: macroDir))
+                        Spacer()
+                        if let aligns = psych.macroAlignsWithSetup {
+                            badgePill(
+                                aligns ? "Aligned" : "Counter-Trend",
+                                color: aligns ? palette.longEmerald : palette.trapAmber,
+                                fill: (aligns ? palette.longEmerald : palette.trapAmber).opacity(0.14)
+                            )
+                        }
+                    }
+                }
             }
             .padding(9)
             .background(palette.elevatedSurface.opacity(0.8), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -419,14 +632,15 @@ public struct SignalCardView: View {
                 .font(.caption.weight(.bold).monospacedDigit())
                 .foregroundStyle(accent)
                 .lineLimit(1)
-                .minimumScaleFactor(0.78)
+                .minimumScaleFactor(0.76)
             Text(sub)
                 .font(.system(size: 10).monospacedDigit())
                 .foregroundStyle(palette.secondaryInk)
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(palette.elevatedSurface.opacity(0.65), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 

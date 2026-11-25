@@ -16,6 +16,7 @@ public struct BehavioralEvidence: Codable, Sendable, Equatable, Hashable {
 
 public struct PsychologyReport: Codable, Sendable, Equatable, Hashable {
     public let signalCategory: SignalCategory
+    /// Intraday institutional flow direction (derived from structure, traps, and intraday perp flow).
     public let proDirection: TradeDirection
     public let retailCrowdDirection: TradeDirection
     public let provenanceBadge: String
@@ -24,6 +25,10 @@ public struct PsychologyReport: Codable, Sendable, Equatable, Hashable {
     public let proPsychology: String
     public let behavioralBadges: [String]
     public let evidence: [BehavioralEvidence]
+    /// Separate higher-timeframe/weekly macro positioning bias (e.g., CFTC COT or OKX positioning) so counter-trend weekly COT never contradicts intraday pro flow.
+    public let macroPositioningDirection: TradeDirection?
+    public let macroPositioningLabel: String?
+    public let macroAlignsWithSetup: Bool?
 
     public init(
         signalCategory: SignalCategory,
@@ -34,7 +39,10 @@ public struct PsychologyReport: Codable, Sendable, Equatable, Hashable {
         beginnerPsychology: String,
         proPsychology: String,
         behavioralBadges: [String],
-        evidence: [BehavioralEvidence]
+        evidence: [BehavioralEvidence],
+        macroPositioningDirection: TradeDirection? = nil,
+        macroPositioningLabel: String? = nil,
+        macroAlignsWithSetup: Bool? = nil
     ) {
         self.signalCategory = signalCategory
         self.proDirection = proDirection
@@ -45,5 +53,8 @@ public struct PsychologyReport: Codable, Sendable, Equatable, Hashable {
         self.proPsychology = proPsychology
         self.behavioralBadges = behavioralBadges
         self.evidence = evidence
+        self.macroPositioningDirection = macroPositioningDirection
+        self.macroPositioningLabel = macroPositioningLabel
+        self.macroAlignsWithSetup = macroAlignsWithSetup
     }
 }

@@ -10,6 +10,7 @@ public struct ConfluenceApp: App {
         let settings = AppSettingsStore()
         let store = ConfluenceDataStore()
         let coord = MarketScannerCoordinator(settings: settings, store: store)
+        coord.crashLogStore.startMonitoring()
         coord.registerBackgroundTask()
         _coordinator = State(initialValue: coord)
     }

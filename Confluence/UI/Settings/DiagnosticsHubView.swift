@@ -11,11 +11,11 @@ public struct DiagnosticsHubView: View {
     @State private var showResetConfirmation: Bool = false
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.0"
     }
 
     private var appBuild: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "4"
     }
 
     public var body: some View {
@@ -32,7 +32,8 @@ public struct DiagnosticsHubView: View {
                         calibration: coordinator.calibrationSummary,
                         strategyBreakdowns: coordinator.strategyBreakdowns,
                         tradeLedger: coordinator.tradeLedger,
-                        trapLogs: coordinator.trapLogs
+                        trapLogs: coordinator.trapLogs,
+                        crashLogs: coordinator.crashLogStore.entries
                     )
                     UIPasteboard.general.string = report
                     copiedConfirmation = true
@@ -65,7 +66,8 @@ public struct DiagnosticsHubView: View {
                             calibration: coordinator.calibrationSummary,
                             strategyBreakdowns: coordinator.strategyBreakdowns,
                             tradeLedger: coordinator.tradeLedger,
-                            trapLogs: coordinator.trapLogs
+                            trapLogs: coordinator.trapLogs,
+                            crashLogs: coordinator.crashLogStore.entries
                         )
                     } label: {
                         Label("Prepare Full Diagnostic JSON", systemImage: "doc.badge.arrow.up")
@@ -74,23 +76,52 @@ public struct DiagnosticsHubView: View {
             } header: {
                 Text("Antigravity Diagnostic Export")
             } footer: {
-                Text("All exported reports and JSON files are automatically scrubbed of API keys and tokens before leaving the device.")
+                Text("Includes runtime logs, error logs, MetricKit/POSIX crash logs, trade ledger, and strategy stats — automatically scrubbed of API keys and tokens.")
             }
 
-            // 2. Drill-Down Logs & Ledgers
-            Section("Logs, Trade Ledger & Strategy Breakdown") {
+            // 2. Dedicated Observability Logs (Runtime, Error, Crash)
+            Section("Runtime, Error & Crash Logs") {
                 NavigationLink {
                     RuntimeLogViewer(coordinator: coordinator, palette: palette)
                 } label: {
                     HStack {
-                        Label("Runtime & Feed Logs", systemImage: "terminal")
+                        Label("All Runtime Logs", systemImage: "terminal")
                         Spacer()
-                        Text("\(coordinator.diagnosticLog.entries.count) (\(coordinator.diagnosticLog.warnAndErrorCount) warn/err)")
+                        Text("\(coordinator.diagnosticLog.entries.count) entries")
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(coordinator.diagnosticLog.warnAndErrorCount > 0 ? palette.trapAmber : palette.secondaryInk)
+                            .foregroundStyle(palette.secondaryInk)
                     }
                 }
 
+                NavigationLink {
+                    ErrorLogsViewer(coordinator: coordinator, palette: palette)
+                } label: {
+                    HStack {
+                        Label("Error Logs", systemImage: "exclamationmark.octagon")
+                            .foregroundStyle(coordinator.diagnosticLog.errorOnlyCount > 0 ? palette.shortCrimson : palette.primaryInk)
+                        Spacer()
+                        Text("\(coordinator.diagnosticLog.errorOnlyCount) err · \(coordinator.diagnosticLog.warnAndErrorCount) total")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(coordinator.diagnosticLog.warnAndErrorCount > 0 ? palette.shortCrimson : palette.secondaryInk)
+                    }
+                }
+
+                NavigationLink {
+                    CrashLogsViewer(coordinator: coordinator, palette: palette)
+                } label: {
+                    HStack {
+                        Label("Crash & Hang Logs", systemImage: "ladybug.fill")
+                            .foregroundStyle(coordinator.crashLogStore.entries.isEmpty ? palette.primaryInk : palette.shortCrimson)
+                        Spacer()
+                        Text("\(coordinator.crashLogStore.entries.count) recorded")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(coordinator.crashLogStore.entries.isEmpty ? palette.secondaryInk : palette.shortCrimson)
+                    }
+                }
+            }
+
+            // 3. Drill-Down Ledgers & Strategy Breakdown
+            Section("Trade Ledger & Strategy Breakdown") {
                 NavigationLink {
                     TradeLedgerViewer(entries: coordinator.tradeLedger, palette: palette)
                 } label: {
@@ -128,7 +159,7 @@ public struct DiagnosticsHubView: View {
                 }
             }
 
-            // 3. Live Feed Health & Latency
+            // 4. Live Feed Health & Latency
             Section("Feed Health & Latency") {
                 Button {
                     Task { await coordinator.runFeedHealthCheck() }
@@ -161,7 +192,7 @@ public struct DiagnosticsHubView: View {
                 }
             }
 
-            // 4. Reset Controls
+            // 5. Reset Controls
             Section("Maintenance") {
                 Button(role: .destructive) {
                     showResetConfirmation = true
@@ -177,10 +208,11 @@ public struct DiagnosticsHubView: View {
             Button("Reset", role: .destructive) {
                 coordinator.store.resetCalibrationAndHistory()
                 coordinator.diagnosticLog.reload()
+                coordinator.crashLogStore.reload()
                 coordinator.loadPersistedState()
             }
         } message: {
-            Text("Clears recorded signal history, trade ledger, trap logs, runtime logs, and cached COT/calendar files. Your Keychain API keys and Bell inbox remain untouched.")
+            Text("Clears recorded signal history, calibration outcomes, trade ledger, trap logs, runtime logs, and cached COT/calendar files. Your Keychain API keys and Bell inbox remain untouched.")
         }
     }
 }
@@ -254,6 +286,199 @@ private struct RuntimeLogViewer: View {
         case .info: return palette.secondaryInk
         case .warn: return palette.trapAmber
         case .error: return palette.shortCrimson
+        }
+    }
+}
+
+private struct ErrorLogsViewer: View {
+    @Bindable var coordinator: MarketScannerCoordinator
+    let palette: ConfluencePalette
+
+    @State private var includeWarnings: Bool = true
+    @State private var copied: Bool = false
+
+    private var filtered: [DiagnosticLogSnapshot] {
+        includeWarnings ? coordinator.diagnosticLog.errorAndCriticalEntries : coordinator.diagnosticLog.errorOnlyEntries
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Scope", selection: $includeWarnings) {
+                Text("Errors + Warnings").tag(true)
+                Text("Errors Only").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .padding(12)
+
+            if filtered.isEmpty {
+                ContentUnavailableView(
+                    "Zero Errors Recorded",
+                    systemImage: "checkmark.shield",
+                    description: Text("Runtime feed errors, parsing failures, and critical warnings appear here automatically with secrets scrubbed.")
+                )
+            } else {
+                List(filtered) { entry in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(entry.severity.rawValue)
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(entry.severity == .error ? palette.shortCrimson : palette.trapAmber)
+                            Text(entry.category.rawValue)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(palette.macroIceBlue)
+                            Spacer()
+                            Text(entry.timestamp.formatted(date: .abbreviated, time: .standard))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(palette.tertiaryInk)
+                        }
+                        Text(entry.message)
+                            .font(.caption)
+                            .foregroundStyle(palette.primaryInk)
+                        if let detail = entry.detail, !detail.isEmpty {
+                            Text(detail)
+                                .font(.caption2)
+                                .foregroundStyle(palette.secondaryInk)
+                        }
+                    }
+                    .padding(.vertical, 3)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle("Error Logs")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    let iso = ISO8601DateFormatter()
+                    let text = filtered.map { e in
+                        "[\(e.severity.rawValue)][\(e.category.rawValue)] \(iso.string(from: e.timestamp)): \(e.message)"
+                    }.joined(separator: "\n")
+                    UIPasteboard.general.string = SecretRedactor.redact(text)
+                    copied = true
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(1.8))
+                        copied = false
+                    }
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                }
+                .disabled(filtered.isEmpty)
+            }
+        }
+    }
+}
+
+private struct CrashLogsViewer: View {
+    @Bindable var coordinator: MarketScannerCoordinator
+    let palette: ConfluencePalette
+
+    @State private var expandedCrashIDs: Set<String> = []
+    @State private var copied: Bool = false
+
+    var body: some View {
+        Group {
+            if coordinator.crashLogStore.entries.isEmpty {
+                ContentUnavailableView(
+                    "No Crash Logs Recorded",
+                    systemImage: "checkmark.seal",
+                    description: Text("Apple MetricKit crash/hang payloads, uncaught exceptions, and POSIX fatal signal breadcrumbs are captured automatically on-device and scrubbed before storage.")
+                )
+            } else {
+                List(coordinator.crashLogStore.entries) { crash in
+                    let isExpanded = expandedCrashIDs.contains(crash.id)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(crash.source.rawValue.uppercased())
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(palette.shortCrimson)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(palette.shortCrimson.opacity(0.14), in: Capsule())
+                            Text("v\(crash.appVersion) (\(crash.appBuild))")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(palette.secondaryInk)
+                            Spacer()
+                            Text(crash.timestamp.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(palette.tertiaryInk)
+                        }
+
+                        Text(crash.crashType)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(palette.primaryInk)
+
+                        Text(crash.summary)
+                            .font(.caption)
+                            .foregroundStyle(palette.secondaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                if isExpanded {
+                                    expandedCrashIDs.remove(crash.id)
+                                } else {
+                                    expandedCrashIDs.insert(crash.id)
+                                }
+                            }
+                        } label: {
+                            Label(isExpanded ? "Hide Stack Trace" : "Inspect Stack Trace", systemImage: isExpanded ? "chevron.up" : "chevron.down")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(palette.macroIceBlue)
+                        }
+                        .buttonStyle(.plain)
+
+                        if isExpanded {
+                            ScrollView(.horizontal, showsIndicators: true) {
+                                Text(crash.stackTrace)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(palette.secondaryInk)
+                                    .textSelection(.enabled)
+                            }
+                            .padding(8)
+                            .background(palette.elevatedSurface.opacity(0.75), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle("Crash & Hang Logs")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    let iso = ISO8601DateFormatter()
+                    let text = coordinator.crashLogStore.entries.map { c in
+                        """
+                        [\(c.source.rawValue)] \(iso.string(from: c.timestamp)) | v\(c.appVersion) (\(c.appBuild))
+                        Type: \(c.crashType)
+                        Summary: \(c.summary)
+                        Stack:
+                        \(c.stackTrace)
+                        """
+                    }.joined(separator: "\n\n---\n\n")
+                    UIPasteboard.general.string = SecretRedactor.redact(text)
+                    copied = true
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(1.8))
+                        copied = false
+                    }
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                }
+                .disabled(coordinator.crashLogStore.entries.isEmpty)
+            }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                if !coordinator.crashLogStore.entries.isEmpty {
+                    Button("Clear", role: .destructive) {
+                        coordinator.crashLogStore.clear()
+                    }
+                    .font(.caption)
+                }
+            }
         }
     }
 }

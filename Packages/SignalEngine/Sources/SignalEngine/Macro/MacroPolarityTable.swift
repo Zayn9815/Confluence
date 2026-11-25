@@ -87,8 +87,15 @@ public enum MacroPolarityTable {
                 AssetMacroImpact(assetLabel: "XAU/USD", direction: isHawkish ? .short : .long),
                 AssetMacroImpact(assetLabel: "BTC/USDT", direction: isHawkish ? .short : .long),
                 AssetMacroImpact(assetLabel: "US500", direction: isHawkish ? .short : .long),
+                AssetMacroImpact(assetLabel: "NAS100", direction: isHawkish ? .short : .long),
                 AssetMacroImpact(assetLabel: "EUR/USD", direction: isHawkish ? .short : .long),
-                AssetMacroImpact(assetLabel: "USD/JPY", direction: isHawkish ? .long : .short)
+                AssetMacroImpact(assetLabel: "GBP/USD", direction: isHawkish ? .short : .long),
+                AssetMacroImpact(assetLabel: "USD/JPY", direction: isHawkish ? .long : .short),
+                AssetMacroImpact(assetLabel: "SPY", direction: isHawkish ? .short : .long),
+                AssetMacroImpact(assetLabel: "QQQ", direction: isHawkish ? .short : .long),
+                AssetMacroImpact(assetLabel: "NVDA", direction: isHawkish ? .short : .long),
+                AssetMacroImpact(assetLabel: "AAPL", direction: isHawkish ? .short : .long),
+                AssetMacroImpact(assetLabel: "MSFT", direction: isHawkish ? .short : .long)
             ]
         case "EUR":
             return [

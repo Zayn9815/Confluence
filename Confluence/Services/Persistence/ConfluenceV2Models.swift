@@ -607,3 +607,112 @@ public struct TradeReplayContext: Sendable, Equatable, Hashable {
     }
 }
 
+// MARK: - v1.3 Purely Additive Crash Logging & Decoupled Outcome Persistence
+
+public enum CrashLogSource: String, Codable, Sendable, CaseIterable, Identifiable {
+    case metricKitCrash = "MetricKit Crash"
+    case metricKitHang = "MetricKit Hang"
+    case uncaughtException = "Uncaught Exception"
+    case posixFatalSignal = "POSIX Fatal Signal"
+
+    public var id: String { rawValue }
+}
+
+public struct CrashLogSnapshot: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public let id: String
+    public let timestamp: Date
+    public let source: CrashLogSource
+    public let appVersion: String
+    public let appBuild: String
+    public let crashType: String
+    public let summary: String
+    public let stackTrace: String
+
+    public init(
+        id: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        source: CrashLogSource,
+        appVersion: String,
+        appBuild: String,
+        crashType: String,
+        summary: String,
+        stackTrace: String
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.source = source
+        self.appVersion = appVersion
+        self.appBuild = appBuild
+        self.crashType = crashType
+        self.summary = summary
+        self.stackTrace = stackTrace
+    }
+}
+
+/// Purely additive v1.3 SwiftData table decoupling resolved Calibration outcomes from
+/// user-deletable `PersistedSignalRecord` cards (zero mutation to v1.0/v1.1/v1.2 schemas).
+@Model
+public final class PersistedOutcomeRecord {
+    @Attribute(.unique) public var signalId: String
+    public var outcomeJSON: Data
+    public var resolvedAt: Date
+
+    public init(
+        signalId: String,
+        outcomeJSON: Data,
+        resolvedAt: Date = Date()
+    ) {
+        self.signalId = signalId
+        self.outcomeJSON = outcomeJSON
+        self.resolvedAt = resolvedAt
+    }
+}
+
+/// Purely additive v1.3 SwiftData table persisting scrubbed MetricKit crashes/hangs,
+/// uncaught NSExceptions, and POSIX fatal signal breadcrumbs.
+@Model
+public final class CrashLogEntry {
+    @Attribute(.unique) public var id: String
+    public var timestamp: Date
+    public var sourceRaw: String
+    public var appVersion: String
+    public var appBuild: String
+    public var crashType: String
+    public var summary: String
+    public var stackTrace: String
+
+    public init(
+        id: String,
+        timestamp: Date,
+        sourceRaw: String,
+        appVersion: String,
+        appBuild: String,
+        crashType: String,
+        summary: String,
+        stackTrace: String
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.sourceRaw = sourceRaw
+        self.appVersion = appVersion
+        self.appBuild = appBuild
+        self.crashType = crashType
+        self.summary = summary
+        self.stackTrace = stackTrace
+    }
+
+    public func toSnapshot() -> CrashLogSnapshot {
+        CrashLogSnapshot(
+            id: id,
+            timestamp: timestamp,
+            source: CrashLogSource(rawValue: sourceRaw) ?? .metricKitCrash,
+            appVersion: appVersion,
+            appBuild: appBuild,
+            crashType: crashType,
+            summary: summary,
+            stackTrace: stackTrace
+        )
+    }
+}
+
+

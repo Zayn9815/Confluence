@@ -88,7 +88,7 @@ public struct SettingsTabView: View {
                             icon: "stethoscope",
                             color: palette.trapAmber,
                             title: "Calibration, Logs & Diagnostics",
-                            subtitle: "\(coordinator.diagnosticLog.entries.count) logs · \(coordinator.tradeLedger.count) trades · \(coordinator.trapLogs.count) traps"
+                            subtitle: "\(coordinator.diagnosticLog.entries.count) logs · \(coordinator.diagnosticLog.errorOnlyCount) err · \(coordinator.crashLogStore.entries.count) crashes"
                         )
                     }
 

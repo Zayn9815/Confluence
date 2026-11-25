@@ -39,6 +39,8 @@ public enum SignalEngine {
         okxDerivatives: OKXDerivativesSnapshot? = nil,
         cftcCOTRecords: [CFTCCOTRecord] = [],
         calendarEvents: [EconomicEvent] = [],
+        breakingNews: [BreakingNewsItem] = [],
+        fearGreed: FearGreedSnapshot? = nil,
         config: EngineConfig = EngineConfig(),
         dataProvider: String,
         serverNowEpochSeconds: TimeInterval,
@@ -51,7 +53,8 @@ public enum SignalEngine {
             timeframe: timeframe,
             providerName: dataProvider,
             serverNowEpochSeconds: serverNowEpochSeconds,
-            clockSkewSeconds: clockSkewSeconds
+            clockSkewSeconds: clockSkewSeconds,
+            asset: asset
         )
 
         let htfSeries = CandleHygieneEngine.sanitize(
@@ -62,11 +65,15 @@ public enum SignalEngine {
             providerName: dataProvider,
             serverNowEpochSeconds: serverNowEpochSeconds,
             clockSkewSeconds: clockSkewSeconds,
-            enforceMinimumBars: false
+            enforceMinimumBars: false,
+            asset: asset
         )
 
         guard entrySeries.report.isUsable else {
-            let fallbackRegime = MarketRegimeClassifier.classify(candles: entrySeries.candles)
+            let fallbackRegime = MarketRegimeClassifier.classify(
+                candles: entrySeries.candles,
+                marketClass: asset.marketClass
+            )
             return EngineAnalysisOutput(
                 signal: nil,
                 hygieneReport: entrySeries.report,
@@ -90,37 +97,8 @@ public enum SignalEngine {
             positioning = PositioningAnalyzer.analyzeCFTCCOT(records: cftcCOTRecords, asOfEpochSeconds: serverNowEpochSeconds)
         }
 
-        let regime = MarketRegimeClassifier.classify(candles: entrySeries.candles)
-        let preShield = MacroSurpriseEngine.preNewsShield(
-            for: asset,
-            events: calendarEvents,
-            nowEpochSeconds: serverNowEpochSeconds,
-            blackoutMinutesBefore: config.preNewsBlackoutMinutesBefore
-        )
-
-        let recentEvents = calendarEvents.filter { ev in
-            asset.exposedMacroCurrencies.contains(ev.currency) &&
-            ev.isPublished &&
-            serverNowEpochSeconds - ev.scheduledEpochSeconds >= 0 &&
-            serverNowEpochSeconds - ev.scheduledEpochSeconds <= 4 * 3_600
-        }
-        let macroClusters = MacroSurpriseEngine.buildClusters(
-            events: recentEvents,
-            nowEpochSeconds: serverNowEpochSeconds,
-            whipsawWindowMinutes: config.postNewsWhipsawMinutesAfter
-        )
-        let latestMacro = macroClusters.last
-
-        let ict = CausalICTDetector.analyze(candles: entrySeries.candles, weights: config.historicalReliabilityWeights)
-        let traps = TrapLifecycleEngine.evaluate(
-            symbol: asset.symbol,
-            roundNumberStep: asset.roundNumberStep,
-            candles: entrySeries.candles,
-            ict: ict,
-            recentNewsImpulses: macroClusters
-        )
-
-        let signal = evaluateSanitized(
+        // Single unified evaluation pass (zero duplicate ICT / Macro / Trap computation)
+        let eval = evaluateSanitizedDetailed(
             asset: asset,
             entryCandles: entrySeries.candles,
             htfCandles: htfSeries.candles,
@@ -128,6 +106,8 @@ public enum SignalEngine {
             htfTimeframe: htfTimeframe,
             positioning: positioning,
             calendarEvents: calendarEvents,
+            breakingNews: breakingNews,
+            fearGreed: fearGreed,
             config: config,
             dataProvider: dataProvider,
             isMarketClosed: entrySeries.report.isMarketClosed,
@@ -135,12 +115,12 @@ public enum SignalEngine {
         )
 
         return EngineAnalysisOutput(
-            signal: signal,
+            signal: eval.signal,
             hygieneReport: entrySeries.report,
-            regimeAssessment: regime,
-            activeTraps: traps.filter(\.isActionable),
-            preNewsShield: preShield,
-            macroImpulse: latestMacro
+            regimeAssessment: eval.regime,
+            activeTraps: eval.traps.filter(\.isActionable),
+            preNewsShield: eval.preShield,
+            macroImpulse: eval.latestMacro
         )
     }
 
@@ -153,14 +133,55 @@ public enum SignalEngine {
         htfTimeframe: Timeframe,
         positioning: PositioningAssessment?,
         calendarEvents: [EconomicEvent],
+        breakingNews: [BreakingNewsItem] = [],
+        fearGreed: FearGreedSnapshot? = nil,
         config: EngineConfig,
         dataProvider: String,
         isMarketClosed: Bool,
         nowEpochSeconds: TimeInterval
     ) -> TradeSignal? {
         guard entryCandles.count >= CandleHygieneEngine.minimumRequiredBars else { return nil }
+        return evaluateSanitizedDetailed(
+            asset: asset,
+            entryCandles: entryCandles,
+            htfCandles: htfCandles,
+            timeframe: timeframe,
+            htfTimeframe: htfTimeframe,
+            positioning: positioning,
+            calendarEvents: calendarEvents,
+            breakingNews: breakingNews,
+            fearGreed: fearGreed,
+            config: config,
+            dataProvider: dataProvider,
+            isMarketClosed: isMarketClosed,
+            nowEpochSeconds: nowEpochSeconds
+        ).signal
+    }
 
-        let regime = MarketRegimeClassifier.classify(candles: entryCandles)
+    private struct DetailedSanitizedEvaluation {
+        let signal: TradeSignal?
+        let regime: RegimeAssessment
+        let traps: [BehavioralTrap]
+        let preShield: PreNewsShieldStatus?
+        let latestMacro: MacroClusterImpulse?
+    }
+
+    private static func evaluateSanitizedDetailed(
+        asset: AssetDescriptor,
+        entryCandles: [Candle],
+        htfCandles: [Candle],
+        timeframe: Timeframe,
+        htfTimeframe: Timeframe,
+        positioning: PositioningAssessment?,
+        calendarEvents: [EconomicEvent],
+        breakingNews: [BreakingNewsItem],
+        fearGreed: FearGreedSnapshot?,
+        config: EngineConfig,
+        dataProvider: String,
+        isMarketClosed: Bool,
+        nowEpochSeconds: TimeInterval
+    ) -> DetailedSanitizedEvaluation {
+        let regime = MarketRegimeClassifier.classify(candles: entryCandles, marketClass: asset.marketClass)
         let ict = CausalICTDetector.analyze(candles: entryCandles, weights: config.historicalReliabilityWeights)
         let candlestick = CandlestickPatternDetector.detect(candles: entryCandles, weights: config.historicalReliabilityWeights)
         let momentum = TrendMomentumDetector.analyze(candles: entryCandles, weights: config.historicalReliabilityWeights)
@@ -197,6 +218,13 @@ public enum SignalEngine {
         )
         let latestMacro = macroClusters.last
 
+        let newsCatalyst = HeadlineSentimentClassifier.analyzeNewsCatalyst(
+            for: asset,
+            breakingNews: breakingNews,
+            fearGreed: fearGreed,
+            nowEpochSeconds: nowEpochSeconds
+        )
+
         let traps = TrapLifecycleEngine.evaluate(
             symbol: asset.symbol,
             roundNumberStep: asset.roundNumberStep,
@@ -205,7 +233,7 @@ public enum SignalEngine {
             recentNewsImpulses: macroClusters
         )
 
-        return ConfluenceScorer.score(
+        let signal = ConfluenceScorer.score(
             asset: asset,
             timeframe: timeframe,
             htfTimeframe: htfTimeframe,
@@ -223,7 +251,16 @@ public enum SignalEngine {
             config: config,
             dataProvider: dataProvider,
             isMarketClosed: isMarketClosed,
-            nowEpochSeconds: nowEpochSeconds
+            nowEpochSeconds: nowEpochSeconds,
+            newsCatalyst: newsCatalyst
+        )
+
+        return DetailedSanitizedEvaluation(
+            signal: signal,
+            regime: regime,
+            traps: traps,
+            preShield: preShield,
+            latestMacro: latestMacro
         )
     }
 

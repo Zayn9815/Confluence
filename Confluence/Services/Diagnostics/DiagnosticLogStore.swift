@@ -36,6 +36,8 @@ public struct AntigravityDiagnosticBundle: Codable, Sendable {
     public let tradeLedger: [TradeLedgerSnapshot]
     public let trapLogs: [TrapLogSnapshot]
     public let recentRuntimeLogs: [DiagnosticLogSnapshot]
+    public let errorLogs: [DiagnosticLogSnapshot]
+    public let crashLogs: [CrashLogSnapshot]
 
     public struct FeedHealthSnapshot: Codable, Sendable {
         public let name: String
@@ -100,8 +102,20 @@ public final class DiagnosticLogStore {
         entries = []
     }
 
+    public var errorAndCriticalEntries: [DiagnosticLogSnapshot] {
+        entries.filter { $0.severity == .error || $0.severity == .warn }
+    }
+
+    public var errorOnlyEntries: [DiagnosticLogSnapshot] {
+        entries.filter { $0.severity == .error }
+    }
+
+    public var errorOnlyCount: Int {
+        errorOnlyEntries.count
+    }
+
     public var warnAndErrorCount: Int {
-        entries.filter { $0.severity == .warn || $0.severity == .error }.count
+        errorAndCriticalEntries.count
     }
 
     // MARK: - 1-Tap Antigravity Diagnostic Exports (Strictly Scrubbed)
@@ -115,7 +129,8 @@ public final class DiagnosticLogStore {
         calibration: CalibrationSummary,
         strategyBreakdowns: [StrategyDiagnosticBreakdown],
         tradeLedger: [TradeLedgerSnapshot],
-        trapLogs: [TrapLogSnapshot]
+        trapLogs: [TrapLogSnapshot],
+        crashLogs: [CrashLogSnapshot] = []
     ) -> String {
         let iso = ISO8601DateFormatter().string(from: Date())
         var lines: [String] = []
@@ -167,8 +182,22 @@ public final class DiagnosticLogStore {
             }
         }
 
-        lines.append("\n## Recent WARN / ERROR Runtime Logs")
-        let issues = entries.filter { $0.severity == .warn || $0.severity == .error }.prefix(25)
+        lines.append("\n## Crash & Hang Logs (\(crashLogs.count))")
+        if crashLogs.isEmpty {
+            lines.append("- Zero crashes or MetricKit hangs recorded.")
+        } else {
+            for c in crashLogs.prefix(10) {
+                let ts = ISO8601DateFormatter().string(from: c.timestamp)
+                lines.append("- [\(c.source.rawValue)] \(ts) · v\(c.appVersion) (\(c.appBuild)) · **\(c.crashType)**: \(c.summary)")
+                let previewFrames = c.stackTrace.components(separatedBy: .newlines).prefix(6).joined(separator: " | ")
+                if !previewFrames.isEmpty {
+                    lines.append("  - Stack: `\(previewFrames)`")
+                }
+            }
+        }
+
+        lines.append("\n## Error & Warning Logs (\(errorAndCriticalEntries.count))")
+        let issues = errorAndCriticalEntries.prefix(30)
         if issues.isEmpty {
             lines.append("- Zero warnings or errors recorded.")
         } else {
@@ -189,7 +218,8 @@ public final class DiagnosticLogStore {
         calibration: CalibrationSummary,
         strategyBreakdowns: [StrategyDiagnosticBreakdown],
         tradeLedger: [TradeLedgerSnapshot],
-        trapLogs: [TrapLogSnapshot]
+        trapLogs: [TrapLogSnapshot],
+        crashLogs: [CrashLogSnapshot] = []
     ) -> URL? {
         let bundle = AntigravityDiagnosticBundle(
             exportedAtISO8601: ISO8601DateFormatter().string(from: Date()),
@@ -204,7 +234,9 @@ public final class DiagnosticLogStore {
             strategyBreakdowns: strategyBreakdowns,
             tradeLedger: tradeLedger,
             trapLogs: trapLogs,
-            recentRuntimeLogs: Array(entries.prefix(250))
+            recentRuntimeLogs: Array(entries.prefix(250)),
+            errorLogs: Array(errorAndCriticalEntries.prefix(100)),
+            crashLogs: Array(crashLogs.prefix(50))
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

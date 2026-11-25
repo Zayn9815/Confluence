@@ -14,6 +14,7 @@ public struct NewsCalendarTabView: View {
     @State private var subTab: NewsSubTab = .calendar
     @State private var impactFilter: MacroImportance = .medium
     @State private var selectedCurrency: String = "ALL"
+    @State private var selectedAnalysisTarget: NewsAnalysisTarget?
 
     private let currencies = ["ALL", "USD", "EUR", "GBP", "JPY"]
 
@@ -52,22 +53,24 @@ public struct NewsCalendarTabView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 10) {
-                        Button {
-                            Task { await coordinator.scanAllMarkets() }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .disabled(coordinator.isScanning)
-
-                        NotificationBellButton(
-                            unreadCount: coordinator.unreadNotificationCount,
-                            palette: palette
-                        ) {
-                            coordinator.isNotificationInboxPresented = true
-                        }
+                    Button {
+                        Task { await coordinator.scanAllMarkets() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(coordinator.isScanning)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    NotificationBellButton(
+                        unreadCount: coordinator.unreadNotificationCount,
+                        palette: palette
+                    ) {
+                        coordinator.isNotificationInboxPresented = true
                     }
                 }
+            }
+            .sheet(item: $selectedAnalysisTarget) { target in
+                NewsTradeAnalysisSheet(target: target, coordinator: coordinator, palette: palette)
             }
         }
     }
@@ -235,9 +238,24 @@ public struct NewsCalendarTabView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(palette.tertiaryInk)
             }
+
+            HStack {
+                Label("Analyze Market Direction & Trade Setup", systemImage: "scope")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.champagneGold)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.tertiaryInk)
+            }
+            .padding(.top, 2)
         }
         .padding(12)
         .institutionalCard(palette: palette)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedAnalysisTarget = .event(ev)
+        }
     }
 
     private var breakingRadarContent: some View {
@@ -325,18 +343,10 @@ public struct NewsCalendarTabView: View {
                     .foregroundStyle(palette.tertiaryInk)
             }
 
-            if let urlStr = item.url, let url = URL(string: urlStr) {
-                Link(destination: url) {
-                    Text(item.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(palette.primaryInk)
-                        .multilineTextAlignment(.leading)
-                }
-            } else {
-                Text(item.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(palette.primaryInk)
-            }
+            Text(item.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(palette.primaryInk)
+                .multilineTextAlignment(.leading)
 
             if !item.affectedAssets.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -358,9 +368,24 @@ public struct NewsCalendarTabView: View {
                     .font(.caption2)
                     .foregroundStyle(palette.champagneGold)
             }
+
+            HStack {
+                Label("Analyze Direction & News+Math Setup", systemImage: "scope")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.champagneGold)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.tertiaryInk)
+            }
+            .padding(.top, 2)
         }
         .padding(12)
         .institutionalCard(palette: palette)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedAnalysisTarget = .article(item)
+        }
     }
 
     private func macroValCell(_ title: String, _ value: String, accent: Color) -> some View {

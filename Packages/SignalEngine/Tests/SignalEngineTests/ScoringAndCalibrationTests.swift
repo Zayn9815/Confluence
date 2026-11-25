@@ -403,4 +403,204 @@ final class ScoringAndCalibrationTests: XCTestCase {
         )
         XCTAssertEqual(weakSig?.category, .weakSignal)
     }
+
+    // MARK: - v1.3 Quantitative Math, Psychology & News Fusion Tests
+
+    func testTP2RRAndATRCeilingCapsUnrealisticStructuralOutlier() {
+        let base: TimeInterval = 1_760_000_000
+        let bar = Candle(
+            openTimeEpochSeconds: base - 900,
+            closeTimeEpochSeconds: base,
+            open: 25910, high: 25940, low: 25880, close: 25900,
+            volume: 1000, isClosed: true
+        )
+        let ict = ICTAnalysis(
+            swings: [
+                SwingPivot(index: 5, confirmedAtIndex: 8, price: 25945, isHigh: true),
+                SwingPivot(index: 12, confirmedAtIndex: 15, price: 25760, isHigh: false)
+            ],
+            structureBreaks: [], fvgs: [], orderBlocks: [], liquiditySweeps: [],
+            currentStructureBias: .short, equilibriumPrice: nil,
+            dealingRangeHigh: nil, dealingRangeLow: nil, dealingZone: nil, contributions: []
+        )
+        // Distant HTF swing low ~20R away (the exact bug that produced TP2 1:16.7 on NAS100 15m)
+        let htfICT = ICTAnalysis(
+            swings: [SwingPivot(index: 3, confirmedAtIndex: 6, price: 24500, isHigh: false)],
+            structureBreaks: [], fvgs: [], orderBlocks: [], liquiditySweeps: [],
+            currentStructureBias: .short, equilibriumPrice: nil,
+            dealingRangeHigh: nil, dealingRangeLow: nil, dealingZone: nil, contributions: []
+        )
+
+        let lv = TradeLevelCalculator.calculate(
+            direction: .short,
+            candles: [bar],
+            ict: ict,
+            htfICT: htfICT,
+            atr: 45.0,
+            marketClass: .indices,
+            minimumRiskReward: 2.0,
+            mode: .structureATR,
+            enableTP2Target: true,
+            timeframe: .m15
+        )
+        XCTAssertNotNil(lv)
+        if let lv {
+            XCTAssertGreaterThanOrEqual(lv.riskRewardRatio, 2.0 - 1e-6)
+            XCTAssertLessThanOrEqual(lv.riskRewardRatio, 4.0 + 1e-6)
+            XCTAssertLessThanOrEqual(lv.tp2RiskRewardRatio, 6.0 + 1e-6, "TP2 must never explode to 1:16.7 on 15m")
+            XCTAssertLessThan(lv.tp2, lv.tp1)
+        }
+    }
+
+    func testCalibratedConfidenceClosedMarketPenaltyAndBreakdown() {
+        let base: TimeInterval = 1_760_000_000
+        let asset = WatchlistDefaults.descriptor(for: "NAS100")!
+        let bar = Candle(openTimeEpochSeconds: base - 900, closeTimeEpochSeconds: base, open: 25920, high: 25940, low: 25880, close: 25890, volume: 500, isClosed: true)
+        let ict = ICTAnalysis(
+            swings: [], structureBreaks: [], fvgs: [], orderBlocks: [], liquiditySweeps: [],
+            currentStructureBias: .short, equilibriumPrice: 25950, dealingRangeHigh: 26000,
+            dealingRangeLow: 25800, dealingZone: .premium,
+            contributions: [
+                StrategyContribution(id: "ict_bos", name: "ICT BOS", group: .ictSmc, direction: .short, weight: 1.1, historicalWinRate: 0.58, detail: "BOS"),
+                StrategyContribution(id: "ict_fvg", name: "Bearish FVG", group: .ictSmc, direction: .short, weight: 1.0, historicalWinRate: 0.57, detail: "FVG")
+            ]
+        )
+        let mom = TrendMomentumSnapshot(
+            ema20: 25920, ema50: 25950, ema200: 26010, rsi14: 44, atr14: 42, rvol: 1.6,
+            htfTrendDirection: .short,
+            contributions: [
+                StrategyContribution(id: "momentum_ema_pullback", name: "EMA Pullback", group: .trendMomentum, direction: .short, weight: 1.05, historicalWinRate: 0.58, detail: "EMA")
+            ]
+        )
+        let regime = RegimeAssessment(
+            regime: .trending, riskState: .safe, atrPercent: 0.25, atrZScore: 0.1,
+            efficiencyRatio: 0.55, rollingDrawdownPercent: 0.6, summary: "Trending"
+        )
+        let openSig = ConfluenceScorer.score(
+            asset: asset, timeframe: .m15, htfTimeframe: .h4, candles: [bar], htfBias: .short,
+            ict: ict, htfICT: nil, candlestickContributions: [], momentum: mom, regimeAssessment: regime,
+            traps: [], positioning: nil, preNewsShield: nil, macroImpulse: nil,
+            config: EngineConfig(), dataProvider: "biquote.io", isMarketClosed: false, nowEpochSeconds: base
+        )
+        let closedSig = ConfluenceScorer.score(
+            asset: asset, timeframe: .m15, htfTimeframe: .h4, candles: [bar], htfBias: .short,
+            ict: ict, htfICT: nil, candlestickContributions: [], momentum: mom, regimeAssessment: regime,
+            traps: [], positioning: nil, preNewsShield: nil, macroImpulse: nil,
+            config: EngineConfig(), dataProvider: "biquote.io", isMarketClosed: true, nowEpochSeconds: base
+        )
+
+        XCTAssertNotNil(openSig?.strengthBreakdown)
+        XCTAssertNotNil(closedSig?.strengthBreakdown)
+        XCTAssertLessThanOrEqual(openSig?.confidencePercent ?? 100, 92.0)
+        XCTAssertLessThanOrEqual(closedSig?.confidencePercent ?? 100, 72.0, "Closed-market snapshots must be capped <= 72%")
+        XCTAssertGreaterThan(openSig?.confidencePercent ?? 0, closedSig?.confidencePercent ?? 100)
+    }
+
+    func testPsychologyReportSeparatesIntradayProFlowFromCounterTrendWeeklyCOT() {
+        let ict = ICTAnalysis(
+            swings: [], structureBreaks: [], fvgs: [], orderBlocks: [], liquiditySweeps: [],
+            currentStructureBias: .short, equilibriumPrice: 25950, dealingRangeHigh: 26000,
+            dealingRangeLow: 25800, dealingZone: .premium, contributions: []
+        )
+        let cotPositioning = PositioningAssessment(
+            provenance: .cftcCOT,
+            proDirection: .long,
+            retailCrowdDirection: .long,
+            priceOIDivergence: .neutral,
+            cotInstitutionalPercentile: 78.0,
+            cotRetailPercentile: 62.0,
+            summary: "CFTC COT Smart Money Net Long (78th pct)",
+            badges: ["CFTC COT Smart Money Long"]
+        )
+
+        let report = PsychologyReportBuilder.build(
+            category: .strongSignal,
+            signalDirection: .short,
+            ict: ict,
+            traps: [],
+            positioning: cotPositioning,
+            macroImpulse: nil,
+            rejectionReasons: [],
+            rvol: nil,
+            regime: .meanReverting
+        )
+
+        XCTAssertEqual(report.proDirection, .short, "Intraday Pro Flow must reflect SHORT setup, not opposing weekly COT")
+        XCTAssertEqual(report.macroPositioningDirection, .long)
+        XCTAssertEqual(report.macroPositioningLabel, "Weekly COT Macro")
+        XCTAssertEqual(report.macroAlignsWithSetup, false)
+        XCTAssertTrue(report.proPsychology.contains("counter-trend"))
+        XCTAssertFalse(report.proPsychology.contains("Smart money aligned LONG"))
+    }
+
+    func testFlatMarketRSIReturnsNeutral50AndNAS100SessionHours() {
+        let flatCloses = Array(repeating: 100.0, count: 30)
+        let rsi = TrendMomentumDetector.computeRSI(closes: flatCloses, period: 14)
+        XCTAssertFalse(rsi.isEmpty)
+        XCTAssertEqual(rsi.last ?? -1.0, 50.0, accuracy: 1e-6, "Flat series RSI must be neutral 50.0, never 100.0")
+
+        // Tuesday 03:00 UTC (Asian session): NAS100 23/5 futures/CFD is OPEN, while SPY US cash ETF is CLOSED
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+        comps.day = 24 // Tuesday
+        comps.hour = 3
+        comps.minute = 0
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let tuesdayAsianUTC = cal.date(from: comps)!.timeIntervalSince1970
+
+        let nas100 = WatchlistDefaults.descriptor(for: "NAS100")!
+        let spy = WatchlistDefaults.descriptor(for: "SPY")!
+        XCTAssertTrue(SessionCalendar.isMarketOpen(asset: nas100, at: tuesdayAsianUTC))
+        XCTAssertFalse(SessionCalendar.isMarketOpen(asset: spy, at: tuesdayAsianUTC))
+    }
+
+    func testHeadlineWordBoundaryAndNewsTradeAnalyzerSafety() {
+        let now: TimeInterval = 1_760_000_000
+        // "Central Bank" must NEVER match bearish keyword "ban"!
+        let bankItem = HeadlineSentimentClassifier.classify(
+            id: "bank-1",
+            title: "Central Bank holds steady as banking sector reports stable reserves",
+            source: "TestWire",
+            publishedEpochSeconds: now - 600
+        )
+        XCTAssertFalse(bankItem.matchedKeywords.contains("ban"))
+        XCTAssertNotEqual(bankItem.sentiment, .bearish)
+
+        // Unpublished high-impact USD CPI event must produce WAIT / NO TRADE verdict
+        let pendingCPI = EconomicEvent(
+            semanticKey: "US|cpi|2026-11-24",
+            source: .biquote,
+            countryCode: "US",
+            currency: "USD",
+            name: "US CPI YoY",
+            canonicalIndicator: .cpi,
+            importance: .high,
+            timeMode: .exact,
+            scheduledEpochSeconds: now + 1800,
+            unit: "%",
+            actual: nil,
+            forecast: 2.8,
+            previous: 2.9,
+            supportsActualRelease: true
+        )
+        let summary = NewsTradeAnalyzer.summarize(event: pendingCPI, nowEpochSeconds: now)
+        XCTAssertTrue(summary.isPreReleasePending)
+        XCTAssertTrue(summary.assetImpacts.contains { $0.symbol == "NAS100" })
+        XCTAssertTrue(summary.assetImpacts.contains { $0.symbol == "XAU/USD" })
+
+        let gold = WatchlistDefaults.descriptor(for: "XAU/USD")!
+        let eval = NewsTradeAnalyzer.evaluateTrade(
+            summary: summary,
+            asset: gold,
+            rawEntryCandles: [],
+            rawHTFCandles: [],
+            timeframe: .h1,
+            dataProvider: "Test",
+            serverNowEpochSeconds: now
+        )
+        XCTAssertEqual(eval.verdict, .waitNoTrade)
+        XCTAssertFalse(eval.requiredConfirmations.isEmpty)
+    }
 }

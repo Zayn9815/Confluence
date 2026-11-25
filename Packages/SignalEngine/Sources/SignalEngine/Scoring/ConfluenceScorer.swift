@@ -51,7 +51,8 @@ public enum ConfluenceScorer {
         config: EngineConfig,
         dataProvider: String,
         isMarketClosed: Bool,
-        nowEpochSeconds: TimeInterval
+        nowEpochSeconds: TimeInterval,
+        newsCatalyst: NewsCatalystAssessment? = nil
     ) -> TradeSignal? {
         guard let lastBar = candles.last else { return nil }
         let killzone = SessionCalendar.killzone(at: lastBar.closeTimeEpochSeconds)
@@ -95,7 +96,7 @@ public enum ConfluenceScorer {
                     name: pos.provenance == .okxFundingOI ? "OKX Pro/OI Flow" : "CFTC COT Smart Money",
                     group: .behavioralTrap,
                     direction: pos.proDirection,
-                    weight: 1.10,
+                    weight: pos.provenance == .okxFundingOI ? 1.10 : 0.90,
                     historicalWinRate: 0.59,
                     detail: pos.summary
                 )
@@ -164,7 +165,7 @@ public enum ConfluenceScorer {
             opposing = []
         }
 
-        // Calculate numeric levels purely in code
+        // Calculate numeric levels purely in code (with timeframe-aware R:R & ATR ceilings)
         let levels = TradeLevelCalculator.calculate(
             direction: dominantDirection,
             candles: candles,
@@ -177,11 +178,12 @@ public enum ConfluenceScorer {
             fixedStopLossPercent: config.fixedStopLossPercent,
             fixedTP1Percent: config.fixedTP1Percent,
             fixedTP2Percent: config.fixedTP2Percent,
-            enableTP2Target: config.enableTP2Target
+            enableTP2Target: config.enableTP2Target,
+            timeframe: timeframe
         )
 
-        // Calibrated Confidence % (0 - 99%)
-        let confidence = computeCalibratedConfidence(
+        // Calibrated 4-Pillar Signal Strength & Logistic Confidence (capped <= 92%, closed-market <= 72%)
+        let breakdown = computeStrengthBreakdown(
             aligned: aligned,
             opposing: opposing,
             dominantDirection: dominantDirection,
@@ -191,9 +193,12 @@ public enum ConfluenceScorer {
             positioning: positioning,
             macroAlignedDir: macroAlignedDir,
             macroImpulse: macroImpulse,
+            newsCatalyst: newsCatalyst,
             preNewsShield: preNewsShield,
-            freshTrap: freshTrap
+            freshTrap: freshTrap,
+            isMarketClosed: isMarketClosed
         )
+        let confidence = breakdown.finalConfidencePercent
 
         // Hard Gate Checks (all enforced in deterministic Swift code)
         var rejectionReasons: [String] = []
@@ -246,7 +251,8 @@ public enum ConfluenceScorer {
         }
         // Unresolved opposing behavioral trap blocks primary signal
         if let opposingTrap = actionableTraps.last(where: { $0.direction.institutionalDirection == dominantDirection.opposite }) {
-            rejectionReasons.append("Opposing unresolved \(opposingTrap.direction.rawValue) active at \(String(format: "%.2f", opposingTrap.level))")
+            let priceFmt = ChartPricePrecision.resolve(symbol: asset.symbol, marketClass: asset.marketClass, referencePrice: opposingTrap.level)
+            rejectionReasons.append("Opposing unresolved \(opposingTrap.direction.rawValue) active at \(priceFmt.format(opposingTrap.level))")
         }
 
         // Determine final SignalCategory & Tier
@@ -257,9 +263,9 @@ public enum ConfluenceScorer {
         if rejectionReasons.isEmpty {
             category = .strongSignal
             trapDir = freshTrap?.direction
-            if confidence >= 85.0 {
+            if confidence >= 80.0 {
                 tier = .aPlusInstitutional
-            } else if confidence >= 75.0 {
+            } else if confidence >= 73.0 {
                 tier = .highConviction
             } else {
                 tier = .aligned
@@ -284,7 +290,8 @@ public enum ConfluenceScorer {
             macroImpulse: macroImpulse,
             rejectionReasons: rejectionReasons,
             rvol: momentum.rvol,
-            regime: regimeAssessment.regime
+            regime: regimeAssessment.regime,
+            newsCatalyst: newsCatalyst
         )
 
         // Chart overlay data (unmitigated FVGs, OBs, active traps, EQ, EMAs)
@@ -329,6 +336,8 @@ public enum ConfluenceScorer {
             barCloseEpochSeconds: lastBar.closeTimeEpochSeconds
         )
 
+        let combinedCatalystBadge = macroImpulse?.headlineStrip ?? newsCatalyst?.headlineBadge
+
         return TradeSignal(
             id: fingerprint,
             fingerprint: fingerprint,
@@ -353,17 +362,18 @@ public enum ConfluenceScorer {
             rejectionReasons: rejectionReasons,
             psychologyReport: psychReport,
             preNewsBadge: preNewsShield?.badgeText,
-            postNewsCatalystBadge: macroImpulse?.headlineStrip,
+            postNewsCatalystBadge: combinedCatalystBadge,
             overlays: overlays,
             recentCandles: Array(candles.suffix(48)),
             aiJudgment: nil,
             aiConfirmed: false,
             dataProvider: dataProvider,
-            isMarketClosedSnapshot: isMarketClosed
+            isMarketClosedSnapshot: isMarketClosed,
+            strengthBreakdown: breakdown
         )
     }
 
-    private static func computeCalibratedConfidence(
+    private static func computeStrengthBreakdown(
         aligned: [StrategyContribution],
         opposing: [StrategyContribution],
         dominantDirection: TradeDirection,
@@ -373,77 +383,164 @@ public enum ConfluenceScorer {
         positioning: PositioningAssessment?,
         macroAlignedDir: TradeDirection,
         macroImpulse: MacroClusterImpulse?,
+        newsCatalyst: NewsCatalystAssessment?,
         preNewsShield: PreNewsShieldStatus?,
-        freshTrap: BehavioralTrap?
-    ) -> Double {
-        guard dominantDirection != .neutral, !aligned.isEmpty else { return 25.0 }
+        freshTrap: BehavioralTrap?,
+        isMarketClosed: Bool
+    ) -> SignalStrengthBreakdown {
+        guard dominantDirection != .neutral, !aligned.isEmpty else {
+            return SignalStrengthBreakdown(
+                technicalScore: 0,
+                psychologyScore: 0,
+                newsMacroScore: 0,
+                regimeRiskAdjustment: 0,
+                finalConfidencePercent: 25.0,
+                strengthLabel: "Weak",
+                notes: ["No directional multi-strategy consensus"]
+            )
+        }
 
-        // (a) Count & independence of aligned strategies
+        var notes: [String] = []
+
+        // Pillar 1: Technical Math (ICT/SMC + Candlesticks + Trend/Momentum + HTF + Killzone)
         let weightedSum = aligned.reduce(0.0) { $0 + ($1.weight * $1.historicalWinRate) }
         let opposingPenalty = opposing.reduce(0.0) { $0 + ($1.weight * 4.5) }
         let distinctGroups = Set(aligned.map(\.group)).count
 
-        var score = 38.0
-        score += min(32.0, weightedSum * 12.5)
-        score += Double(max(0, distinctGroups - 1)) * 5.0
-        score -= opposingPenalty
-
-        // (c) Regime fit
-        switch regime {
-        case .trending:
-            score += (htfBias == dominantDirection) ? 6.0 : -3.0
-        case .meanReverting:
-            score += (freshTrap != nil) ? 5.0 : -1.0
-        case .highVol:
-            score -= 4.0
-        case .crisis:
-            score -= 18.0
-        }
-
-        // (d) HTF bias + Killzone alignment
+        var techScore = min(28.0, weightedSum * 11.5)
+        techScore += Double(max(0, distinctGroups - 1)) * 4.0
+        techScore -= opposingPenalty
         if htfBias == dominantDirection {
-            score += 7.0
+            techScore += 7.0
+            notes.append("HTF trend aligned (+7)")
         } else if htfBias == dominantDirection.opposite {
-            score -= 9.0
+            techScore -= 9.0
+            notes.append("Counter-HTF structure (-9)")
         }
         if killzone.isPrimeLiquidity {
-            score += 4.0
+            techScore += 3.0
+            notes.append("\(killzone.displayName) liquidity (+3)")
         }
 
-        // (e) Pro-vs-Crowd behavioral alignment
-        if let pos = positioning {
-            if pos.proDirection == dominantDirection {
-                score += 6.0
-                if pos.retailCrowdDirection == dominantDirection.opposite {
-                    score += 4.0 // Classic smart-money vs retail divergence
-                }
-            } else if pos.proDirection == dominantDirection.opposite {
-                score -= 7.0
-            }
-        }
+        // Pillar 2: Psychology & Positioning (Intraday Traps + OKX/CFTC positioning)
+        var psychScore = 0.0
         if let trap = freshTrap {
             if trap.direction.institutionalDirection == dominantDirection {
-                score += 5.0
+                psychScore += 5.0
+                notes.append("\(trap.direction.rawValue) aligned (+5)")
             } else {
-                score -= 10.0
+                psychScore -= 10.0
+                notes.append("Opposing \(trap.direction.rawValue) (-10)")
             }
         }
+        if let pos = positioning, pos.proDirection != .neutral {
+            if pos.provenance == .okxFundingOI {
+                if pos.proDirection == dominantDirection {
+                    psychScore += 5.0
+                    if pos.retailCrowdDirection == dominantDirection.opposite {
+                        psychScore += 3.0
+                    }
+                    notes.append("OKX Funding/OI flow aligned")
+                } else if pos.proDirection == dominantDirection.opposite {
+                    psychScore -= 6.0
+                    notes.append("OKX Funding/OI opposing (-6)")
+                }
+            } else {
+                // Weekly CFTC COT informs macro backdrop without overpowering intraday structure
+                if pos.proDirection == dominantDirection {
+                    psychScore += 4.0
+                    if pos.retailCrowdDirection == dominantDirection.opposite {
+                        psychScore += 2.0
+                    }
+                    notes.append("Weekly COT macro aligned")
+                } else if pos.proDirection == dominantDirection.opposite {
+                    psychScore -= 4.0
+                    notes.append("Counter-trend vs Weekly COT (-4)")
+                }
+            }
+        }
+        psychScore = max(-14.0, min(14.0, psychScore))
 
-        // (f) Macro catalyst alignment / conflict penalty
+        // Pillar 3: News & Macro Calendar Impact (Macro ±8 pts capped; Breaking News ±4 pts capped)
+        var newsMacroScore = 0.0
         if let imp = macroImpulse {
             if imp.isWhipsawCautionActive {
-                score -= 12.0
+                newsMacroScore -= 10.0
+                notes.append("Post-news whipsaw caution (-10)")
             } else if macroAlignedDir == dominantDirection {
-                score += 6.0
+                newsMacroScore += 8.0
+                notes.append("Macro release aligned (+8)")
             } else if macroAlignedDir == dominantDirection.opposite {
-                score -= 10.0
+                newsMacroScore -= 8.0
+                notes.append("Macro release opposing (-8)")
+            }
+        }
+        if let catalyst = newsCatalyst {
+            let cappedWeight = min(4.0, abs(catalyst.netScore) * 2.0)
+            if catalyst.direction == dominantDirection {
+                newsMacroScore += cappedWeight
+                notes.append("\(catalyst.headlineBadge) (+\(String(format: "%.1f", cappedWeight)))")
+            } else if catalyst.direction == dominantDirection.opposite {
+                newsMacroScore -= cappedWeight
+                notes.append("\(catalyst.headlineBadge) opposes (-\(String(format: "%.1f", cappedWeight)))")
+            } else if catalyst.isHighVolatilityNeutral {
+                newsMacroScore -= 2.0
+                notes.append("Volatile headline watch (-2)")
             }
         }
         if let shield = preNewsShield, shield.isBlackoutActive {
-            score -= 14.0
+            newsMacroScore -= 12.0
+            notes.append("Pre-news blackout (-12)")
         }
 
-        return min(99.0, max(5.0, score))
+        // Pillar 4: Regime & Market Session Risk Adjustment
+        var regimeAdj = 0.0
+        switch regime {
+        case .trending:
+            regimeAdj += (htfBias == dominantDirection) ? 4.0 : -3.0
+        case .meanReverting:
+            regimeAdj += (freshTrap != nil) ? 3.0 : -1.0
+        case .highVol:
+            regimeAdj -= 4.0
+            notes.append("High-vol expansion (-4)")
+        case .crisis:
+            regimeAdj -= 18.0
+            notes.append("Crisis regime (-18)")
+        }
+        if isMarketClosed {
+            regimeAdj -= 12.0
+            notes.append("Market closed penalty (-12, capped ≤72%)")
+        }
+
+        // Smooth calibrated logistic probability mapping (prevents overconfident 85-95% saturation)
+        let totalRaw = techScore + psychScore + newsMacroScore + regimeAdj
+        let logistic = 1.0 / (1.0 + exp(-0.042 * (totalRaw - 10.0)))
+        var calibrated = 15.0 + 77.0 * logistic
+        if isMarketClosed {
+            calibrated = min(calibrated, 72.0)
+        }
+        calibrated = min(92.0, max(15.0, calibrated))
+
+        let strengthLabel: String
+        if calibrated >= 80.0 {
+            strengthLabel = "Institutional A+"
+        } else if calibrated >= 73.0 {
+            strengthLabel = "Strong"
+        } else if calibrated >= 65.0 {
+            strengthLabel = "Moderate"
+        } else {
+            strengthLabel = "Weak"
+        }
+
+        return SignalStrengthBreakdown(
+            technicalScore: techScore,
+            psychologyScore: psychScore,
+            newsMacroScore: newsMacroScore,
+            regimeRiskAdjustment: regimeAdj,
+            finalConfidencePercent: calibrated,
+            strengthLabel: strengthLabel,
+            notes: notes
+        )
     }
 
     private static func deduplicateById(_ items: [StrategyContribution]) -> [StrategyContribution] {

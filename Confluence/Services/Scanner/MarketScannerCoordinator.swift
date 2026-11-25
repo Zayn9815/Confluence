@@ -33,6 +33,7 @@ public final class MarketScannerCoordinator {
     public var settings: AppSettingsStore
     public let store: ConfluenceDataStore
     public let diagnosticLog: DiagnosticLogStore
+    public let crashLogStore: CrashLogStore
 
     private let http: URLSessionHTTPClient
     private let twelveData: TwelveDataAdapter
@@ -43,6 +44,7 @@ public final class MarketScannerCoordinator {
     private let calendarService: EconomicCalendarService
     private let newsService: BreakingNewsService
     private let geminiClient: GeminiJudgeClient
+    private var dismissedSignalFingerprints: Set<String> = []
 
     // Live terminal state (strictly real fetched / computed data — zero mock signals or prints)
     public var signals: [TradeSignal] = []
@@ -87,6 +89,7 @@ public final class MarketScannerCoordinator {
         self.settings = settings
         self.store = store
         self.diagnosticLog = DiagnosticLogStore(store: store)
+        self.crashLogStore = CrashLogStore(store: store)
         let client = URLSessionHTTPClient()
         self.http = client
         let td = TwelveDataAdapter(http: client)
@@ -459,7 +462,8 @@ public final class MarketScannerCoordinator {
                         timeframe: entryTF,
                         providerName: entryRes.providerName,
                         serverNowEpochSeconds: serverNow,
-                        clockSkewSeconds: clockSkew
+                        clockSkewSeconds: clockSkew,
+                        asset: asset
                     )
                     sanitizedClosedBySymbol[asset.symbol] = sanitizedEntry.candles
 
@@ -480,6 +484,8 @@ public final class MarketScannerCoordinator {
                         okxDerivatives: okxSnap,
                         cftcCOTRecords: cotRecords,
                         calendarEvents: calendarEvents,
+                        breakingNews: breakingNews,
+                        fearGreed: fearGreed,
                         config: engineConfig,
                         dataProvider: entryRes.providerName,
                         serverNowEpochSeconds: serverNow,
@@ -506,6 +512,10 @@ public final class MarketScannerCoordinator {
                     scannedTraps.append(contentsOf: output.activeTraps)
 
                     if var signal = output.signal {
+                        if dismissedSignalFingerprints.contains(signal.fingerprint) {
+                            continue
+                        }
+
                         let isNew = !ConfluenceScorer.shouldSuppressDuplicate(
                             fingerprint: signal.fingerprint,
                             symbol: signal.symbol,
@@ -595,6 +605,150 @@ public final class MarketScannerCoordinator {
         if !errors.isEmpty {
             self.lastScanError = errors.prefix(2).joined(separator: " • ")
         }
+    }
+
+    // MARK: - Permanent Signal Feed Deletion (Calibration Stats & Trade Ledger Preserved)
+
+    public func deleteSignal(fingerprint: String) {
+        dismissedSignalFingerprints.insert(fingerprint)
+        store.deleteSignal(fingerprint: fingerprint)
+        signals.removeAll { $0.fingerprint == fingerprint }
+        diagnosticLog.log(.info, category: .engine, message: "Deleted signal card \(fingerprint) (Calibration Stats preserved).")
+    }
+
+    public func deleteSignals(fingerprints: Set<String>) {
+        guard !fingerprints.isEmpty else { return }
+        dismissedSignalFingerprints.formUnion(fingerprints)
+        store.deleteSignals(fingerprints: fingerprints)
+        signals.removeAll { fingerprints.contains($0.fingerprint) }
+        diagnosticLog.log(.info, category: .engine, message: "Deleted \(fingerprints.count) selected signal card(s) (Calibration Stats preserved).")
+    }
+
+    public func deleteSignals(in category: SignalCategory) {
+        let matching = Set(signals.filter { $0.category == category }.map(\.fingerprint))
+        dismissedSignalFingerprints.formUnion(matching)
+        store.deleteSignals(category: category)
+        signals.removeAll { $0.category == category }
+        diagnosticLog.log(.info, category: .engine, message: "Cleared \(category.rawValue) tab (\(matching.count) cards; Calibration Stats preserved).")
+    }
+
+    public func deleteAllSignals() {
+        dismissedSignalFingerprints.formUnion(signals.map(\.fingerprint))
+        store.deleteAllSignals()
+        signals = []
+        diagnosticLog.log(.info, category: .engine, message: "Cleared all signal cards from Signals feed (Calibration Stats preserved).")
+    }
+
+    // MARK: - Interactive News + Math Trade Evaluation
+
+    public func evaluateNewsTrade(
+        summary: NewsMarketSummary,
+        symbol: String
+    ) async -> NewsTradeEvaluation {
+        guard let asset = WatchlistDefaults.descriptor(for: symbol) else {
+            return NewsTradeEvaluation(
+                symbol: symbol,
+                newsBias: summary.headlineBias,
+                verdict: .waitNoTrade,
+                signal: nil,
+                headlineSummary: "Symbol \(symbol) is not configured in Confluence watchlist.",
+                alignmentNotes: [],
+                requiredConfirmations: ["Select a supported watchlist asset."]
+            )
+        }
+
+        let entryTF = settings.payload.entryTimeframe
+        let htfTF = settings.payload.htfTimeframe
+        let twelveKey = await KeychainStore.shared.readEffectiveTwelveDataKey()
+
+        var entryCandles: [Candle] = []
+        var htfCandles: [Candle] = []
+        var providerName = "Cached Feed"
+
+        do {
+            if asset.marketClass == .crypto {
+                async let eTask = cryptoRouter.fetchCandles(
+                    asset: asset,
+                    timeframe: entryTF,
+                    primary: settings.payload.cryptoPrimaryExchange,
+                    twelveDataKey: twelveKey
+                )
+                async let hTask = cryptoRouter.fetchCandles(
+                    asset: asset,
+                    timeframe: htfTF,
+                    primary: settings.payload.cryptoPrimaryExchange,
+                    twelveDataKey: twelveKey
+                )
+                let (eRes, hRes) = try await (eTask, hTask)
+                entryCandles = eRes.candles
+                htfCandles = hRes.candles
+                providerName = eRes.providerName
+            } else {
+                async let eTask = tradFiRouter.fetchCandles(
+                    asset: asset,
+                    timeframe: entryTF,
+                    twelveDataKey: twelveKey,
+                    preference: settings.payload.tradFiProviderPreference,
+                    allowProxyForChart: false
+                )
+                async let hTask = tradFiRouter.fetchCandles(
+                    asset: asset,
+                    timeframe: htfTF,
+                    twelveDataKey: twelveKey,
+                    preference: settings.payload.tradFiProviderPreference,
+                    allowProxyForChart: false
+                )
+                let (eRes, hRes) = try await (eTask, hTask)
+                entryCandles = eRes.candles
+                htfCandles = hRes.candles
+                providerName = eRes.providerName
+            }
+        } catch {
+            // Honest fallback to last persisted signal candles if live feed rate-limits
+            if let cachedSig = signals.first(where: { $0.symbol == asset.symbol && !$0.recentCandles.isEmpty }) {
+                entryCandles = cachedSig.recentCandles
+                providerName = "\(cachedSig.dataProvider) (Cached)"
+            }
+            diagnosticLog.log(.warn, category: .feed, message: "News analysis live candle fetch failed for \(symbol): \(error.localizedDescription)")
+        }
+
+        var okxSnap: OKXDerivativesSnapshot? = nil
+        var cotRecords: [CFTCCOTRecord] = []
+        if settings.payload.positioningFeedsEnabled {
+            if let swapId = asset.okxSwapInstId {
+                let oiPeriod = (entryTF == .d1) ? "1Dutc" : (entryTF == .h4 ? "4H" : "1H")
+                okxSnap = try? await okxPositioning.fetchSnapshot(instId: swapId, period: oiPeriod)
+            } else if let code = asset.cftcContractCode,
+                      let dsRaw = asset.cftcDataset,
+                      let ds = CFTCDatasetKind(rawValue: dsRaw) {
+                cotRecords = (try? await cftcCOT.records(for: code, dataset: ds)) ?? []
+            }
+        }
+
+        var weights: [String: Double] = [:]
+        for stat in calibrationSummary.strategyRankings where stat.totalResolved >= 5 {
+            weights[stat.strategyId] = max(0.65, min(1.40, 0.5 + stat.winRate))
+        }
+        let config = settings.buildEngineConfig(reliabilityWeights: weights)
+        let clockSkew = await http.estimatedClockSkewSeconds()
+        let serverNow = Date().timeIntervalSince1970 + clockSkew
+
+        return NewsTradeAnalyzer.evaluateTrade(
+            summary: summary,
+            asset: asset,
+            rawEntryCandles: entryCandles,
+            rawHTFCandles: htfCandles,
+            timeframe: entryTF,
+            htfTimeframe: htfTF,
+            okxDerivatives: okxSnap,
+            cftcCOTRecords: cotRecords,
+            calendarEvents: calendarEvents,
+            breakingNews: breakingNews,
+            fearGreed: fearGreed,
+            config: config,
+            dataProvider: providerName,
+            serverNowEpochSeconds: serverNow
+        )
     }
 
     // MARK: - Strategy Trade History & Trade Outcome Chart Replay

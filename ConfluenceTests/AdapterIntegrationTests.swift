@@ -471,4 +471,250 @@ final class AdapterIntegrationTests: XCTestCase {
         XCTAssertEqual(markerResult.markers[0].text, "ENTRY LONG")
         XCTAssertTrue(markerResult.markers[1].text?.hasPrefix("TP2 WIN") == true)
     }
+
+    // MARK: - v1.3 Additive Migration, Permanent Signal Deletion & Native Crash Log Tests
+
+    @MainActor
+    func testSwiftDataV1_2ToV1_3AdditiveMigrationAndOutcomeBackfill() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("confluence_v13_mig_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let storeURL = dir.appendingPathComponent("confluence_v12.store")
+
+        let base: TimeInterval = 1_760_000_000
+        let sampleOutcome = SignalOutcomeRecord(
+            signalId: "fp-legacy-v12",
+            symbol: "NAS100",
+            marketClass: .indices,
+            category: .strongSignal,
+            direction: .short,
+            predictedProbability: 0.74,
+            status: .hitTP1,
+            netReturnPercent: 0.85,
+            rMultiple: 2.1,
+            strategyIds: ["ict_bos", "momentum_ema_pullback"],
+            hadMacroCatalyst: false,
+            resolvedAtEpochSeconds: base + 3600
+        )
+        let outcomeData = try JSONEncoder().encode(sampleOutcome)
+
+        // 1. Seed a v1.2 6-model container with a legacy PersistedSignalRecord carrying outcomeJSON
+        do {
+            let v12Schema = Schema([
+                PersistedSignalRecord.self,
+                StoredNotificationItem.self,
+                DiagnosticLogEntry.self,
+                TrapLogEntry.self,
+                TradeLedgerEntry.self,
+                TradeReplayCandleCache.self
+            ])
+            let v12Config = ModelConfiguration(schema: v12Schema, url: storeURL)
+            let v12Container = try ModelContainer(for: v12Schema, configurations: [v12Config])
+            let ctx = ModelContext(v12Container)
+            ctx.insert(PersistedSignalRecord(
+                fingerprint: "fp-legacy-v12",
+                symbol: "NAS100",
+                directionRaw: "short",
+                categoryRaw: SignalCategory.strongSignal.rawValue,
+                createdAt: Date(timeIntervalSince1970: base),
+                signalJSON: Data("{}".utf8),
+                outcomeJSON: outcomeData
+            ))
+            try ctx.save()
+        }
+
+        // 2. Open with v1.3 8-model ConfluenceDataStore -> must migrate cleanly & backfill PersistedOutcomeRecord
+        let upgraded = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
+        XCTAssertFalse(upgraded.didQuarantineCorruptStore)
+        XCTAssertEqual(upgraded.fetchOutcomeRecords().count, 1)
+        XCTAssertEqual(upgraded.fetchOutcomeRecords().first?.signalId, "fp-legacy-v12")
+
+        // 3. Delete the legacy signal card -> Calibration outcome must STILL survive in PersistedOutcomeRecord!
+        upgraded.deleteSignal(fingerprint: "fp-legacy-v12")
+        let reopened = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
+        XCTAssertEqual(reopened.fetchOutcomeRecords().count, 1)
+        XCTAssertEqual(reopened.fetchOutcomeRecords().first?.status, .hitTP1)
+    }
+
+    @MainActor
+    func testPermanentSignalDeletionPreservesCalibrationStatsAcrossReopen() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("confluence_v13_del_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let storeURL = dir.appendingPathComponent("confluence_del.store")
+
+        let store = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
+        let base: TimeInterval = 1_760_000_000
+        let psych = PsychologyReport(
+            signalCategory: .strongSignal, proDirection: .long, retailCrowdDirection: .short,
+            provenanceBadge: "Structure", whatHappened: "Setup", beginnerPsychology: "B", proPsychology: "P",
+            behavioralBadges: [], evidence: []
+        )
+        let levels = TradeLevels(
+            entryLow: 100, entryHigh: 101, entryMid: 100.5, stopLoss: 99, tp1: 103.5, tp2: 105.5,
+            riskPercent: 1.5, reward1Percent: 3.0, reward2Percent: 5.0,
+            riskRewardRatio: 2.0, tp2RiskRewardRatio: 3.3, isTP2Enabled: true
+        )
+
+        func makeSig(fp: String, cat: SignalCategory) -> TradeSignal {
+            TradeSignal(
+                id: fp, fingerprint: fp, symbol: "BTC/USDT", displayName: "Bitcoin",
+                marketClass: .crypto, timeframe: .h1, htfTimeframe: .h4,
+                category: cat, direction: .long, tier: .highConviction,
+                confidencePercent: 76.0, regime: .trending, riskState: .safe,
+                killzone: .newYork, htfBias: .long,
+                generatedAtEpochSeconds: base, barCloseEpochSeconds: base,
+                levels: levels, alignedStrategies: [], rejectionReasons: [],
+                psychologyReport: psych, dataProvider: "Binance Vision"
+            )
+        }
+
+        let s1 = makeSig(fp: "fp-strong-1", cat: .strongSignal)
+        let s2 = makeSig(fp: "fp-trap-1", cat: .trapAlert)
+        let s3 = makeSig(fp: "fp-weak-1", cat: .weakSignal)
+        store.upsertSignal(s1)
+        store.upsertSignal(s2)
+        store.upsertSignal(s3)
+
+        let out1 = SignalOutcomeRecord(
+            signalId: "fp-strong-1", symbol: "BTC/USDT", marketClass: .crypto,
+            category: .strongSignal, direction: .long, predictedProbability: 0.76,
+            status: .hitTP2, netReturnPercent: 4.8, rMultiple: 3.2, strategyIds: ["ict_bos"],
+            hadMacroCatalyst: false, resolvedAtEpochSeconds: base + 7200
+        )
+        store.updateOutcome(out1)
+
+        let coord = MarketScannerCoordinator(settings: AppSettingsStore(), store: store)
+        XCTAssertEqual(coord.signals.count, 3)
+
+        // Single delete
+        coord.deleteSignal(fingerprint: "fp-weak-1")
+        XCTAssertEqual(coord.signals.count, 2)
+
+        // Category delete (Traps)
+        coord.deleteSignals(in: .trapAlert)
+        XCTAssertEqual(coord.signals.count, 1)
+
+        // Delete all remaining cards
+        coord.deleteAllSignals()
+        XCTAssertTrue(coord.signals.isEmpty)
+
+        // Reopen from disk: deleted cards stay gone, Calibration Stats & Trade Ledger stay 100% preserved!
+        let reopened = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
+        XCTAssertTrue(reopened.fetchSignals().isEmpty)
+        XCTAssertEqual(reopened.fetchOutcomeRecords().count, 1)
+        XCTAssertEqual(reopened.fetchOutcomeRecords().first?.status, .hitTP2)
+        XCTAssertEqual(reopened.fetchTradeLedger().count, 2)
+    }
+
+    @MainActor
+    func testCrashLogStoreMetricKitParsingBreadcrumbImportAndSecretScrubbing() throws {
+        let store = ConfluenceDataStore(inMemory: true)
+        let crashStore = CrashLogStore(store: store)
+        let diagStore = DiagnosticLogStore(store: store)
+
+        // 1. Parse MetricKit JSON containing both crashDiagnostics and hangDiagnostics
+        let sampleMetricKitJSON = """
+        {
+          "timeStampBegin": "2026-11-24T10:00:00Z",
+          "timeStampEnd": "2026-11-25T10:00:00Z",
+          "crashDiagnostics": [
+            {
+              "version": "1.3.0",
+              "diagnosticMetaData": {
+                "appVersion": "1.3.0",
+                "appBuildVersion": "4",
+                "signal": 11,
+                "exceptionType": 1,
+                "terminationReason": "Namespace SIGNAL, Code 11 Segmentation fault: 11 apikey=SUPERSECRET123"
+              },
+              "callStackTree": {
+                "callStacks": [
+                  {
+                    "threadAttributed": true,
+                    "callStackRootFrames": [
+                      {
+                        "binaryName": "Confluence",
+                        "address": 4294967296,
+                        "offsetIntoBinaryTextSegment": 1024,
+                        "subFrames": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ],
+          "hangDiagnostics": [
+            {
+              "version": "1.3.0",
+              "diagnosticMetaData": {
+                "appVersion": "1.3.0",
+                "appBuildVersion": "4",
+                "hangDuration": "2.4s"
+              }
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let parsedCount = crashStore.ingestMetricKitJSON(sampleMetricKitJSON)
+        XCTAssertEqual(parsedCount, 2)
+        XCTAssertEqual(crashStore.entries.count, 2)
+        let crashEntry = crashStore.entries.first { $0.source == .metricKitCrash }
+        XCTAssertNotNil(crashEntry)
+        XCTAssertFalse(crashEntry?.summary.contains("SUPERSECRET123") ?? true, "API secrets must be redacted in crash logs")
+        XCTAssertTrue(crashEntry?.summary.contains("[REDACTED]") ?? false)
+
+        // 2. Simulate pending uncaught exception + POSIX signal breadcrumbs in temp directory
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("confluence_crash_bc_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let excFile = tempDir.appendingPathComponent(CrashLogStore.exceptionBreadcrumbFilename)
+        try """
+        EXCEPTION_NAME:NSRangeException
+        REASON:Index out of bounds x-goog-api-key: AIzaSyTestFakeKey12345678901234567890
+        STACK:
+        0 Confluence 0x1000 main
+        """.write(to: excFile, atomically: true, encoding: .utf8)
+
+        let posixFile = tempDir.appendingPathComponent(CrashLogStore.posixBreadcrumbFilename)
+        try "POSIX_SIGNAL:SIGSEGV\n".write(to: posixFile, atomically: true, encoding: .utf8)
+
+        let imported = crashStore.importPendingCrashBreadcrumbs(from: tempDir)
+        XCTAssertEqual(imported, 2)
+        XCTAssertEqual(crashStore.entries.count, 4)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: excFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: posixFile.path))
+
+        // Verify secret redaction on imported exception breadcrumb & Error Log filtering
+        let excLog = crashStore.entries.first { $0.source == .uncaughtException }
+        XCTAssertNotNil(excLog)
+        XCTAssertFalse(excLog?.summary.contains("AIzaSyTestFakeKey") ?? true)
+
+        diagStore.log(.info, category: .engine, message: "Routine info")
+        diagStore.log(.warn, category: .feed, message: "Rate limit warning")
+        diagStore.log(.error, category: .feed, message: "Feed error with apikey=SECRET_KEY_999")
+        XCTAssertEqual(diagStore.errorOnlyCount, 1)
+        XCTAssertEqual(diagStore.errorAndCriticalEntries.count, 2)
+        XCTAssertFalse(diagStore.errorOnlyEntries.first?.message.contains("SECRET_KEY_999") ?? true)
+
+        let md = diagStore.buildAntigravityMarkdownReport(
+            appVersion: "1.3.0",
+            appBuild: "4",
+            twelveDataQuota: nil,
+            twelveDataLocalDailyUsed: 0,
+            feedHealth: [],
+            calibration: PassiveOutcomeEvaluator.summarize(records: []),
+            strategyBreakdowns: [],
+            tradeLedger: [],
+            trapLogs: [],
+            crashLogs: crashStore.entries
+        )
+        XCTAssertTrue(md.contains("## Crash & Hang Logs (4)"))
+        XCTAssertTrue(md.contains("## Error & Warning Logs (2)"))
+        XCTAssertFalse(md.contains("SECRET_KEY_999"))
+        XCTAssertFalse(md.contains("AIzaSyTestFakeKey"))
+    }
 }

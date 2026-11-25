@@ -353,9 +353,27 @@ public enum CausalICTDetector {
         // 5. Build causal StrategyContributions for the current closed bar `lastIdx`
         var contributions: [StrategyContribution] = []
         let lastBar = candles[lastIdx]
+        let priceFmt = ChartPricePrecision.resolve(symbol: "", referencePrice: lastBar.close)
+
+        // Causal 14-bar ATR computed strictly over 0...lastIdx (preserves exact prefix invariance)
+        let atrLookback = min(14, lastIdx + 1)
+        var trSum = 0.0
+        for idx in (lastIdx - atrLookback + 1)...lastIdx {
+            let c = candles[idx]
+            if idx == 0 {
+                trSum += c.rangeSize
+            } else {
+                let pc = candles[idx - 1].close
+                trSum += max(c.high - c.low, max(abs(c.high - pc), abs(c.low - pc)))
+            }
+        }
+        let causalATR = max(trSum / Double(max(atrLookback, 1)), lastBar.close * 0.0005)
+        let proximityLimit = causalATR * 1.25
 
         // Recent BOS / MSS within last 6 bars
+        let freshStructureBreak: StructureBreak?
         if let recentBreak = structureBreaks.last, lastIdx - recentBreak.breakBarIndex <= 6 {
+            freshStructureBreak = recentBreak
             let id = recentBreak.kind == .mss ? "ict_mss" : "ict_bos"
             contributions.append(
                 StrategyContribution(
@@ -365,13 +383,17 @@ public enum CausalICTDetector {
                     direction: recentBreak.direction,
                     weight: weights[id] ?? (recentBreak.kind == .mss ? 1.20 : 1.05),
                     historicalWinRate: 0.58,
-                    detail: "\(recentBreak.kind.rawValue) \(recentBreak.direction.rawValue.uppercased()) closed past swing level \(String(format: "%.4f", recentBreak.brokenLevel))."
+                    detail: "\(recentBreak.kind.rawValue) \(recentBreak.direction.rawValue.uppercased()) closed past swing level \(priceFmt.format(recentBreak.brokenLevel))."
                 )
             )
+        } else {
+            freshStructureBreak = nil
         }
 
         // Recent Liquidity Sweep within last 3 bars
+        let freshSweep: LiquiditySweep?
         if let recentSweep = sweeps.last, lastIdx - recentSweep.sweepBarIndex <= 3 {
+            freshSweep = recentSweep
             let id = "ict_liquidity_sweep"
             contributions.append(
                 StrategyContribution(
@@ -381,24 +403,38 @@ public enum CausalICTDetector {
                     direction: recentSweep.reversalDirection,
                     weight: weights[id] ?? 1.25,
                     historicalWinRate: 0.61,
-                    detail: "Swept liquidity at \(String(format: "%.4f", recentSweep.sweptLevel)) and reclaimed inside range."
+                    detail: "Swept liquidity at \(priceFmt.format(recentSweep.sweptLevel)) and reclaimed inside range."
                 )
             )
+        } else {
+            freshSweep = nil
         }
 
-        // Active unmitigated FVG or fresh FVG retest within 12 bars
-        let recentUnmitigatedFVG = fvgs.reversed().first { fvg in
+        // Active FVG: must be freshly formed (age <= 4) OR actively retested / proximate within 1.25 * ATR
+        let recentActiveFVG = fvgs.reversed().first { fvg in
             let age = lastIdx - fvg.formedAtIndex
             guard age >= 0 && age <= 18 else { return false }
-            if fvg.isUnmitigated { return true }
+            let distanceToZone: Double
+            if lastBar.close > fvg.top {
+                distanceToZone = lastBar.close - fvg.top
+            } else if lastBar.close < fvg.bottom {
+                distanceToZone = fvg.bottom - lastBar.close
+            } else {
+                distanceToZone = 0.0
+            }
+            if fvg.isUnmitigated {
+                let isFresh = age <= 4
+                let isNear = distanceToZone <= proximityLimit
+                return isFresh || isNear
+            }
             if let mit = fvg.mitigatedAtIndex, lastIdx - mit <= 2 {
                 // Just mitigated and rejecting in FVG direction
-                return (fvg.direction == .long && lastBar.close >= fvg.bottom) ||
-                       (fvg.direction == .short && lastBar.close <= fvg.top)
+                return (fvg.direction == .long && lastBar.close >= fvg.bottom && distanceToZone <= proximityLimit) ||
+                       (fvg.direction == .short && lastBar.close <= fvg.top && distanceToZone <= proximityLimit)
             }
             return false
         }
-        if let fvg = recentUnmitigatedFVG {
+        if let fvg = recentActiveFVG {
             let id = "ict_fvg"
             contributions.append(
                 StrategyContribution(
@@ -408,21 +444,33 @@ public enum CausalICTDetector {
                     direction: fvg.direction,
                     weight: weights[id] ?? 1.0,
                     historicalWinRate: 0.57,
-                    detail: "Active \(fvg.direction.rawValue) Fair Value Gap [\(String(format: "%.4f", fvg.bottom)) - \(String(format: "%.4f", fvg.top))]."
+                    detail: "Active \(fvg.direction.rawValue) Fair Value Gap [\(priceFmt.format(fvg.bottom)) - \(priceFmt.format(fvg.top))]."
                 )
             )
         }
 
-        // Unmitigated or freshly tapped Order Block
+        // Order Block: must be freshly validated (age <= 4) OR actively tapped / within 1.25 * ATR
         let recentOB = orderBlocks.reversed().first { ob in
-            guard lastIdx - ob.validFromIndex <= 25 else { return false }
+            let age = lastIdx - ob.validFromIndex
+            guard age >= 0 && age <= 25 else { return false }
+            let distanceToZone: Double
+            if lastBar.close > ob.top {
+                distanceToZone = lastBar.close - ob.top
+            } else if lastBar.close < ob.bottom {
+                distanceToZone = ob.bottom - lastBar.close
+            } else {
+                distanceToZone = 0.0
+            }
             let nearZone: Bool
             if ob.direction == .long {
-                nearZone = lastBar.low <= ob.top * 1.004 && lastBar.close >= ob.bottom
+                nearZone = (lastBar.low <= ob.top + causalATR * 0.25 && lastBar.close >= ob.bottom) || distanceToZone <= proximityLimit
             } else {
-                nearZone = lastBar.high >= ob.bottom * 0.996 && lastBar.close <= ob.top
+                nearZone = (lastBar.high >= ob.bottom - causalATR * 0.25 && lastBar.close <= ob.top) || distanceToZone <= proximityLimit
             }
-            return ob.isUnmitigated || nearZone
+            if ob.isUnmitigated {
+                return age <= 4 || nearZone
+            }
+            return nearZone && (ob.mitigatedAtIndex.map { lastIdx - $0 <= 1 } ?? false)
         }
         if let ob = recentOB {
             let id = "ict_order_block"
@@ -434,39 +482,45 @@ public enum CausalICTDetector {
                     direction: ob.direction,
                     weight: weights[id] ?? 1.10,
                     historicalWinRate: 0.59,
-                    detail: "Institutional \(ob.direction.rawValue) OB [\(String(format: "%.4f", ob.bottom)) - \(String(format: "%.4f", ob.top))]."
+                    detail: "Institutional \(ob.direction.rawValue) OB [\(priceFmt.format(ob.bottom)) - \(priceFmt.format(ob.top))]."
                 )
             )
         }
 
-        // Premium / Discount Equilibrium alignment with structure bias
+        // Premium / Discount Equilibrium — avoid emitting standalone EQ against an opposing fresh BOS/MSS without a sweep
         if let zone = dealingZone, let eq = eqPrice {
             if zone == .discount {
-                let id = "ict_discount_eq"
-                contributions.append(
-                    StrategyContribution(
-                        id: id,
-                        name: "Discount (<50% EQ)",
-                        group: .ictSmc,
-                        direction: .long,
-                        weight: weights[id] ?? 0.85,
-                        historicalWinRate: 0.55,
-                        detail: "Price trading in discount below 50% equilibrium (\(String(format: "%.4f", eq)))."
+                let opposesFreshBreak = (freshStructureBreak?.direction == .short) && (freshSweep?.reversalDirection != .long)
+                if !opposesFreshBreak {
+                    let id = "ict_discount_eq"
+                    contributions.append(
+                        StrategyContribution(
+                            id: id,
+                            name: "Discount (<50% EQ)",
+                            group: .ictSmc,
+                            direction: .long,
+                            weight: weights[id] ?? 0.85,
+                            historicalWinRate: 0.55,
+                            detail: "Price trading in discount below 50% equilibrium (\(priceFmt.format(eq)))."
+                        )
                     )
-                )
+                }
             } else if zone == .premium {
-                let id = "ict_premium_eq"
-                contributions.append(
-                    StrategyContribution(
-                        id: id,
-                        name: "Premium (>50% EQ)",
-                        group: .ictSmc,
-                        direction: .short,
-                        weight: weights[id] ?? 0.85,
-                        historicalWinRate: 0.55,
-                        detail: "Price trading in premium above 50% equilibrium (\(String(format: "%.4f", eq)))."
+                let opposesFreshBreak = (freshStructureBreak?.direction == .long) && (freshSweep?.reversalDirection != .short)
+                if !opposesFreshBreak {
+                    let id = "ict_premium_eq"
+                    contributions.append(
+                        StrategyContribution(
+                            id: id,
+                            name: "Premium (>50% EQ)",
+                            group: .ictSmc,
+                            direction: .short,
+                            weight: weights[id] ?? 0.85,
+                            historicalWinRate: 0.55,
+                            detail: "Price trading in premium above 50% equilibrium (\(priceFmt.format(eq)))."
+                        )
                     )
-                )
+                }
             }
         }
 

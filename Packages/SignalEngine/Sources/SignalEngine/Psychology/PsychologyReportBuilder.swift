@@ -12,7 +12,8 @@ public enum PsychologyReportBuilder {
         macroImpulse: MacroClusterImpulse?,
         rejectionReasons: [String],
         rvol: Double?,
-        regime: MarketRegime
+        regime: MarketRegime,
+        newsCatalyst: NewsCatalystAssessment? = nil
     ) -> PsychologyReport {
         var evidence: [BehavioralEvidence] = []
         var badges: [String] = []
@@ -49,7 +50,7 @@ public enum PsychologyReportBuilder {
             )
         }
 
-        // 3. Macro Surprise catalyst evidence
+        // 3. Macro Surprise & Breaking News catalyst evidence
         if let macro = macroImpulse {
             badges.append(macro.isWhipsawCautionActive ? "News Whipsaw Risk" : "Macro Catalyst Aligned")
             let macroPro = macro.impacts.first?.direction ?? .neutral
@@ -59,6 +60,17 @@ public enum PsychologyReportBuilder {
                     fact: macro.headlineStrip,
                     proBias: macroPro,
                     retailBias: macro.isWhipsawCautionActive ? macroPro.opposite : .neutral
+                )
+            )
+        }
+        if let news = newsCatalyst {
+            badges.append(news.headlineBadge)
+            evidence.append(
+                BehavioralEvidence(
+                    badge: "Breaking News",
+                    fact: news.summary,
+                    proBias: news.direction,
+                    retailBias: .neutral
                 )
             )
         }
@@ -73,23 +85,51 @@ public enum PsychologyReportBuilder {
             provenance = .structureVolumeWickProxy
         }
 
-        // 5. Determine Pro vs Retail Crowd direction strictly from evidence
-        var proDir = positioning?.proDirection ?? .neutral
-        var retailDir = positioning?.retailCrowdDirection ?? .neutral
-
-        if let trap = latestTrap {
-            if proDir == .neutral { proDir = trap.direction.institutionalDirection }
-            if retailDir == .neutral { retailDir = trap.direction.trappedRetailDirection }
-        }
-        if proDir == .neutral {
-            proDir = (signalDirection != .neutral) ? signalDirection : ict.currentStructureBias
-        }
-        if retailDir == .neutral {
-            if let sweep = ict.liquiditySweeps.last {
-                retailDir = sweep.reversalDirection.opposite
-            } else if let dz = ict.dealingZone {
-                retailDir = (dz == .premium) ? .long : (dz == .discount ? .short : .neutral)
+        // 5. Separate Intraday Pro Flow (`proDir`) from Weekly Macro COT (`macroDir`)
+        let macroDir: TradeDirection?
+        let macroLabel: String?
+        let macroAligns: Bool?
+        if let pos = positioning, pos.proDirection != .neutral {
+            macroDir = pos.proDirection
+            macroLabel = (pos.provenance == .cftcCOT) ? "Weekly COT Macro" : "OKX Derivatives Flow"
+            if signalDirection != .neutral {
+                macroAligns = (pos.proDirection == signalDirection)
+            } else {
+                macroAligns = nil
             }
+        } else {
+            macroDir = nil
+            macroLabel = nil
+            macroAligns = nil
+        }
+
+        // Intraday Pro Flow prioritizes intraday structure/traps/OKX flow — never overwritten by opposing weekly COT
+        var proDir: TradeDirection = .neutral
+        if let trap = latestTrap {
+            proDir = trap.direction.institutionalDirection
+        } else if signalDirection != .neutral {
+            proDir = signalDirection
+        } else if let pos = positioning, pos.provenance == .okxFundingOI, pos.proDirection != .neutral {
+            proDir = pos.proDirection
+        } else if ict.currentStructureBias != .neutral {
+            proDir = ict.currentStructureBias
+        } else if let pos = positioning {
+            proDir = pos.proDirection
+        }
+
+        var retailDir: TradeDirection = .neutral
+        if let trap = latestTrap {
+            retailDir = trap.direction.trappedRetailDirection
+        } else if let pos = positioning, pos.retailCrowdDirection != .neutral {
+            retailDir = pos.retailCrowdDirection
+        } else if let sweep = ict.liquiditySweeps.last {
+            retailDir = sweep.reversalDirection.opposite
+        } else if let dz = ict.dealingZone {
+            retailDir = (dz == .premium) ? .long : (dz == .discount ? .short : .neutral)
+        }
+
+        if macroAligns == false && macroLabel != nil {
+            badges.append("Counter-Trend vs Macro COT")
         }
 
         // 6. Compose concrete 3-part narrative grounded purely in triggered facts
@@ -136,6 +176,9 @@ public enum PsychologyReportBuilder {
             if let macro = macroImpulse {
                 facts.append(macro.headlineStrip)
             }
+            if let news = newsCatalyst, news.matchingHeadlinesCount > 0 {
+                facts.append(news.summary)
+            }
             whatHappened = facts.isEmpty
                 ? "Closed-bar multi-strategy confluence aligned \(signalDirection.rawValue.uppercased()) in \(regime.badgeLabel) regime."
                 : facts.joined(separator: " · ")
@@ -148,10 +191,14 @@ public enum PsychologyReportBuilder {
                 beginnerPsych = "Retail participants react to single-indicator noise instead of waiting for closed-bar structural confirmation."
             }
 
-            if let pos = positioning {
-                proPsych = "Smart money aligned \(proDir.rawValue.uppercased()) via \(pos.provenance.rawValue): entering with defined structural invalidation and \(signalDirection == .long ? "discount demand" : "premium supply") backing."
+            if let pos = positioning, let mDir = macroDir, let aligns = macroAligns {
+                if aligns {
+                    proPsych = "Intraday institutional flow AND \(macroLabel ?? pos.provenance.rawValue) align \(signalDirection.rawValue.uppercased()) with defined structural invalidation and \(signalDirection == .long ? "discount demand" : "premium supply") backing."
+                } else {
+                    proPsych = "Intraday institutional order flow confirms \(signalDirection.rawValue.uppercased()) on closed structure (\(signalDirection == .long ? "discount demand" : "premium supply")); note \(macroLabel ?? pos.provenance.rawValue) sits \(mDir.rawValue.uppercased()) (counter-trend — respect disciplined targets)."
+                }
             } else {
-                proPsych = "Institutional order flow confirmed \(signalDirection.rawValue.uppercased()) on closed structure with asymmetric R:R beyond invalidation liquidity."
+                proPsych = "Intraday institutional order flow confirmed \(signalDirection.rawValue.uppercased()) on closed structure with asymmetric R:R beyond invalidation liquidity."
             }
 
         case .weakSignal:
@@ -174,13 +221,14 @@ public enum PsychologyReportBuilder {
             beginnerPsychology: beginnerPsych,
             proPsychology: proPsych,
             behavioralBadges: uniqueBadges,
-            evidence: evidence
+            evidence: evidence,
+            macroPositioningDirection: macroDir,
+            macroPositioningLabel: macroLabel,
+            macroAlignsWithSetup: macroAligns
         )
     }
 
     private static func formatPrice(_ value: Double) -> String {
-        if value >= 100 { return String(format: "%.2f", value) }
-        if value >= 10 { return String(format: "%.3f", value) }
-        return String(format: "%.5f", value)
+        ChartPricePrecision.resolve(symbol: "", referencePrice: value).format(value)
     }
 }

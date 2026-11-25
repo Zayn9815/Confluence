@@ -304,7 +304,7 @@ public actor BreakingNewsService {
             let desc = (row["description"] ?? row["summary"]) as? String
             let pubStr = (row["pubDate"] ?? row["publishedAt"] ?? row["published_at"]) as? String
             let epoch = pubStr.flatMap { isoFrac.date(from: $0) ?? isoStd.date(from: $0) }?.timeIntervalSince1970 ?? Date().timeIntervalSince1970
-            let id = "cv-\(abs(title.hashValue))"
+            let id = "cv-\(stableFNV1aHex(title))"
             return HeadlineSentimentClassifier.classify(
                 id: id, title: title, summary: desc, source: source, url: link, publishedEpochSeconds: epoch
             )
@@ -335,7 +335,7 @@ public actor BreakingNewsService {
             }
             let epoch = row.publishedDate.flatMap { isoFrac.date(from: $0) ?? isoStd.date(from: $0) }?.timeIntervalSince1970 ?? Date().timeIntervalSince1970
             return HeadlineSentimentClassifier.classify(
-                id: "bq-\(abs(row.title.hashValue))",
+                id: "bq-\(stableFNV1aHex(row.title))",
                 title: row.title,
                 summary: row.description,
                 source: row.publisher ?? "biquote Market",
@@ -485,7 +485,7 @@ private final class SimpleRSSParser: NSObject, XMLParserDelegate {
             let epoch = parseRSSDate(currentPubDate.trimmingCharacters(in: .whitespacesAndNewlines)) ?? Date().timeIntervalSince1970
             items.append(
                 HeadlineSentimentClassifier.classify(
-                    id: "rss-\(sourceName)-\(abs(title.hashValue))",
+                    id: "rss-\(sourceName)-\(stableFNV1aHex(title))",
                     title: title,
                     summary: currentDesc.trimmingCharacters(in: .whitespacesAndNewlines),
                     source: sourceName,
@@ -502,4 +502,15 @@ private final class SimpleRSSParser: NSObject, XMLParserDelegate {
         df.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
         return df.date(from: raw)?.timeIntervalSince1970
     }
+}
+
+/// Deterministic, crash-free 64-bit FNV-1a hex digest for stable cross-launch news item IDs.
+private func stableFNV1aHex(_ input: String) -> String {
+    var hash: UInt64 = 0xcbf29ce484222325
+    let prime: UInt64 = 0x100000001b3
+    for byte in input.utf8 {
+        hash ^= UInt64(byte)
+        hash = hash &* prime
+    }
+    return String(format: "%016llx", hash)
 }

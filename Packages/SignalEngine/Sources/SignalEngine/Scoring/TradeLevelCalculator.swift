@@ -15,14 +15,17 @@ public enum TradeLevelCalculator {
         fixedStopLossPercent: Double = 1.0,
         fixedTP1Percent: Double = 2.0,
         fixedTP2Percent: Double = 3.5,
-        enableTP2Target: Bool = true
+        enableTP2Target: Bool = true,
+        timeframe: Timeframe = .h1
     ) -> TradeLevels? {
         guard direction == .long || direction == .short,
               let lastBar = candles.last,
+              lastBar.close.isFinite,
               lastBar.close > 0
         else { return nil }
 
-        let safeATR = max(atr, lastBar.close * 0.0005)
+        let validATR = (atr.isFinite && atr > 0) ? atr : 0.0
+        let safeATR = max(validATR, lastBar.close * 0.0005)
         let close = lastBar.close
 
         // Entry Zone anchored around current close or active FVG/OB edge
@@ -52,6 +55,7 @@ public enum TradeLevelCalculator {
         let orderedLow = min(entryLow, entryHigh)
         let orderedHigh = max(entryLow, entryHigh)
         let entryMid = (orderedLow + orderedHigh) * 0.5
+        guard entryMid.isFinite, entryMid > 0 else { return nil }
 
         // Fixed % Ratio Mode (exact SL%, TP1%, and optional TP2% around entryMid)
         if mode == .fixedPercent {
@@ -73,7 +77,7 @@ public enum TradeLevelCalculator {
             }
 
             let riskDistance = abs(entryMid - stopLoss)
-            guard riskDistance > 1e-12 else { return nil }
+            guard riskDistance.isFinite, riskDistance > 1e-12 else { return nil }
             let reward1Dist = abs(tp1 - entryMid)
             let reward2Dist = abs(tp2 - entryMid)
 
@@ -111,10 +115,18 @@ public enum TradeLevelCalculator {
         }
 
         let riskDistance = abs(entryMid - stopLoss)
-        guard riskDistance > 1e-12 else { return nil }
+        guard riskDistance.isFinite, riskDistance > 1e-12 else { return nil }
 
-        // TP1: opposing structure / swing liquidity if >= min R:R, else projected at minRR * risk
-        let minTargetDist = riskDistance * max(minimumRiskReward, 1.0)
+        // Sane R:R & timeframe-scaled ATR ceilings prevent unrealistic distant HTF swing targets (e.g. 1:16.7 on 15m)
+        let minRR = max(minimumRiskReward, 1.0)
+        let minTargetDist = riskDistance * minRR
+        let maxTP1RR = min(max(minRR * 1.6, 3.5), 4.0)
+        let maxTP2RR = min(max(minRR * 2.2, 4.5), 6.0)
+        let atrTP2Multiplier: Double = (timeframe == .m15) ? 8.0 : 10.0
+        let maxTP1Dist = min(riskDistance * maxTP1RR, safeATR * (atrTP2Multiplier * 0.7))
+        let maxTP2Dist = max(minTargetDist * 1.25, min(riskDistance * maxTP2RR, safeATR * atrTP2Multiplier))
+        let defaultTP2Dist = min(maxTP2Dist, riskDistance * max(minRR * 1.65, 3.3))
+
         let tp1: Double
         let tp2: Double
 
@@ -128,10 +140,16 @@ public enum TradeLevelCalculator {
                 .map(\.price)
                 .sorted()
 
-            tp1 = opposingHighs.first(where: { $0 >= entryMid + minTargetDist }) ?? (entryMid + minTargetDist)
+            let tp1Candidate = opposingHighs.first(where: { $0 >= entryMid + minTargetDist && $0 <= entryMid + maxTP1Dist })
+            tp1 = tp1Candidate ?? (entryMid + minTargetDist)
+
             if enableTP2Target {
-                let tp2Candidate = htfHighs.first(where: { $0 > tp1 + riskDistance * 0.5 })
-                tp2 = tp2Candidate ?? (entryMid + riskDistance * max(minimumRiskReward * 1.65, 3.3))
+                let tp2Min = tp1 + riskDistance * 0.5
+                let tp2Max = entryMid + maxTP2Dist
+                let tp2Candidate = htfHighs.first(where: { $0 >= tp2Min && $0 <= tp2Max })
+                    ?? opposingHighs.first(where: { $0 >= tp2Min && $0 <= tp2Max })
+                let rawTP2 = tp2Candidate ?? max(tp2Min, entryMid + defaultTP2Dist)
+                tp2 = min(rawTP2, max(tp2Min, tp2Max))
             } else {
                 tp2 = tp1
             }
@@ -145,10 +163,16 @@ public enum TradeLevelCalculator {
                 .map(\.price)
                 .sorted(by: >)
 
-            tp1 = opposingLows.first(where: { $0 <= entryMid - minTargetDist }) ?? (entryMid - minTargetDist)
+            let tp1Candidate = opposingLows.first(where: { $0 <= entryMid - minTargetDist && $0 >= entryMid - maxTP1Dist })
+            tp1 = tp1Candidate ?? (entryMid - minTargetDist)
+
             if enableTP2Target {
-                let tp2Candidate = htfLows.first(where: { $0 < tp1 - riskDistance * 0.5 })
-                tp2 = tp2Candidate ?? (entryMid - riskDistance * max(minimumRiskReward * 1.65, 3.3))
+                let tp2Min = tp1 - riskDistance * 0.5
+                let tp2Max = max(entryMid - maxTP2Dist, entryMid * 0.05)
+                let tp2Candidate = htfLows.first(where: { $0 <= tp2Min && $0 >= tp2Max })
+                    ?? opposingLows.first(where: { $0 <= tp2Min && $0 >= tp2Max })
+                let rawTP2 = tp2Candidate ?? min(tp2Min, entryMid - defaultTP2Dist)
+                tp2 = max(rawTP2, min(tp2Min, tp2Max))
             } else {
                 tp2 = tp1
             }
@@ -156,11 +180,14 @@ public enum TradeLevelCalculator {
 
         let reward1Dist = abs(tp1 - entryMid)
         let reward2Dist = abs(tp2 - entryMid)
+        guard reward1Dist.isFinite, reward2Dist.isFinite else { return nil }
+
         let riskPct = (riskDistance / entryMid) * 100.0
         let reward1Pct = (reward1Dist / entryMid) * 100.0
         let reward2Pct = (reward2Dist / entryMid) * 100.0
         let rr1 = reward1Dist / riskDistance
         let rr2 = reward2Dist / riskDistance
+        guard riskPct.isFinite, reward1Pct.isFinite, reward2Pct.isFinite, rr1.isFinite, rr2.isFinite else { return nil }
 
         return TradeLevels(
             entryLow: orderedLow,

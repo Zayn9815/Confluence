@@ -46,6 +46,7 @@ public final class ConfluenceDataStore {
     public static let maxStoredNotifications = 250
     public static let maxStoredLogs = 500
     public static let maxStoredTraps = 300
+    public static let maxStoredCrashLogs = 100
 
     public let container: ModelContainer
     private let context: ModelContext
@@ -58,7 +59,9 @@ public final class ConfluenceDataStore {
             DiagnosticLogEntry.self,
             TrapLogEntry.self,
             TradeLedgerEntry.self,
-            TradeReplayCandleCache.self
+            TradeReplayCandleCache.self,
+            PersistedOutcomeRecord.self,
+            CrashLogEntry.self
         ])
 
         let config: ModelConfiguration
@@ -87,6 +90,27 @@ public final class ConfluenceDataStore {
             }
         }
         self.context = ModelContext(container)
+        backfillPersistedOutcomesIfNeeded()
+    }
+
+    private func backfillPersistedOutcomesIfNeeded() {
+        guard let legacyRows = try? context.fetch(FetchDescriptor<PersistedSignalRecord>()) else { return }
+        let existingOutcomeIDs: Set<String> = Set(
+            ((try? context.fetch(FetchDescriptor<PersistedOutcomeRecord>())) ?? []).map(\.signalId)
+        )
+        var insertedAny = false
+        for row in legacyRows {
+            guard let data = row.outcomeJSON,
+                  let decoded = try? JSONDecoder().decode(SignalOutcomeRecord.self, from: data),
+                  !existingOutcomeIDs.contains(decoded.signalId)
+            else { continue }
+            let resolvedDate = decoded.resolvedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) } ?? row.createdAt
+            context.insert(PersistedOutcomeRecord(signalId: decoded.signalId, outcomeJSON: data, resolvedAt: resolvedDate))
+            insertedAny = true
+        }
+        if insertedAny {
+            try? context.save()
+        }
     }
 
     private static func quarantineStoreFiles(at storeURL: URL) {
@@ -101,7 +125,7 @@ public final class ConfluenceDataStore {
         }
     }
 
-    // MARK: - Signals & Outcomes
+    // MARK: - Signals, Permanent Signal Deletion & Decoupled Outcomes
 
     public func upsertSignal(_ signal: TradeSignal) {
         guard let encoded = try? JSONEncoder().encode(signal) else { return }
@@ -133,6 +157,20 @@ public final class ConfluenceDataStore {
     public func updateOutcome(_ outcome: SignalOutcomeRecord) {
         let fp = outcome.signalId
         guard let encoded = try? JSONEncoder().encode(outcome) else { return }
+
+        // Persist into decoupled PersistedOutcomeRecord (survives signal card deletion!)
+        let outcomeDesc = FetchDescriptor<PersistedOutcomeRecord>(
+            predicate: #Predicate { $0.signalId == fp }
+        )
+        let resolvedDate = outcome.resolvedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) } ?? Date()
+        if let existingOutcome = try? context.fetch(outcomeDesc).first {
+            existingOutcome.outcomeJSON = encoded
+            existingOutcome.resolvedAt = resolvedDate
+        } else {
+            context.insert(PersistedOutcomeRecord(signalId: fp, outcomeJSON: encoded, resolvedAt: resolvedDate))
+        }
+
+        // Also mirror onto PersistedSignalRecord if still present
         let descriptor = FetchDescriptor<PersistedSignalRecord>(
             predicate: #Predicate { $0.fingerprint == fp }
         )
@@ -157,6 +195,48 @@ public final class ConfluenceDataStore {
             }
         }
         try? context.save()
+    }
+
+    /// Permanently deletes a single signal card from the feed WITHOUT removing Calibration Stats or Trade Ledger entries.
+    public func deleteSignal(fingerprint: String) {
+        let desc = FetchDescriptor<PersistedSignalRecord>(
+            predicate: #Predicate { $0.fingerprint == fingerprint }
+        )
+        if let rows = try? context.fetch(desc) {
+            for r in rows { context.delete(r) }
+            try? context.save()
+        }
+    }
+
+    /// Permanently deletes a selected set of signal cards WITHOUT removing Calibration Stats or Trade Ledger entries.
+    public func deleteSignals(fingerprints: Set<String>) {
+        guard !fingerprints.isEmpty else { return }
+        if let rows = try? context.fetch(FetchDescriptor<PersistedSignalRecord>()) {
+            for r in rows where fingerprints.contains(r.fingerprint) {
+                context.delete(r)
+            }
+            try? context.save()
+        }
+    }
+
+    /// Permanently deletes all signal cards in a specific tab category WITHOUT removing Calibration Stats.
+    public func deleteSignals(category: SignalCategory) {
+        let raw = category.rawValue
+        let desc = FetchDescriptor<PersistedSignalRecord>(
+            predicate: #Predicate { $0.categoryRaw == raw }
+        )
+        if let rows = try? context.fetch(desc) {
+            for r in rows { context.delete(r) }
+            try? context.save()
+        }
+    }
+
+    /// Permanently clears all signal cards from the Signals feed WITHOUT removing Calibration Stats or Trade Ledger entries.
+    public func deleteAllSignals() {
+        if let rows = try? context.fetch(FetchDescriptor<PersistedSignalRecord>()) {
+            for r in rows { context.delete(r) }
+            try? context.save()
+        }
     }
 
     private func upsertTradeLedgerEntry(from signal: TradeSignal, levels: TradeLevels) {
@@ -202,13 +282,36 @@ public final class ConfluenceDataStore {
     }
 
     public func fetchOutcomeRecords() -> [SignalOutcomeRecord] {
-        let descriptor = FetchDescriptor<PersistedSignalRecord>(
+        var bySignalId: [String: SignalOutcomeRecord] = [:]
+
+        // Primary decoupled source (survives signal card deletion)
+        let outcomeDesc = FetchDescriptor<PersistedOutcomeRecord>(
+            sortBy: [SortDescriptor(\.resolvedAt, order: .reverse)]
+        )
+        if let outcomeRows = try? context.fetch(outcomeDesc) {
+            for row in outcomeRows {
+                if let decoded = try? JSONDecoder().decode(SignalOutcomeRecord.self, from: row.outcomeJSON) {
+                    bySignalId[decoded.signalId] = decoded
+                }
+            }
+        }
+
+        // Legacy fallback merge
+        let legacyDesc = FetchDescriptor<PersistedSignalRecord>(
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
-        guard let rows = try? context.fetch(descriptor) else { return [] }
-        return rows.compactMap { row -> SignalOutcomeRecord? in
-            guard let data = row.outcomeJSON else { return nil }
-            return try? JSONDecoder().decode(SignalOutcomeRecord.self, from: data)
+        if let legacyRows = try? context.fetch(legacyDesc) {
+            for row in legacyRows {
+                guard let data = row.outcomeJSON,
+                      let decoded = try? JSONDecoder().decode(SignalOutcomeRecord.self, from: data),
+                      bySignalId[decoded.signalId] == nil
+                else { continue }
+                bySignalId[decoded.signalId] = decoded
+            }
+        }
+
+        return bySignalId.values.sorted {
+            ($0.resolvedAtEpochSeconds ?? 0) > ($1.resolvedAtEpochSeconds ?? 0)
         }
     }
 
@@ -511,10 +614,66 @@ public final class ConfluenceDataStore {
         return byOpen.values.sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
     }
 
+    // MARK: - Native Crash Logs (Latest 100)
+
+    @discardableResult
+    public func saveCrashLog(_ snapshot: CrashLogSnapshot) -> Bool {
+        let targetId = snapshot.id
+        let desc = FetchDescriptor<CrashLogEntry>(
+            predicate: #Predicate { $0.id == targetId }
+        )
+        if (try? context.fetch(desc).first) != nil {
+            return false // Already stored
+        }
+        let row = CrashLogEntry(
+            id: snapshot.id,
+            timestamp: snapshot.timestamp,
+            sourceRaw: snapshot.source.rawValue,
+            appVersion: snapshot.appVersion,
+            appBuild: snapshot.appBuild,
+            crashType: snapshot.crashType,
+            summary: snapshot.summary,
+            stackTrace: snapshot.stackTrace
+        )
+        context.insert(row)
+        pruneCrashLogsIfNeeded()
+        try? context.save()
+        return true
+    }
+
+    public func fetchCrashLogs(limit: Int = maxStoredCrashLogs) -> [CrashLogSnapshot] {
+        var desc = FetchDescriptor<CrashLogEntry>(
+            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
+        )
+        desc.fetchLimit = limit
+        guard let rows = try? context.fetch(desc) else { return [] }
+        return rows.map { $0.toSnapshot() }
+    }
+
+    public func clearCrashLogs() {
+        if let rows = try? context.fetch(FetchDescriptor<CrashLogEntry>()) {
+            for r in rows { context.delete(r) }
+            try? context.save()
+        }
+    }
+
+    private func pruneCrashLogsIfNeeded() {
+        let desc = FetchDescriptor<CrashLogEntry>(
+            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
+        )
+        guard let all = try? context.fetch(desc), all.count > Self.maxStoredCrashLogs else { return }
+        for stale in all.dropFirst(Self.maxStoredCrashLogs) {
+            context.delete(stale)
+        }
+    }
+
     // MARK: - Reset & Export
 
     public func resetCalibrationAndHistory() {
         if let rows = try? context.fetch(FetchDescriptor<PersistedSignalRecord>()) {
+            for r in rows { context.delete(r) }
+        }
+        if let rows = try? context.fetch(FetchDescriptor<PersistedOutcomeRecord>()) {
             for r in rows { context.delete(r) }
         }
         if let rows = try? context.fetch(FetchDescriptor<TradeLedgerEntry>()) {

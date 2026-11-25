@@ -20,9 +20,24 @@ public struct SignalsTabView: View {
     @State private var chartSignal: TradeSignal?
     @State private var preNewsTick: Date = Date()
 
+    // Signal Deletion & Multi-Select State
+    @State private var isSelecting: Bool = false
+    @State private var selectedFingerprints: Set<String> = []
+    @State private var confirmDeleteSelected: Bool = false
+    @State private var confirmDeleteCurrentTab: Bool = false
+    @State private var confirmDeleteAll: Bool = false
+
     public init(coordinator: MarketScannerCoordinator, palette: ConfluencePalette) {
         self.coordinator = coordinator
         self.palette = palette
+    }
+
+    private var currentSignalCategory: SignalCategory {
+        switch feedFilter {
+        case .strong: return .strongSignal
+        case .traps: return .trapAlert
+        case .weak: return .weakSignal
+        }
     }
 
     private var filteredSignals: [TradeSignal] {
@@ -125,6 +140,7 @@ public struct SignalsTabView: View {
                             } else {
                                 ForEach(filteredSignals) { sig in
                                     let isHighlighted = (coordinator.highlightedSignalFingerprint == sig.fingerprint)
+                                    let isRowSelected = selectedFingerprints.contains(sig.fingerprint)
                                     SignalCardView(
                                         signal: sig,
                                         palette: palette,
@@ -132,6 +148,17 @@ public struct SignalsTabView: View {
                                         showMiniChart: coordinator.settings.payload.showMiniCharts,
                                         animateArrival: coordinator.settings.payload.arrivalAnimationsEnabled && coordinator.newlyArrivedSignalIds.contains(sig.id),
                                         hapticsEnabled: coordinator.settings.payload.hapticsEnabled,
+                                        isSelecting: isSelecting,
+                                        isSelected: isRowSelected,
+                                        onToggleSelect: {
+                                            toggleSelection(for: sig.fingerprint)
+                                        },
+                                        onDelete: {
+                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                coordinator.deleteSignal(fingerprint: sig.fingerprint)
+                                                selectedFingerprints.remove(sig.fingerprint)
+                                            }
+                                        },
                                         onOpenChart: { chartSignal = sig }
                                     )
                                     .id(sig.fingerprint)
@@ -144,7 +171,7 @@ public struct SignalsTabView: View {
                             }
                         }
                         .padding(.horizontal, 14)
-                        .padding(.bottom, 24)
+                        .padding(.bottom, isSelecting ? 84 : 24)
                     }
                     .refreshable {
                         await coordinator.scanAllMarkets()
@@ -158,43 +185,140 @@ public struct SignalsTabView: View {
                 }
             }
             .background(palette.canvas)
-            .navigationTitle("Confluence")
+            .safeAreaInset(edge: .bottom) {
+                if isSelecting {
+                    multiSelectActionBar
+                }
+            }
+            .navigationTitle(isSelecting ? "Select (\(selectedFingerprints.count))" : "Confluence")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Leading: Dark/Light Toggle (or Done while selecting)
                 ToolbarItem(placement: .topBarLeading) {
-                    let isDarkActive = (coordinator.settings.payload.appearanceMode == .dark)
-                        || (coordinator.settings.payload.appearanceMode == .system && colorScheme == .dark)
-                    ThemeModeToggleButton(
-                        isDark: isDarkActive,
-                        hapticsEnabled: coordinator.settings.payload.hapticsEnabled,
-                        palette: palette
-                    ) {
-                        coordinator.settings.toggleDarkLightMode(currentlyDark: isDarkActive)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 10) {
-                        Button {
-                            Task { await coordinator.scanAllMarkets() }
-                        } label: {
-                            if coordinator.isScanning {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Label("Scan", systemImage: "waveform.path.ecg")
-                                    .font(.caption.weight(.semibold))
-                            }
+                    if isSelecting {
+                        Button("Done") {
+                            exitSelectionMode()
                         }
-                        .disabled(coordinator.isScanning)
-
-                        NotificationBellButton(
-                            unreadCount: coordinator.unreadNotificationCount,
+                        .font(.subheadline.weight(.semibold))
+                    } else {
+                        let isDarkActive = (coordinator.settings.payload.appearanceMode == .dark)
+                            || (coordinator.settings.payload.appearanceMode == .system && colorScheme == .dark)
+                        ThemeModeToggleButton(
+                            isDark: isDarkActive,
+                            hapticsEnabled: coordinator.settings.payload.hapticsEnabled,
                             palette: palette
                         ) {
-                            coordinator.isNotificationInboxPresented = true
+                            coordinator.settings.toggleDarkLightMode(currentlyDark: isDarkActive)
                         }
                     }
                 }
+
+                // Trailing: Discrete native icon-only ToolbarItems (prevents iOS 27 Liquid Glass clipping!)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isSelecting = true
+                                selectedFingerprints.removeAll()
+                            }
+                        } label: {
+                            Label("Select Signals", systemImage: "checkmark.circle")
+                        }
+                        .disabled(filteredSignals.isEmpty)
+
+                        Divider()
+
+                        Button(role: .destructive) {
+                            confirmDeleteCurrentTab = true
+                        } label: {
+                            Label("Delete \(feedFilter.rawValue) (\(filteredSignals.count))", systemImage: "trash")
+                        }
+                        .disabled(filteredSignals.isEmpty)
+
+                        Button(role: .destructive) {
+                            confirmDeleteAll = true
+                        } label: {
+                            Label("Delete All Signals (\(coordinator.signals.count))", systemImage: "trash.slash")
+                        }
+                        .disabled(coordinator.signals.isEmpty)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(palette.primaryInk)
+                    }
+                    .accessibilityLabel("Manage signals")
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await coordinator.scanAllMarkets() }
+                    } label: {
+                        if coordinator.isScanning {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "waveform.path.ecg")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(palette.champagneGold)
+                        }
+                    }
+                    .disabled(coordinator.isScanning)
+                    .accessibilityLabel("Scan live markets")
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    NotificationBellButton(
+                        unreadCount: coordinator.unreadNotificationCount,
+                        palette: palette
+                    ) {
+                        coordinator.isNotificationInboxPresented = true
+                    }
+                }
+            }
+            .confirmationDialog(
+                "Delete \(selectedFingerprints.count) Selected Signal\(selectedFingerprints.count == 1 ? "" : "s")?",
+                isPresented: $confirmDeleteSelected,
+                titleVisibility: .visible
+            ) {
+                Button("Delete Selected (\(selectedFingerprints.count))", role: .destructive) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        coordinator.deleteSignals(fingerprints: selectedFingerprints)
+                        exitSelectionMode()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Deleted signal cards are permanently removed from the feed. Your Calibration Stats and Trade Ledger history remain preserved.")
+            }
+            .confirmationDialog(
+                "Delete All \(feedFilter.rawValue)?",
+                isPresented: $confirmDeleteCurrentTab,
+                titleVisibility: .visible
+            ) {
+                Button("Delete \(feedFilter.rawValue)", role: .destructive) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        coordinator.deleteSignals(in: currentSignalCategory)
+                        exitSelectionMode()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Removes all cards from \(feedFilter.rawValue) permanently. Your Calibration Stats and Trade Ledger history remain preserved.")
+            }
+            .confirmationDialog(
+                "Delete All Signals Across All Tabs?",
+                isPresented: $confirmDeleteAll,
+                titleVisibility: .visible
+            ) {
+                Button("Delete All Signals", role: .destructive) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        coordinator.deleteAllSignals()
+                        exitSelectionMode()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Clears Strong Signals, Trap Alerts, and Weak / Filtered cards permanently. Your Calibration Stats and Trade Ledger history remain preserved.")
             }
             .sheet(item: $chartSignal) { sig in
                 FullScreenChartSheet(signal: sig, palette: palette, coordinator: coordinator)
@@ -206,6 +330,73 @@ public struct SignalsTabView: View {
                     preNewsTick = Date()
                 }
             }
+        }
+    }
+
+    private func toggleSelection(for fingerprint: String) {
+        if selectedFingerprints.contains(fingerprint) {
+            selectedFingerprints.remove(fingerprint)
+        } else {
+            selectedFingerprints.insert(fingerprint)
+        }
+    }
+
+    private func exitSelectionMode() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isSelecting = false
+            selectedFingerprints.removeAll()
+        }
+    }
+
+    private var multiSelectActionBar: some View {
+        let visibleFPs = Set(filteredSignals.map(\.fingerprint))
+        let allVisibleSelected = !visibleFPs.isEmpty && visibleFPs.isSubset(of: selectedFingerprints)
+        return HStack(spacing: 10) {
+            Button {
+                if allVisibleSelected {
+                    selectedFingerprints.subtract(visibleFPs)
+                } else {
+                    selectedFingerprints.formUnion(visibleFPs)
+                }
+            } label: {
+                Text(allVisibleSelected ? "Deselect All" : "Select All")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.primaryInk)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(palette.elevatedSurface, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(visibleFPs.isEmpty)
+
+            Spacer()
+
+            Button(role: .destructive) {
+                confirmDeleteSelected = true
+            } label: {
+                Label("Delete (\(selectedFingerprints.count))", systemImage: "trash.fill")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule().fill(selectedFingerprints.isEmpty ? palette.tertiaryInk.opacity(0.4) : palette.shortCrimson)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedFingerprints.isEmpty)
+
+            Button("Cancel") {
+                exitSelectionMode()
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(palette.secondaryInk)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.border).frame(height: 0.5)
         }
     }
 
