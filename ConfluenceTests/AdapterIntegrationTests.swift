@@ -844,10 +844,8 @@ final class AdapterIntegrationTests: XCTestCase {
             let ctx = ModelContext(v13Container)
             ctx.insert(PersistedOutcomeRecord(
                 signalId: sampleOutcome.signalId,
-                symbol: sampleOutcome.symbol,
-                statusRaw: sampleOutcome.status.rawValue,
-                updatedAt: Date(timeIntervalSince1970: base + 3600),
-                outcomeJSON: outcomeData
+                outcomeJSON: outcomeData,
+                resolvedAt: Date(timeIntervalSince1970: base + 3600)
             ))
             try ctx.save()
         }
