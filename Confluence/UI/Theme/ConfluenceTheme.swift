@@ -125,7 +125,11 @@ public enum PriceFormatHelper {
         String(format: "%.\(decimals)f", price)
     }
 
-    public static func decimals(for symbol: String) -> Int {
-        WatchlistDefaults.descriptor(for: symbol)?.priceDecimals ?? 2
+    public static func decimals(for symbol: String, marketClass: MarketClass? = nil, referencePrice: Double? = nil) -> Int {
+        ChartPricePrecision.resolve(symbol: symbol, marketClass: marketClass, referencePrice: referencePrice).precision
+    }
+
+    public static func precision(for symbol: String, marketClass: MarketClass? = nil, referencePrice: Double? = nil) -> ChartPricePrecision {
+        ChartPricePrecision.resolve(symbol: symbol, marketClass: marketClass, referencePrice: referencePrice)
     }
 }

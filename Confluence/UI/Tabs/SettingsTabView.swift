@@ -56,13 +56,13 @@ public struct SettingsTabView: View {
                     }
 
                     NavigationLink {
-                        SignalEngineSettingsView(coordinator: coordinator, palette: palette)
+                        SignalRulesSettingsView(coordinator: coordinator, palette: palette)
                     } label: {
                         settingsRow(
                             icon: "waveform.path.ecg",
                             color: palette.longEmerald,
-                            title: "Signal Engine & Psychology",
-                            subtitle: "Min \(Int(coordinator.settings.payload.minimumConfidencePercent.rounded()))% · R:R 1:\(String(format: "%.1f", coordinator.settings.payload.minimumRiskReward))"
+                            title: "Signal Rules, Risk & Win-Rate",
+                            subtitle: "\(coordinator.settings.payload.levelCalculationMode.shortLabel) · \(Int(coordinator.settings.payload.minimumConfidencePercent.rounded()))%+ · \(coordinator.settings.payload.strategySelectionMode.shortLabel)"
                         )
                     }
 

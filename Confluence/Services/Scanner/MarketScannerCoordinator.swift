@@ -81,6 +81,7 @@ public final class MarketScannerCoordinator {
     public var twelveDataLocalDailyUsed: Int = 0
     public var twelveDataTestMessage: String?
     public var isTestingTwelveData: Bool = false
+    public var lastRandomSubsetConcepts: [StrategyConcept] = []
 
     public init(settings: AppSettingsStore, store: ConfluenceDataStore) {
         self.settings = settings
@@ -121,10 +122,9 @@ public final class MarketScannerCoordinator {
     public func loadPersistedState() {
         self.signals = store.fetchSignals(limit: 150)
         self.outcomeRecords = store.fetchOutcomeRecords()
-        self.calibrationSummary = PassiveOutcomeEvaluator.summarize(records: outcomeRecords)
-        self.strategyBreakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: outcomeRecords)
         self.tradeLedger = store.fetchTradeLedger(limit: 300)
         self.trapLogs = store.fetchTrapLogs(limit: 300)
+        recomputeCalibration()
         reloadNotifications()
         Task {
             self.geminiDailyCallsUsed = await geminiClient.dailyUsageCount()
@@ -132,6 +132,40 @@ public final class MarketScannerCoordinator {
             self.twelveDataQuota = await twelveData.cachedQuotaStatus()
             await refreshNotificationStatus()
         }
+    }
+
+    /// Recomputes Calibration KPIs & per-strategy rankings immediately using active Settings calibration rules.
+    public func recomputeCalibration() {
+        let filter = settings.buildCalibrationFilterConfig()
+        let signalsByFP = store.fetchSignalsByFingerprint(limit: 500)
+        let enriched: [SignalOutcomeRecord] = outcomeRecords.map { rec in
+            if rec.riskRewardRatio != nil && rec.entryBarCloseEpochSeconds != nil {
+                return rec
+            }
+            let sig = signalsByFP[rec.signalId]
+            return SignalOutcomeRecord(
+                signalId: rec.signalId,
+                symbol: rec.symbol,
+                marketClass: rec.marketClass,
+                category: rec.category,
+                direction: rec.direction,
+                predictedProbability: rec.predictedProbability,
+                status: rec.status,
+                netReturnPercent: rec.netReturnPercent,
+                rMultiple: rec.rMultiple,
+                strategyIds: rec.strategyIds,
+                hadMacroCatalyst: rec.hadMacroCatalyst,
+                resolvedAtEpochSeconds: rec.resolvedAtEpochSeconds,
+                regime: rec.regime ?? sig?.regime,
+                killzone: rec.killzone ?? sig?.killzone,
+                timeframe: rec.timeframe ?? sig?.timeframe,
+                dataProvider: rec.dataProvider ?? sig?.dataProvider,
+                riskRewardRatio: rec.riskRewardRatio ?? sig?.levels?.riskRewardRatio,
+                entryBarCloseEpochSeconds: rec.entryBarCloseEpochSeconds ?? sig?.barCloseEpochSeconds
+            )
+        }
+        self.calibrationSummary = PassiveOutcomeEvaluator.summarize(records: enriched, filter: filter)
+        self.strategyBreakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: enriched, filter: filter)
     }
 
     // MARK: - Notification Bell Inbox
@@ -313,12 +347,34 @@ public final class MarketScannerCoordinator {
             self.fearGreed = newsRes.fearGreed
         }
 
-        // 2. Build out-of-sample reliability weights from passive calibration history
+        // 2. Build out-of-sample reliability weights & resolve strategy selection mode
         var weights: [String: Double] = [:]
         for stat in calibrationSummary.strategyRankings where stat.totalResolved >= 5 {
             weights[stat.strategyId] = max(0.65, min(1.40, 0.5 + stat.winRate))
         }
-        let engineConfig = settings.buildEngineConfig(reliabilityWeights: weights)
+        var randomConcepts: Set<StrategyConcept>? = nil
+        if settings.payload.strategySelectionMode == .randomSubset {
+            let pool = StrategyConcept.allCases.filter {
+                settings.payload.enabledStrategyGroups.contains($0.group)
+            }
+            let effectivePool = pool.isEmpty ? Array(StrategyConcept.allCases) : pool
+            let pickCount = min(effectivePool.count, Int.random(in: 3...min(6, max(3, effectivePool.count))))
+            let chosen = Array(effectivePool.shuffled().prefix(pickCount))
+            randomConcepts = Set(chosen)
+            self.lastRandomSubsetConcepts = chosen.sorted { $0.displayName < $1.displayName }
+            diagnosticLog.log(
+                .info,
+                category: .engine,
+                message: "Random Subset active (\(chosen.count) strategies): \(self.lastRandomSubsetConcepts.map(\.displayName).joined(separator: ", "))"
+            )
+        } else {
+            self.lastRandomSubsetConcepts = []
+        }
+
+        let engineConfig = settings.buildEngineConfig(
+            reliabilityWeights: weights,
+            activeRandomConcepts: randomConcepts
+        )
         let dedupHistory = store.recentDeduplicationHistory()
         let entryTF = settings.payload.entryTimeframe
         let htfTF = settings.payload.htfTimeframe
@@ -503,16 +559,29 @@ public final class MarketScannerCoordinator {
             let outcome = PassiveOutcomeEvaluator.evaluate(signal: prior, subsequentClosedCandles: freshBars)
             if outcome.status != .pending {
                 store.updateOutcome(outcome)
+                // Save merged pre-entry + post-entry/exit candles for instant Win/Loss Chart Replay
+                let mergedWindow = Self.buildReplayWindow(
+                    preEntryCandles: prior.recentCandles,
+                    subsequentCandles: freshBars,
+                    exitEpochSeconds: outcome.resolvedAtEpochSeconds,
+                    timeframe: prior.timeframe
+                )
+                store.saveReplayCandles(
+                    fingerprint: prior.fingerprint,
+                    symbol: prior.symbol,
+                    timeframe: prior.timeframe,
+                    providerName: prior.dataProvider,
+                    candles: mergedWindow
+                )
             }
         }
 
         self.activeTraps = scannedTraps
         self.signals = store.fetchSignals(limit: 150)
         self.outcomeRecords = store.fetchOutcomeRecords()
-        self.calibrationSummary = PassiveOutcomeEvaluator.summarize(records: outcomeRecords)
-        self.strategyBreakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: outcomeRecords)
         self.tradeLedger = store.fetchTradeLedger(limit: 300)
         self.trapLogs = store.fetchTrapLogs(limit: 300)
+        recomputeCalibration()
         self.twelveDataLocalDailyUsed = await twelveData.localDailyUsage()
         self.twelveDataQuota = await twelveData.cachedQuotaStatus()
 
@@ -526,6 +595,181 @@ public final class MarketScannerCoordinator {
         if !errors.isEmpty {
             self.lastScanError = errors.prefix(2).joined(separator: " • ")
         }
+    }
+
+    // MARK: - Strategy Trade History & Trade Outcome Chart Replay
+
+    public nonisolated static func buildReplayWindow(
+        preEntryCandles: [Candle],
+        subsequentCandles: [Candle],
+        exitEpochSeconds: TimeInterval?,
+        timeframe: Timeframe
+    ) -> [Candle] {
+        var byOpen: [Int: Candle] = [:]
+        for bar in preEntryCandles where bar.isClosed {
+            byOpen[Int(bar.openTimeEpochSeconds.rounded())] = bar
+        }
+        let maxClose: TimeInterval? = exitEpochSeconds.map { $0 + (timeframe.seconds * 12.0) }
+        for bar in subsequentCandles where bar.isClosed {
+            if let cap = maxClose, bar.closeTimeEpochSeconds > cap {
+                continue
+            }
+            byOpen[Int(bar.openTimeEpochSeconds.rounded())] = bar
+        }
+        let sorted = byOpen.values.sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
+        return Array(sorted.suffix(160))
+    }
+
+    /// Returns all recorded trades that included `strategyId`, merging `TradeLedgerSnapshot`,
+    /// `SignalOutcomeRecord`, and persisted `TradeSignal` (so legacy v1.0 signals are included too).
+    public func trades(forStrategyId strategyId: String) -> [StrategyTradeItem] {
+        let signalsByFP = store.fetchSignalsByFingerprint(limit: 500)
+        let outcomesByFP = Dictionary(uniqueKeysWithValues: outcomeRecords.map { ($0.signalId, $0) })
+        let ledgerByFP = Dictionary(uniqueKeysWithValues: tradeLedger.map { ($0.fingerprint, $0) })
+
+        var fingerprints = Set<String>()
+        for entry in tradeLedger where entry.alignedStrategyIDs.contains(strategyId) {
+            fingerprints.insert(entry.fingerprint)
+        }
+        for rec in outcomeRecords where rec.strategyIds.contains(strategyId) {
+            fingerprints.insert(rec.signalId)
+        }
+        for (fp, sig) in signalsByFP where sig.alignedStrategies.contains(where: { $0.id == strategyId }) && sig.levels != nil {
+            fingerprints.insert(fp)
+        }
+
+        var items: [StrategyTradeItem] = []
+        for fp in fingerprints {
+            let sig = signalsByFP[fp]
+            let outcome = outcomesByFP[fp]
+            let ledger = ledgerByFP[fp]
+
+            let resolvedLevels: TradeLevels?
+            if let sLevels = sig?.levels {
+                resolvedLevels = sLevels
+            } else if let l = ledger {
+                let riskDist = abs(l.entryMid - l.stopLoss)
+                let r1Dist = abs(l.tp1 - l.entryMid)
+                let r2Dist = abs(l.tp2 - l.entryMid)
+                let safeMid = max(l.entryMid, 1e-9)
+                let safeRisk = max(riskDist, 1e-9)
+                resolvedLevels = TradeLevels(
+                    entryLow: l.entryLow,
+                    entryHigh: l.entryHigh,
+                    entryMid: l.entryMid,
+                    stopLoss: l.stopLoss,
+                    tp1: l.tp1,
+                    tp2: l.tp2,
+                    riskPercent: (riskDist / safeMid) * 100.0,
+                    reward1Percent: (r1Dist / safeMid) * 100.0,
+                    reward2Percent: (r2Dist / safeMid) * 100.0,
+                    riskRewardRatio: r1Dist / safeRisk,
+                    tp2RiskRewardRatio: r2Dist / safeRisk,
+                    isTP2Enabled: abs(l.tp2 - l.tp1) > 1e-9
+                )
+            } else {
+                resolvedLevels = nil
+            }
+
+            guard let levels = resolvedLevels else { continue }
+
+            let status: TradeLedgerStatus
+            if let out = outcome {
+                switch out.status {
+                case .hitTP2: status = .tp2Win
+                case .hitTP1: status = .tp1Win
+                case .hitSL: status = .slLoss
+                case .expired: status = .expired
+                case .pending: status = .open
+                }
+            } else if let l = ledger {
+                status = l.status
+            } else {
+                status = .open
+            }
+
+            let symbol = sig?.symbol ?? ledger?.symbol ?? outcome?.symbol ?? ""
+            guard !symbol.isEmpty else { continue }
+            let marketClass = sig?.marketClass ?? ledger?.marketClass ?? outcome?.marketClass ?? .crypto
+            let timeframe = sig?.timeframe ?? ledger?.timeframe ?? outcome?.timeframe ?? .h1
+            let direction = sig?.direction ?? ledger?.direction ?? outcome?.direction ?? .neutral
+            let category = sig?.category ?? outcome?.category ?? .strongSignal
+            let conf = sig?.confidencePercent ?? ledger?.confidencePercent ?? ((outcome?.predictedProbability ?? 0.7) * 100.0)
+            let netR = outcome?.rMultiple ?? ledger?.netRMultiple ?? 0.0
+            let provider = sig?.dataProvider ?? ledger?.dataProvider ?? outcome?.dataProvider ?? "Live Feed"
+            let entryEpoch = sig?.barCloseEpochSeconds
+                ?? outcome?.entryBarCloseEpochSeconds
+                ?? ledger?.createdAt.timeIntervalSince1970
+                ?? Date().timeIntervalSince1970
+            let exitEpoch = outcome?.resolvedAtEpochSeconds ?? ledger?.exitedAt?.timeIntervalSince1970
+            let stratIDs = sig?.alignedStrategies.map(\.id) ?? ledger?.alignedStrategyIDs ?? outcome?.strategyIds ?? [strategyId]
+
+            items.append(StrategyTradeItem(
+                fingerprint: fp,
+                symbol: symbol,
+                displayName: sig?.displayName ?? WatchlistDefaults.descriptor(for: symbol)?.displayName ?? symbol,
+                marketClass: marketClass,
+                timeframe: timeframe,
+                direction: direction,
+                category: category,
+                confidencePercent: conf,
+                levels: levels,
+                status: status,
+                netRMultiple: netR,
+                dataProvider: provider,
+                entryEpochSeconds: entryEpoch,
+                exitEpochSeconds: exitEpoch,
+                alignedStrategyIDs: stratIDs,
+                sourceSignal: sig
+            ))
+        }
+
+        return items.sorted { $0.entryEpochSeconds > $1.entryEpochSeconds }
+    }
+
+    /// Loads cached replay candles (Entry -> Exit) or fetches & merges a live historical window on demand.
+    public func loadTradeReplayContext(for trade: StrategyTradeItem) async -> TradeReplayContext {
+        if let cached = store.fetchReplayCandles(fingerprint: trade.fingerprint) {
+            let hasExitCoverage: Bool
+            if let exitTS = trade.exitEpochSeconds {
+                hasExitCoverage = cached.candles.contains { $0.closeTimeEpochSeconds >= exitTS - trade.timeframe.seconds }
+            } else {
+                hasExitCoverage = true
+            }
+            if hasExitCoverage && cached.candles.count >= 10 {
+                return TradeReplayContext(trade: trade, initialCandles: cached.candles, providerName: cached.providerName)
+            }
+        }
+
+        let preEntry = trade.sourceSignal?.recentCandles ?? []
+        if let fetched = try? await fetchChartCandles(
+            symbol: trade.symbol,
+            timeframe: trade.timeframe,
+            providerChoice: .auto
+        ) {
+            let merged = Self.buildReplayWindow(
+                preEntryCandles: preEntry,
+                subsequentCandles: fetched.candles,
+                exitEpochSeconds: trade.exitEpochSeconds,
+                timeframe: trade.timeframe
+            )
+            if !merged.isEmpty {
+                store.saveReplayCandles(
+                    fingerprint: trade.fingerprint,
+                    symbol: trade.symbol,
+                    timeframe: trade.timeframe,
+                    providerName: fetched.providerName,
+                    candles: merged
+                )
+                return TradeReplayContext(trade: trade, initialCandles: merged, providerName: fetched.providerName)
+            }
+        }
+
+        return TradeReplayContext(
+            trade: trade,
+            initialCandles: ConfluenceDataStore.deduplicateAndSortCandles(preEntry),
+            providerName: trade.dataProvider
+        )
     }
 
     // MARK: - Live In-Chart Provider & Timeframe Switcher

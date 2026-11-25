@@ -8,6 +8,110 @@ public enum SignalOutcomeStatus: String, Codable, Sendable, Equatable {
     case expired
 }
 
+public enum CalibrationWinDefinition: String, Codable, Sendable, CaseIterable, Identifiable {
+    case tp1OrTp2 = "TP1 or TP2 = Win"
+    case tp2Only = "TP2 Only = Win"
+
+    public var id: String { rawValue }
+
+    public var shortLabel: String {
+        switch self {
+        case .tp1OrTp2: return "TP1/TP2"
+        case .tp2Only: return "TP2 Only"
+        }
+    }
+}
+
+public enum CalibrationCategoryScope: String, Codable, Sendable, CaseIterable, Identifiable {
+    case strongOnly = "Strong Signals Only"
+    case strongAndTraps = "Include Trap Alerts"
+    case allEvaluated = "All Evaluated Setups"
+
+    public var id: String { rawValue }
+
+    public var shortLabel: String {
+        switch self {
+        case .strongOnly: return "Strong"
+        case .strongAndTraps: return "Strong+Traps"
+        case .allEvaluated: return "All"
+        }
+    }
+}
+
+public struct CalibrationFilterConfig: Codable, Sendable, Equatable {
+    public var winDefinition: CalibrationWinDefinition
+    public var categoryScope: CalibrationCategoryScope
+    public var minimumConfidencePercent: Double
+    public var minimumRiskReward: Double
+
+    public init(
+        winDefinition: CalibrationWinDefinition = .tp1OrTp2,
+        categoryScope: CalibrationCategoryScope = .strongOnly,
+        minimumConfidencePercent: Double = 0.0,
+        minimumRiskReward: Double = 0.0
+    ) {
+        self.winDefinition = winDefinition
+        self.categoryScope = categoryScope
+        self.minimumConfidencePercent = minimumConfidencePercent
+        self.minimumRiskReward = minimumRiskReward
+    }
+
+    /// Default backwards-compatible config (counts Strong + Traps, TP1 or TP2 = Win, no conf/R:R floor).
+    public static let legacyAll = CalibrationFilterConfig(
+        winDefinition: .tp1OrTp2,
+        categoryScope: .allEvaluated,
+        minimumConfidencePercent: 0.0,
+        minimumRiskReward: 0.0
+    )
+
+    public var summarySubtitle: String {
+        var parts: [String] = [winDefinition.shortLabel, categoryScope.shortLabel]
+        if minimumConfidencePercent > 0 {
+            parts.append("≥\(Int(minimumConfidencePercent.rounded()))%")
+        }
+        if minimumRiskReward > 0 {
+            parts.append("≥1:\(String(format: "%.1f", minimumRiskReward))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    public func matchesCategory(_ category: SignalCategory) -> Bool {
+        switch categoryScope {
+        case .strongOnly: return category == .strongSignal
+        case .strongAndTraps: return category == .strongSignal || category == .trapAlert
+        case .allEvaluated: return true
+        }
+    }
+
+    public func matchesRecord(_ record: SignalOutcomeRecord) -> Bool {
+        guard matchesCategory(record.category) else { return false }
+        let confPct = record.predictedProbability * 100.0
+        if minimumConfidencePercent > 0 && confPct + 1e-6 < minimumConfidencePercent {
+            return false
+        }
+        if minimumRiskReward > 0 {
+            guard let rr = record.riskRewardRatio, rr + 1e-6 >= minimumRiskReward else {
+                return false
+            }
+        }
+        return true
+    }
+
+    public func isCountedWin(_ status: SignalOutcomeStatus) -> Bool {
+        switch winDefinition {
+        case .tp1OrTp2: return status == .hitTP1 || status == .hitTP2
+        case .tp2Only: return status == .hitTP2
+        }
+    }
+
+    public func isCountedInWinRateDenominator(_ status: SignalOutcomeStatus) -> Bool {
+        switch winDefinition {
+        case .tp1OrTp2: return status == .hitTP1 || status == .hitTP2 || status == .hitSL
+        case .tp2Only: return status == .hitTP2 || status == .hitSL // TP1 tracked separately as partial/breakeven
+        }
+    }
+}
+
 public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
     public var id: String { signalId }
     public let signalId: String
@@ -26,6 +130,8 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
     public let killzone: KillzoneSession?
     public let timeframe: Timeframe?
     public let dataProvider: String?
+    public let riskRewardRatio: Double?
+    public let entryBarCloseEpochSeconds: TimeInterval?
 
     public init(
         signalId: String,
@@ -43,7 +149,9 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
         regime: MarketRegime? = nil,
         killzone: KillzoneSession? = nil,
         timeframe: Timeframe? = nil,
-        dataProvider: String? = nil
+        dataProvider: String? = nil,
+        riskRewardRatio: Double? = nil,
+        entryBarCloseEpochSeconds: TimeInterval? = nil
     ) {
         self.signalId = signalId
         self.symbol = symbol
@@ -61,6 +169,8 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
         self.killzone = killzone
         self.timeframe = timeframe
         self.dataProvider = dataProvider
+        self.riskRewardRatio = riskRewardRatio
+        self.entryBarCloseEpochSeconds = entryBarCloseEpochSeconds
     }
 
     public var isWin: Bool {
@@ -174,6 +284,7 @@ public struct CalibrationSummary: Codable, Sendable, Equatable {
     public let tp1Hits: Int
     public let tp2Hits: Int
     public let slHits: Int
+    public let tp1PartialsExcluded: Int
     public let winRate: Double
     public let expectancyR: Double
     public let brierScore: Double
@@ -188,6 +299,7 @@ public struct CalibrationSummary: Codable, Sendable, Equatable {
         tp1Hits: Int,
         tp2Hits: Int,
         slHits: Int,
+        tp1PartialsExcluded: Int = 0,
         winRate: Double,
         expectancyR: Double,
         brierScore: Double,
@@ -201,6 +313,7 @@ public struct CalibrationSummary: Codable, Sendable, Equatable {
         self.tp1Hits = tp1Hits
         self.tp2Hits = tp2Hits
         self.slHits = slHits
+        self.tp1PartialsExcluded = tp1PartialsExcluded
         self.winRate = winRate
         self.expectancyR = expectancyR
         self.brierScore = brierScore
@@ -247,7 +360,9 @@ public enum PassiveOutcomeEvaluator {
                 regime: signal.regime,
                 killzone: signal.killzone,
                 timeframe: signal.timeframe,
-                dataProvider: signal.dataProvider
+                dataProvider: signal.dataProvider,
+                riskRewardRatio: signal.levels?.riskRewardRatio,
+                entryBarCloseEpochSeconds: signal.barCloseEpochSeconds
             )
         }
 
@@ -275,11 +390,15 @@ public enum PassiveOutcomeEvaluator {
                     let netPct = -(lv.riskPercent + costPct)
                     return makeRecord(status: .hitSL, netReturnPercent: netPct, rMultiple: -1.0 - (costPct / max(lv.riskPercent, 0.01)), resolvedAt: bar.closeTimeEpochSeconds)
                 }
-                if bar.high >= lv.tp2 {
+                if lv.isTP2Enabled && bar.high >= lv.tp2 {
                     let netPct = lv.reward2Percent - costPct
                     return makeRecord(status: .hitTP2, netReturnPercent: netPct, rMultiple: lv.tp2RiskRewardRatio - (costPct / max(lv.riskPercent, 0.01)), resolvedAt: bar.closeTimeEpochSeconds)
                 }
                 if !hitTP1 && bar.high >= lv.tp1 {
+                    if !lv.isTP2Enabled {
+                        let netPct = lv.reward1Percent - costPct
+                        return makeRecord(status: .hitTP1, netReturnPercent: netPct, rMultiple: lv.riskRewardRatio - (costPct / max(lv.riskPercent, 0.01)), resolvedAt: bar.closeTimeEpochSeconds)
+                    }
                     hitTP1 = true
                     tp1Time = bar.closeTimeEpochSeconds
                 }
@@ -292,11 +411,15 @@ public enum PassiveOutcomeEvaluator {
                     let netPct = -(lv.riskPercent + costPct)
                     return makeRecord(status: .hitSL, netReturnPercent: netPct, rMultiple: -1.0 - (costPct / max(lv.riskPercent, 0.01)), resolvedAt: bar.closeTimeEpochSeconds)
                 }
-                if bar.low <= lv.tp2 {
+                if lv.isTP2Enabled && bar.low <= lv.tp2 {
                     let netPct = lv.reward2Percent - costPct
                     return makeRecord(status: .hitTP2, netReturnPercent: netPct, rMultiple: lv.tp2RiskRewardRatio - (costPct / max(lv.riskPercent, 0.01)), resolvedAt: bar.closeTimeEpochSeconds)
                 }
                 if !hitTP1 && bar.low <= lv.tp1 {
+                    if !lv.isTP2Enabled {
+                        let netPct = lv.reward1Percent - costPct
+                        return makeRecord(status: .hitTP1, netReturnPercent: netPct, rMultiple: lv.riskRewardRatio - (costPct / max(lv.riskPercent, 0.01)), resolvedAt: bar.closeTimeEpochSeconds)
+                    }
                     hitTP1 = true
                     tp1Time = bar.closeTimeEpochSeconds
                 }
@@ -317,22 +440,25 @@ public enum PassiveOutcomeEvaluator {
     }
 
     /// Computes per-strategy win/loss/expectancy/Brier contribution plus best/worst pairs and regimes.
-    public static func analyzeStrategyPerformance(records: [SignalOutcomeRecord]) -> [StrategyDiagnosticBreakdown] {
-        let resolved = records.filter(\.isResolved)
+    public static func analyzeStrategyPerformance(
+        records: [SignalOutcomeRecord],
+        filter: CalibrationFilterConfig = .legacyAll
+    ) -> [StrategyDiagnosticBreakdown] {
+        let eligible = records.filter { filter.matchesRecord($0) && filter.isCountedInWinRateDenominator($0.status) }
         var grouped: [String: [SignalOutcomeRecord]] = [:]
-        for rec in resolved {
+        for rec in eligible {
             for sid in Set(rec.strategyIds) {
                 grouped[sid, default: []].append(rec)
             }
         }
 
         return grouped.map { sid, items in
-            let wins = items.filter(\.isWin).count
+            let wins = items.filter { filter.isCountedWin($0.status) }.count
             let losses = items.count - wins
             let winRate = Double(wins) / Double(max(items.count, 1))
             let expR = items.reduce(0.0) { $0 + $1.rMultiple } / Double(max(items.count, 1))
             let brier = items.reduce(0.0) { acc, rec in
-                let y = rec.isWin ? 1.0 : 0.0
+                let y = filter.isCountedWin(rec.status) ? 1.0 : 0.0
                 let d = rec.predictedProbability - y
                 return acc + d * d
             } / Double(max(items.count, 1))
@@ -372,42 +498,50 @@ public enum PassiveOutcomeEvaluator {
         }.sorted { $0.expectancyR > $1.expectancyR }
     }
 
-    /// Computes Brier score (`mean((p - y)^2)`), win-rate, expectancy, trap accuracy, macro hit rate, and per-strategy stats.
-    public static func summarize(records: [SignalOutcomeRecord]) -> CalibrationSummary {
-        let resolved = records.filter(\.isResolved)
-        let tp1 = resolved.filter { $0.status == .hitTP1 }.count
-        let tp2 = resolved.filter { $0.status == .hitTP2 }.count
-        let sl = resolved.filter { $0.status == .hitSL }.count
-        let wins = tp1 + tp2
+    /// Computes Brier score (`mean((p - y)^2)`), win-rate, expectancy, trap accuracy, macro hit rate, and per-strategy stats
+    /// strictly honoring `CalibrationFilterConfig` (win definition, category scope, min confidence, min R:R).
+    public static func summarize(
+        records: [SignalOutcomeRecord],
+        filter: CalibrationFilterConfig = .legacyAll
+    ) -> CalibrationSummary {
+        let scoped = records.filter { filter.matchesRecord($0) }
+        let allResolved = scoped.filter(\.isResolved)
+        let counted = allResolved.filter { filter.isCountedInWinRateDenominator($0.status) }
 
-        let winRate = resolved.isEmpty ? 0.0 : Double(wins) / Double(resolved.count)
-        let expectancyR = resolved.isEmpty ? 0.0 : resolved.reduce(0.0) { $0 + $1.rMultiple } / Double(resolved.count)
+        let tp1 = allResolved.filter { $0.status == .hitTP1 }.count
+        let tp2 = allResolved.filter { $0.status == .hitTP2 }.count
+        let sl = allResolved.filter { $0.status == .hitSL }.count
+        let tp1PartialsExcluded = (filter.winDefinition == .tp2Only) ? tp1 : 0
+        let wins = counted.filter { filter.isCountedWin($0.status) }.count
+
+        let winRate = counted.isEmpty ? 0.0 : Double(wins) / Double(counted.count)
+        let expectancyR = allResolved.isEmpty ? 0.0 : allResolved.reduce(0.0) { $0 + $1.rMultiple } / Double(allResolved.count)
 
         let brier: Double
-        if resolved.isEmpty {
+        if counted.isEmpty {
             brier = 0.0
         } else {
-            let sumSq = resolved.reduce(0.0) { acc, rec in
-                let y = rec.isWin ? 1.0 : 0.0
+            let sumSq = counted.reduce(0.0) { acc, rec in
+                let y = filter.isCountedWin(rec.status) ? 1.0 : 0.0
                 let diff = rec.predictedProbability - y
                 return acc + diff * diff
             }
-            brier = sumSq / Double(resolved.count)
+            brier = sumSq / Double(counted.count)
         }
 
-        let trapResolved = resolved.filter { $0.category == .trapAlert }
-        let trapAcc: Double? = trapResolved.isEmpty ? nil : Double(trapResolved.filter(\.isWin).count) / Double(trapResolved.count)
+        let trapResolved = records.filter { $0.category == .trapAlert && filter.isCountedInWinRateDenominator($0.status) }
+        let trapAcc: Double? = trapResolved.isEmpty ? nil : Double(trapResolved.filter { filter.isCountedWin($0.status) }.count) / Double(trapResolved.count)
 
-        let macroResolved = resolved.filter(\.hadMacroCatalyst)
-        let macroHit: Double? = macroResolved.isEmpty ? nil : Double(macroResolved.filter(\.isWin).count) / Double(macroResolved.count)
+        let macroResolved = counted.filter(\.hadMacroCatalyst)
+        let macroHit: Double? = macroResolved.isEmpty ? nil : Double(macroResolved.filter { filter.isCountedWin($0.status) }.count) / Double(macroResolved.count)
 
         // Per-strategy rankings
         var stratMap: [String: (wins: Int, total: Int, rSum: Double)] = [:]
-        for rec in resolved {
-            for sid in rec.strategyIds {
+        for rec in counted {
+            for sid in Set(rec.strategyIds) {
                 var entry = stratMap[sid] ?? (0, 0, 0.0)
                 entry.total += 1
-                if rec.isWin { entry.wins += 1 }
+                if filter.isCountedWin(rec.status) { entry.wins += 1 }
                 entry.rSum += rec.rMultiple
                 stratMap[sid] = entry
             }
@@ -424,18 +558,19 @@ public enum PassiveOutcomeEvaluator {
 
         var marketBreakdown: [MarketClass: Double] = [:]
         for mc in MarketClass.allCases {
-            let slice = resolved.filter { $0.marketClass == mc }
+            let slice = counted.filter { $0.marketClass == mc }
             if !slice.isEmpty {
-                marketBreakdown[mc] = Double(slice.filter(\.isWin).count) / Double(slice.count)
+                marketBreakdown[mc] = Double(slice.filter { filter.isCountedWin($0.status) }.count) / Double(slice.count)
             }
         }
 
         return CalibrationSummary(
-            totalSignals: records.count,
-            resolvedSignals: resolved.count,
+            totalSignals: scoped.count,
+            resolvedSignals: counted.count,
             tp1Hits: tp1,
             tp2Hits: tp2,
             slHits: sl,
+            tp1PartialsExcluded: tp1PartialsExcluded,
             winRate: winRate,
             expectancyR: expectancyR,
             brierScore: brier,

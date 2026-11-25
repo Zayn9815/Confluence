@@ -36,7 +36,7 @@ public struct SignalCardView: View {
     }
 
     public var body: some View {
-        let dec = PriceFormatHelper.decimals(for: signal.symbol)
+        let dec = PriceFormatHelper.decimals(for: signal.symbol, marketClass: signal.marketClass, referencePrice: signal.levels?.entryMid)
         let accentBorder: Color? = {
             if signal.tier == .aPlusInstitutional { return palette.champagneGold.opacity(0.65) }
             if signal.category == .trapAlert { return palette.trapAmber.opacity(0.65) }
@@ -108,6 +108,7 @@ public struct SignalCardView: View {
 
             // 4. Numeric Execution Grid (Code owns ALL numbers, monospaced digits)
             if let lv = signal.levels {
+                let levelDec = PriceFormatHelper.decimals(for: signal.symbol, marketClass: signal.marketClass, referencePrice: lv.entryMid)
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 8),
                     GridItem(.flexible(), spacing: 8),
@@ -115,34 +116,43 @@ public struct SignalCardView: View {
                 ], spacing: 8) {
                     metricCell(
                         title: "ENTRY ZONE",
-                        value: "\(PriceFormatHelper.format(lv.entryLow, decimals: dec))–\(PriceFormatHelper.format(lv.entryHigh, decimals: dec))",
-                        sub: "Mid \(PriceFormatHelper.format(lv.entryMid, decimals: dec))",
+                        value: "\(PriceFormatHelper.format(lv.entryLow, decimals: levelDec))–\(PriceFormatHelper.format(lv.entryHigh, decimals: levelDec))",
+                        sub: "Mid \(PriceFormatHelper.format(lv.entryMid, decimals: levelDec))",
                         accent: palette.champagneGold
                     )
                     metricCell(
                         title: "STOP LOSS",
-                        value: PriceFormatHelper.format(lv.stopLoss, decimals: dec),
+                        value: PriceFormatHelper.format(lv.stopLoss, decimals: levelDec),
                         sub: "-\(String(format: "%.2f", lv.riskPercent))% Risk",
                         accent: palette.shortCrimson
                     )
                     metricCell(
                         title: "R:R RATIO",
                         value: "1:\(String(format: "%.2f", lv.riskRewardRatio))",
-                        sub: "TP2 1:\(String(format: "%.1f", lv.tp2RiskRewardRatio))",
+                        sub: lv.isTP2Enabled ? "TP2 1:\(String(format: "%.1f", lv.tp2RiskRewardRatio))" : "TP1 Target Only",
                         accent: palette.primaryInk
                     )
                     metricCell(
                         title: "TP1 TARGET",
-                        value: PriceFormatHelper.format(lv.tp1, decimals: dec),
+                        value: PriceFormatHelper.format(lv.tp1, decimals: levelDec),
                         sub: "+\(String(format: "%.2f", lv.reward1Percent))%",
                         accent: palette.longEmerald
                     )
-                    metricCell(
-                        title: "TP2 TARGET",
-                        value: PriceFormatHelper.format(lv.tp2, decimals: dec),
-                        sub: "+\(String(format: "%.2f", lv.reward2Percent))%",
-                        accent: palette.macroIceBlue
-                    )
+                    if lv.isTP2Enabled {
+                        metricCell(
+                            title: "TP2 TARGET",
+                            value: PriceFormatHelper.format(lv.tp2, decimals: levelDec),
+                            sub: "+\(String(format: "%.2f", lv.reward2Percent))%",
+                            accent: palette.macroIceBlue
+                        )
+                    } else {
+                        metricCell(
+                            title: "TP2 TARGET",
+                            value: "Disabled",
+                            sub: "Settings -> Rules",
+                            accent: palette.tertiaryInk
+                        )
+                    }
                     metricCell(
                         title: "CONFLUENCE",
                         value: "\(signal.alignedStrategies.count) Signals",

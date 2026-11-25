@@ -57,7 +57,8 @@ public final class ConfluenceDataStore {
             StoredNotificationItem.self,
             DiagnosticLogEntry.self,
             TrapLogEntry.self,
-            TradeLedgerEntry.self
+            TradeLedgerEntry.self,
+            TradeReplayCandleCache.self
         ])
 
         let config: ModelConfiguration
@@ -428,6 +429,88 @@ public final class ConfluenceDataStore {
         }
     }
 
+    // MARK: - Trade Replay Candle Cache & Signal Lookups
+
+    public static let maxReplayCaches = 200
+
+    public func fetchSignal(fingerprint: String) -> TradeSignal? {
+        let desc = FetchDescriptor<PersistedSignalRecord>(
+            predicate: #Predicate { $0.fingerprint == fingerprint }
+        )
+        guard let row = try? context.fetch(desc).first else { return nil }
+        return try? JSONDecoder().decode(TradeSignal.self, from: row.signalJSON)
+    }
+
+    public func fetchSignalsByFingerprint(limit: Int = 500) -> [String: TradeSignal] {
+        let all = fetchSignals(limit: limit)
+        var map: [String: TradeSignal] = [:]
+        map.reserveCapacity(all.count)
+        for s in all {
+            map[s.fingerprint] = s
+        }
+        return map
+    }
+
+    public func saveReplayCandles(
+        fingerprint: String,
+        symbol: String,
+        timeframe: Timeframe,
+        providerName: String,
+        candles: [Candle]
+    ) {
+        let merged = Self.deduplicateAndSortCandles(candles)
+        guard !merged.isEmpty, let encoded = try? JSONEncoder().encode(merged) else { return }
+        let desc = FetchDescriptor<TradeReplayCandleCache>(
+            predicate: #Predicate { $0.fingerprint == fingerprint }
+        )
+        if let existing = try? context.fetch(desc).first {
+            existing.candlesJSON = encoded
+            existing.providerName = providerName
+            existing.updatedAt = Date()
+        } else {
+            let row = TradeReplayCandleCache(
+                fingerprint: fingerprint,
+                symbol: symbol,
+                timeframeRaw: timeframe.rawValue,
+                providerName: providerName,
+                candlesJSON: encoded
+            )
+            context.insert(row)
+            pruneReplayCachesIfNeeded()
+        }
+        try? context.save()
+    }
+
+    public func fetchReplayCandles(fingerprint: String) -> (candles: [Candle], providerName: String)? {
+        let desc = FetchDescriptor<TradeReplayCandleCache>(
+            predicate: #Predicate { $0.fingerprint == fingerprint }
+        )
+        guard let row = try? context.fetch(desc).first,
+              let decoded = try? JSONDecoder().decode([Candle].self, from: row.candlesJSON),
+              !decoded.isEmpty
+        else { return nil }
+        return (Self.deduplicateAndSortCandles(decoded), row.providerName)
+    }
+
+    private func pruneReplayCachesIfNeeded() {
+        let desc = FetchDescriptor<TradeReplayCandleCache>(
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        guard let all = try? context.fetch(desc), all.count > Self.maxReplayCaches else { return }
+        for stale in all.dropFirst(Self.maxReplayCaches) {
+            context.delete(stale)
+        }
+    }
+
+    public static func deduplicateAndSortCandles(_ candles: [Candle]) -> [Candle] {
+        var byOpen: [Int: Candle] = [:]
+        for bar in candles where bar.isClosed {
+            let key = Int(bar.openTimeEpochSeconds.rounded())
+            byOpen[key] = bar
+        }
+        return byOpen.values.sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
+    }
+
     // MARK: - Reset & Export
 
     public func resetCalibrationAndHistory() {
@@ -441,6 +524,9 @@ public final class ConfluenceDataStore {
             for r in rows { context.delete(r) }
         }
         if let rows = try? context.fetch(FetchDescriptor<DiagnosticLogEntry>()) {
+            for r in rows { context.delete(r) }
+        }
+        if let rows = try? context.fetch(FetchDescriptor<TradeReplayCandleCache>()) {
             for r in rows { context.delete(r) }
         }
         try? context.save()

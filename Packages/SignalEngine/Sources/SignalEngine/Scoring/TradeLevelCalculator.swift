@@ -1,8 +1,8 @@
 import Foundation
 
 public enum TradeLevelCalculator {
-    /// Code owns ALL numeric levels: Entry Zone, Stop Loss (beyond invalidation swing/OB + ATR buffer),
-    /// TP1 (opposing structure/liquidity), TP2 (next HTF liquidity), % risk, % gain, and exact R:R.
+    /// Code owns ALL numeric levels: Entry Zone, Stop Loss (either Structure/ATR or Fixed % Ratio),
+    /// TP1, optional TP2, % risk, % gain, and exact R:R.
     public static func calculate(
         direction: TradeDirection,
         candles: [Candle],
@@ -10,7 +10,12 @@ public enum TradeLevelCalculator {
         htfICT: ICTAnalysis?,
         atr: Double,
         marketClass: MarketClass,
-        minimumRiskReward: Double
+        minimumRiskReward: Double,
+        mode: TradeLevelMode = .structureATR,
+        fixedStopLossPercent: Double = 1.0,
+        fixedTP1Percent: Double = 2.0,
+        fixedTP2Percent: Double = 3.5,
+        enableTP2Target: Bool = true
     ) -> TradeLevels? {
         guard direction == .long || direction == .short,
               let lastBar = candles.last,
@@ -23,7 +28,11 @@ public enum TradeLevelCalculator {
         // Entry Zone anchored around current close or active FVG/OB edge
         let entryLow: Double
         let entryHigh: Double
-        if direction == .long {
+        if mode == .fixedPercent {
+            let spreadPad = min(safeATR * 0.12, close * 0.0005)
+            entryLow = close - spreadPad
+            entryHigh = close + spreadPad
+        } else if direction == .long {
             if let fvg = ict.fvgs.last(where: { $0.direction == .long && $0.isUnmitigated && $0.top <= close * 1.005 }) {
                 entryLow = max(fvg.bottom, close - safeATR * 0.6)
                 entryHigh = min(max(fvg.top, close), close + safeATR * 0.15)
@@ -44,7 +53,47 @@ public enum TradeLevelCalculator {
         let orderedHigh = max(entryLow, entryHigh)
         let entryMid = (orderedLow + orderedHigh) * 0.5
 
-        // Stop Loss beyond structural invalidation swing/OB + 0.25 * ATR buffer
+        // Fixed % Ratio Mode (exact SL%, TP1%, and optional TP2% around entryMid)
+        if mode == .fixedPercent {
+            let slFrac = max(0.05, fixedStopLossPercent) / 100.0
+            let tp1Frac = max(0.10, fixedTP1Percent) / 100.0
+            let tp2Frac = max(tp1Frac, fixedTP2Percent / 100.0)
+
+            let stopLoss: Double
+            let tp1: Double
+            let tp2: Double
+            if direction == .long {
+                stopLoss = entryMid * (1.0 - slFrac)
+                tp1 = entryMid * (1.0 + tp1Frac)
+                tp2 = enableTP2Target ? entryMid * (1.0 + tp2Frac) : tp1
+            } else {
+                stopLoss = entryMid * (1.0 + slFrac)
+                tp1 = entryMid * (1.0 - tp1Frac)
+                tp2 = enableTP2Target ? entryMid * (1.0 - tp2Frac) : tp1
+            }
+
+            let riskDistance = abs(entryMid - stopLoss)
+            guard riskDistance > 1e-12 else { return nil }
+            let reward1Dist = abs(tp1 - entryMid)
+            let reward2Dist = abs(tp2 - entryMid)
+
+            return TradeLevels(
+                entryLow: orderedLow,
+                entryHigh: orderedHigh,
+                entryMid: entryMid,
+                stopLoss: stopLoss,
+                tp1: tp1,
+                tp2: tp2,
+                riskPercent: (riskDistance / entryMid) * 100.0,
+                reward1Percent: (reward1Dist / entryMid) * 100.0,
+                reward2Percent: (reward2Dist / entryMid) * 100.0,
+                riskRewardRatio: reward1Dist / riskDistance,
+                tp2RiskRewardRatio: reward2Dist / riskDistance,
+                isTP2Enabled: enableTP2Target
+            )
+        }
+
+        // Structure / ATR Mode (Default)
         let stopLoss: Double
         let atrBuffer = safeATR * 0.25
         if direction == .long {
@@ -52,7 +101,6 @@ public enum TradeLevelCalculator {
             let recentOBLow = ict.orderBlocks.reversed().first(where: { $0.direction == .long && $0.bottom < entryMid })?.bottom
             let structuralAnchor = [recentSwingLow, recentOBLow, lastBar.low].compactMap { $0 }.max() ?? lastBar.low
             let rawSL = structuralAnchor - atrBuffer
-            // Ensure SL is at least 0.5*ATR away so noise doesn't produce distorted R:R
             stopLoss = min(rawSL, entryMid - safeATR * 0.65)
         } else {
             let recentSwingHigh = ict.swings.reversed().first(where: { $0.isHigh && $0.price > entryMid })?.price
@@ -66,13 +114,13 @@ public enum TradeLevelCalculator {
         guard riskDistance > 1e-12 else { return nil }
 
         // TP1: opposing structure / swing liquidity if >= min R:R, else projected at minRR * risk
-        let minTargetDist = riskDistance * max(minimumRiskReward, 1.5)
+        let minTargetDist = riskDistance * max(minimumRiskReward, 1.0)
         let tp1: Double
         let tp2: Double
 
         if direction == .long {
             let opposingHighs = ict.swings
-                .filter { $0.isHigh && $0.price >= entryMid + riskDistance * 1.4 }
+                .filter { $0.isHigh && $0.price >= entryMid + riskDistance * 1.25 }
                 .map(\.price)
                 .sorted()
             let htfHighs = (htfICT?.swings ?? [])
@@ -81,11 +129,15 @@ public enum TradeLevelCalculator {
                 .sorted()
 
             tp1 = opposingHighs.first(where: { $0 >= entryMid + minTargetDist }) ?? (entryMid + minTargetDist)
-            let tp2Candidate = htfHighs.first(where: { $0 > tp1 + riskDistance * 0.5 })
-            tp2 = tp2Candidate ?? (entryMid + riskDistance * max(minimumRiskReward * 1.65, 3.3))
+            if enableTP2Target {
+                let tp2Candidate = htfHighs.first(where: { $0 > tp1 + riskDistance * 0.5 })
+                tp2 = tp2Candidate ?? (entryMid + riskDistance * max(minimumRiskReward * 1.65, 3.3))
+            } else {
+                tp2 = tp1
+            }
         } else {
             let opposingLows = ict.swings
-                .filter { !$0.isHigh && $0.price <= entryMid - riskDistance * 1.4 }
+                .filter { !$0.isHigh && $0.price <= entryMid - riskDistance * 1.25 }
                 .map(\.price)
                 .sorted(by: >)
             let htfLows = (htfICT?.swings ?? [])
@@ -94,8 +146,12 @@ public enum TradeLevelCalculator {
                 .sorted(by: >)
 
             tp1 = opposingLows.first(where: { $0 <= entryMid - minTargetDist }) ?? (entryMid - minTargetDist)
-            let tp2Candidate = htfLows.first(where: { $0 < tp1 - riskDistance * 0.5 })
-            tp2 = tp2Candidate ?? (entryMid - riskDistance * max(minimumRiskReward * 1.65, 3.3))
+            if enableTP2Target {
+                let tp2Candidate = htfLows.first(where: { $0 < tp1 - riskDistance * 0.5 })
+                tp2 = tp2Candidate ?? (entryMid - riskDistance * max(minimumRiskReward * 1.65, 3.3))
+            } else {
+                tp2 = tp1
+            }
         }
 
         let reward1Dist = abs(tp1 - entryMid)
@@ -117,7 +173,8 @@ public enum TradeLevelCalculator {
             reward1Percent: reward1Pct,
             reward2Percent: reward2Pct,
             riskRewardRatio: rr1,
-            tp2RiskRewardRatio: rr2
+            tp2RiskRewardRatio: rr2,
+            isTP2Enabled: enableTP2Target
         )
     }
 }

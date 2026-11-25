@@ -65,6 +65,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     // Section 1 — Appearance & Display
     public var appearanceMode: AppearanceMode = .dark
     public var themePreset: ThemePreset = .obsidianTerminal
+    public var lastDarkThemePreset: ThemePreset = .obsidianTerminal
     public var cardDensity: CardDensity = .standard
     public var showMiniCharts: Bool = true
 
@@ -93,16 +94,31 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var backgroundRefreshEnabled: Bool = true
     public var backgroundRefreshIntervalMinutes: Int = 30
 
-    // Section 4 — Signal Engine & Psychology Filters
+    // Section 4 — Signal Engine, Risk/TP & Strategy Rules
     public var htfTimeframe: Timeframe = .h4
     public var entryTimeframe: Timeframe = .h1
     public var minimumConfidencePercent: Double = 70.0
     public var minimumRiskReward: Double = 2.0
     public var maxStopLossPercentCryptoStocks: Double = 3.0
     public var maxStopLossPercentFXMetalsIndices: Double = 1.5
+    public var levelCalculationMode: TradeLevelMode = .structureATR
+    public var fixedStopLossPercent: Double = 1.0
+    public var fixedTP1Percent: Double = 2.0
+    public var fixedTP2Percent: Double = 3.5
+    public var enableTP2Target: Bool = true
+    public var minimumAlignedStrategies: Int = 3
     public var enabledStrategyGroups: Set<StrategyGroup> = Set(StrategyGroup.allCases)
+    public var strategySelectionMode: StrategySelectionMode = .defaultAll
+    public var selectedStrategyConcepts: Set<StrategyConcept> = Set(StrategyConcept.allCases)
+    public var customStrategyMatchRule: CustomStrategyMatchRule = .anyWithMinConfluence
     public var showWeakFilteredSignals: Bool = true
     public var autoSuppressCrisisAlerts: Bool = true
+
+    // Section 4b — Resolved Win Rate & Calibration Counting Rules
+    public var calibrationWinDefinition: CalibrationWinDefinition = .tp1OrTp2
+    public var calibrationCategoryScope: CalibrationCategoryScope = .strongOnly
+    public var calibrationMinConfidencePercent: Double = 0.0
+    public var calibrationMinRiskReward: Double = 0.0
 
     // Section 5 — AI Second-Opinion (Optional)
     public var geminiEnabled: Bool = false
@@ -112,12 +128,13 @@ public struct PersistedSettingsPayload: Codable, Sendable {
 
     public init() {}
 
-    /// Custom backwards-compatible decoder so existing v1.0 sideloaded installs keep every setting cleanly.
+    /// Custom backwards-compatible decoder so existing v1.0/v1.1 sideloaded installs keep every setting cleanly.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = PersistedSettingsPayload()
         appearanceMode = (try? c.decodeIfPresent(AppearanceMode.self, forKey: .appearanceMode)) ?? d.appearanceMode
         themePreset = (try? c.decodeIfPresent(ThemePreset.self, forKey: .themePreset)) ?? d.themePreset
+        lastDarkThemePreset = (try? c.decodeIfPresent(ThemePreset.self, forKey: .lastDarkThemePreset)) ?? (themePreset == .amoledVault ? .amoledVault : d.lastDarkThemePreset)
         cardDensity = (try? c.decodeIfPresent(CardDensity.self, forKey: .cardDensity)) ?? d.cardDensity
         showMiniCharts = (try? c.decodeIfPresent(Bool.self, forKey: .showMiniCharts)) ?? d.showMiniCharts
 
@@ -150,9 +167,23 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         minimumRiskReward = (try? c.decodeIfPresent(Double.self, forKey: .minimumRiskReward)) ?? d.minimumRiskReward
         maxStopLossPercentCryptoStocks = (try? c.decodeIfPresent(Double.self, forKey: .maxStopLossPercentCryptoStocks)) ?? d.maxStopLossPercentCryptoStocks
         maxStopLossPercentFXMetalsIndices = (try? c.decodeIfPresent(Double.self, forKey: .maxStopLossPercentFXMetalsIndices)) ?? d.maxStopLossPercentFXMetalsIndices
+        levelCalculationMode = (try? c.decodeIfPresent(TradeLevelMode.self, forKey: .levelCalculationMode)) ?? d.levelCalculationMode
+        fixedStopLossPercent = (try? c.decodeIfPresent(Double.self, forKey: .fixedStopLossPercent)) ?? d.fixedStopLossPercent
+        fixedTP1Percent = (try? c.decodeIfPresent(Double.self, forKey: .fixedTP1Percent)) ?? d.fixedTP1Percent
+        fixedTP2Percent = (try? c.decodeIfPresent(Double.self, forKey: .fixedTP2Percent)) ?? d.fixedTP2Percent
+        enableTP2Target = (try? c.decodeIfPresent(Bool.self, forKey: .enableTP2Target)) ?? d.enableTP2Target
+        minimumAlignedStrategies = (try? c.decodeIfPresent(Int.self, forKey: .minimumAlignedStrategies)) ?? d.minimumAlignedStrategies
         enabledStrategyGroups = (try? c.decodeIfPresent(Set<StrategyGroup>.self, forKey: .enabledStrategyGroups)) ?? d.enabledStrategyGroups
+        strategySelectionMode = (try? c.decodeIfPresent(StrategySelectionMode.self, forKey: .strategySelectionMode)) ?? d.strategySelectionMode
+        selectedStrategyConcepts = (try? c.decodeIfPresent(Set<StrategyConcept>.self, forKey: .selectedStrategyConcepts)) ?? d.selectedStrategyConcepts
+        customStrategyMatchRule = (try? c.decodeIfPresent(CustomStrategyMatchRule.self, forKey: .customStrategyMatchRule)) ?? d.customStrategyMatchRule
         showWeakFilteredSignals = (try? c.decodeIfPresent(Bool.self, forKey: .showWeakFilteredSignals)) ?? d.showWeakFilteredSignals
         autoSuppressCrisisAlerts = (try? c.decodeIfPresent(Bool.self, forKey: .autoSuppressCrisisAlerts)) ?? d.autoSuppressCrisisAlerts
+
+        calibrationWinDefinition = (try? c.decodeIfPresent(CalibrationWinDefinition.self, forKey: .calibrationWinDefinition)) ?? d.calibrationWinDefinition
+        calibrationCategoryScope = (try? c.decodeIfPresent(CalibrationCategoryScope.self, forKey: .calibrationCategoryScope)) ?? d.calibrationCategoryScope
+        calibrationMinConfidencePercent = (try? c.decodeIfPresent(Double.self, forKey: .calibrationMinConfidencePercent)) ?? d.calibrationMinConfidencePercent
+        calibrationMinRiskReward = (try? c.decodeIfPresent(Double.self, forKey: .calibrationMinRiskReward)) ?? d.calibrationMinRiskReward
 
         geminiEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .geminiEnabled)) ?? d.geminiEnabled
         geminiModel = (try? c.decodeIfPresent(GeminiModelOption.self, forKey: .geminiModel)) ?? d.geminiModel
@@ -167,7 +198,14 @@ public final class AppSettingsStore {
     private static let storageKey = "com.bilal.confluence.settings.v1"
 
     public var payload: PersistedSettingsPayload {
-        didSet { save() }
+        didSet {
+            if payload.themePreset == .obsidianTerminal || payload.themePreset == .amoledVault {
+                if payload.lastDarkThemePreset != payload.themePreset {
+                    payload.lastDarkThemePreset = payload.themePreset
+                }
+            }
+            save()
+        }
     }
 
     public init() {
@@ -185,6 +223,22 @@ public final class AppSettingsStore {
         }
     }
 
+    /// Immediately flips between Dark (`Obsidian Terminal` / `AMOLED Vault`) and Light (`Porcelain Desk`),
+    /// persisting across launches and keeping Settings -> Appearance in sync.
+    public func toggleDarkLightMode(currentlyDark: Bool) {
+        if currentlyDark {
+            if payload.themePreset == .obsidianTerminal || payload.themePreset == .amoledVault {
+                payload.lastDarkThemePreset = payload.themePreset
+            }
+            payload.appearanceMode = .light
+            payload.themePreset = .porcelainDesk
+        } else {
+            let restoredDark = (payload.lastDarkThemePreset == .amoledVault) ? ThemePreset.amoledVault : ThemePreset.obsidianTerminal
+            payload.appearanceMode = .dark
+            payload.themePreset = restoredDark
+        }
+    }
+
     public var preNewsLeadTimesMinutes: [Int] {
         var out: [Int] = []
         if payload.preNewsLead15m { out.append(15) }
@@ -199,16 +253,52 @@ public final class AppSettingsStore {
         }
     }
 
-    public func buildEngineConfig(reliabilityWeights: [String: Double] = [:]) -> EngineConfig {
-        EngineConfig(
+    public func buildCalibrationFilterConfig() -> CalibrationFilterConfig {
+        CalibrationFilterConfig(
+            winDefinition: payload.calibrationWinDefinition,
+            categoryScope: payload.calibrationCategoryScope,
+            minimumConfidencePercent: payload.calibrationMinConfidencePercent,
+            minimumRiskReward: payload.calibrationMinRiskReward
+        )
+    }
+
+    public func buildEngineConfig(
+        reliabilityWeights: [String: Double] = [:],
+        activeRandomConcepts: Set<StrategyConcept>? = nil
+    ) -> EngineConfig {
+        let concepts: Set<StrategyConcept>
+        switch payload.strategySelectionMode {
+        case .defaultAll:
+            concepts = Set(StrategyConcept.allCases)
+        case .custom:
+            concepts = payload.selectedStrategyConcepts.isEmpty
+                ? Set(StrategyConcept.allCases)
+                : payload.selectedStrategyConcepts
+        case .randomSubset:
+            concepts = activeRandomConcepts ?? Set(StrategyConcept.allCases)
+        }
+
+        let groups: Set<StrategyGroup> = (payload.strategySelectionMode == .defaultAll)
+            ? payload.enabledStrategyGroups
+            : Set(concepts.map(\.group))
+
+        return EngineConfig(
             htfTimeframe: payload.htfTimeframe,
             entryTimeframe: payload.entryTimeframe,
             minimumConfidencePercent: payload.minimumConfidencePercent,
             minimumRiskReward: payload.minimumRiskReward,
             maxStopLossPercentCryptoStocks: payload.maxStopLossPercentCryptoStocks,
             maxStopLossPercentFXMetalsIndices: payload.maxStopLossPercentFXMetalsIndices,
-            minimumAlignedStrategies: 3,
-            enabledStrategyGroups: payload.enabledStrategyGroups,
+            levelCalculationMode: payload.levelCalculationMode,
+            fixedStopLossPercent: payload.fixedStopLossPercent,
+            fixedTP1Percent: payload.fixedTP1Percent,
+            fixedTP2Percent: payload.fixedTP2Percent,
+            enableTP2Target: payload.enableTP2Target,
+            minimumAlignedStrategies: payload.minimumAlignedStrategies,
+            enabledStrategyGroups: groups,
+            strategySelectionMode: payload.strategySelectionMode,
+            selectedStrategyConcepts: concepts,
+            customStrategyMatchRule: payload.customStrategyMatchRule,
             pauseSignalsDuringPreNewsWindow: payload.pauseSignalsDuringPreNewsWindow,
             preNewsBlackoutMinutesBefore: 15,
             postNewsWhipsawMinutesAfter: 5,
@@ -232,6 +322,16 @@ public final class AppSettingsStore {
             payload.enabledStrategyGroups.remove(group)
         } else {
             payload.enabledStrategyGroups.insert(group)
+        }
+    }
+
+    public func toggleStrategyConcept(_ concept: StrategyConcept) {
+        if payload.selectedStrategyConcepts.contains(concept) {
+            if payload.selectedStrategyConcepts.count > 1 {
+                payload.selectedStrategyConcepts.remove(concept)
+            }
+        } else {
+            payload.selectedStrategyConcepts.insert(concept)
         }
     }
 

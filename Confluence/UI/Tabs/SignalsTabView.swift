@@ -13,6 +13,7 @@ public enum SignalFeedFilter: String, CaseIterable, Identifiable {
 public struct SignalsTabView: View {
     @Bindable var coordinator: MarketScannerCoordinator
     let palette: ConfluencePalette
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var selectedMarket: MarketClass? = nil // nil == All
     @State private var feedFilter: SignalFeedFilter = .strong
@@ -161,10 +162,14 @@ public struct SignalsTabView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if let last = coordinator.lastScanDate {
-                        Text(last.formatted(date: .omitted, time: .shortened))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(palette.tertiaryInk)
+                    let isDarkActive = (coordinator.settings.payload.appearanceMode == .dark)
+                        || (coordinator.settings.payload.appearanceMode == .system && colorScheme == .dark)
+                    ThemeModeToggleButton(
+                        isDark: isDarkActive,
+                        hapticsEnabled: coordinator.settings.payload.hapticsEnabled,
+                        palette: palette
+                    ) {
+                        coordinator.settings.toggleDarkLightMode(currentlyDark: isDarkActive)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {

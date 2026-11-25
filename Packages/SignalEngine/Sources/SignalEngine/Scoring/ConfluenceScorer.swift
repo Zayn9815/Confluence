@@ -121,6 +121,20 @@ public enum ConfluenceScorer {
             }
         }
 
+        // Apply Custom or Random Subset concept filtering deterministically
+        let activeConcepts: Set<StrategyConcept>
+        switch config.strategySelectionMode {
+        case .defaultAll:
+            activeConcepts = Set(StrategyConcept.allCases)
+        case .custom, .randomSubset:
+            activeConcepts = config.selectedStrategyConcepts.isEmpty
+                ? Set(StrategyConcept.allCases)
+                : config.selectedStrategyConcepts
+            allContributions = allContributions.filter { contrib in
+                activeConcepts.contains { $0.matches(contributionId: contrib.id) }
+            }
+        }
+
         // Split long vs short independent strategy contributions
         let longContribs = deduplicateById(allContributions.filter { $0.direction == .long })
         let shortContribs = deduplicateById(allContributions.filter { $0.direction == .short })
@@ -158,7 +172,12 @@ public enum ConfluenceScorer {
             htfICT: htfICT,
             atr: momentum.atr14,
             marketClass: asset.marketClass,
-            minimumRiskReward: config.minimumRiskReward
+            minimumRiskReward: config.minimumRiskReward,
+            mode: config.levelCalculationMode,
+            fixedStopLossPercent: config.fixedStopLossPercent,
+            fixedTP1Percent: config.fixedTP1Percent,
+            fixedTP2Percent: config.fixedTP2Percent,
+            enableTP2Target: config.enableTP2Target
         )
 
         // Calibrated Confidence % (0 - 99%)
@@ -179,12 +198,28 @@ public enum ConfluenceScorer {
         // Hard Gate Checks (all enforced in deterministic Swift code)
         var rejectionReasons: [String] = []
         let distinctGroups = Set(aligned.map(\.group))
+        let isCustomOrSubset = (config.strategySelectionMode == .custom || config.strategySelectionMode == .randomSubset)
+        let requiredAlignedCount: Int = isCustomOrSubset
+            ? max(1, min(config.minimumAlignedStrategies, activeConcepts.count))
+            : max(3, config.minimumAlignedStrategies)
 
-        if dominantDirection == .neutral || aligned.count < config.minimumAlignedStrategies {
-            rejectionReasons.append("Only \(aligned.count)/\(config.minimumAlignedStrategies) independent strategies aligned")
-        }
-        if distinctGroups.count < 2 && aligned.count >= config.minimumAlignedStrategies {
-            rejectionReasons.append("Lacks multi-pillar independence (only \(distinctGroups.count) strategy group)")
+        if config.strategySelectionMode == .custom && config.customStrategyMatchRule == .requireAllSelected {
+            let missingConcepts = activeConcepts.filter { concept in
+                !aligned.contains { concept.matches(contributionId: $0.id) }
+            }
+            if dominantDirection == .neutral || !missingConcepts.isEmpty {
+                let names = missingConcepts.map(\.displayName).sorted().prefix(2).joined(separator: ", ")
+                rejectionReasons.append("Missing required custom strategies (\(missingConcepts.count) unmatched: \(names))")
+            }
+        } else {
+            if dominantDirection == .neutral || aligned.count < requiredAlignedCount {
+                rejectionReasons.append("Only \(aligned.count)/\(requiredAlignedCount) independent strategies aligned")
+            }
+            let selectedGroupCount = Set(activeConcepts.map(\.group)).count
+            let requireTwoGroups = !isCustomOrSubset || (requiredAlignedCount >= 2 && selectedGroupCount >= 2)
+            if requireTwoGroups && distinctGroups.count < 2 && aligned.count >= requiredAlignedCount {
+                rejectionReasons.append("Lacks multi-pillar independence (only \(distinctGroups.count) strategy group)")
+            }
         }
         if confidence < config.minimumConfidencePercent {
             rejectionReasons.append("Confidence \(Int(confidence.rounded()))% below \(Int(config.minimumConfidencePercent.rounded()))% gate")

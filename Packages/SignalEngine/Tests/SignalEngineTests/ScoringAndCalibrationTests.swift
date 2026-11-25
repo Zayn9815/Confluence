@@ -215,4 +215,181 @@ final class ScoringAndCalibrationTests: XCTestCase {
             .invalidated
         )
     }
+
+    func testChartPricePrecisionRules() {
+        let gbp = ChartPricePrecision.resolve(symbol: "GBP/USD", marketClass: .forex, referencePrice: 1.31002)
+        XCTAssertEqual(gbp.precision, 5)
+        XCTAssertEqual(gbp.minMove, 0.00001, accuracy: 1e-9)
+        XCTAssertEqual(gbp.format(1.31002), "1.31002")
+
+        let jpy = ChartPricePrecision.resolve(symbol: "USD/JPY", marketClass: .forex, referencePrice: 159.178)
+        XCTAssertEqual(jpy.precision, 3)
+        XCTAssertEqual(jpy.minMove, 0.001, accuracy: 1e-9)
+        XCTAssertEqual(jpy.format(159.178), "159.178")
+
+        let sub100 = ChartPricePrecision.resolve(symbol: "SOL/USDT", marketClass: .crypto, referencePrice: 42.1234)
+        XCTAssertEqual(sub100.precision, 4)
+        XCTAssertEqual(sub100.minMove, 0.0001, accuracy: 1e-9)
+
+        let gold = ChartPricePrecision.resolve(symbol: "XAU/USD", marketClass: .metals, referencePrice: 2650.55)
+        XCTAssertEqual(gold.precision, 2)
+        XCTAssertEqual(gold.minMove, 0.01, accuracy: 1e-9)
+    }
+
+    func testFixedPercentLevelsAndTP2DisabledEvaluation() {
+        let base: TimeInterval = 1_760_000_000
+        let bar = Candle(
+            openTimeEpochSeconds: base - 3600,
+            closeTimeEpochSeconds: base,
+            open: 100.0, high: 100.5, low: 99.5, close: 100.0, volume: 1000, isClosed: true
+        )
+        let emptyICT = ICTAnalysis(swings: [], structureBreaks: [], sweeps: [], fvgs: [], orderBlocks: [], equilibriumPrice: nil, currentStructureBias: .long, contributions: [])
+
+        let lv = TradeLevelCalculator.calculate(
+            direction: .long,
+            candles: [bar],
+            ict: emptyICT,
+            htfICT: nil,
+            atr: 0.5,
+            marketClass: .crypto,
+            minimumRiskReward: 2.0,
+            mode: .fixedPercent,
+            fixedStopLossPercent: 1.0,
+            fixedTP1Percent: 2.0,
+            fixedTP2Percent: 4.0,
+            enableTP2Target: false
+        )
+        XCTAssertNotNil(lv)
+        guard let levels = lv else { return }
+        XCTAssertEqual(levels.riskPercent, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(levels.reward1Percent, 2.0, accuracy: 1e-6)
+        XCTAssertEqual(levels.riskRewardRatio, 2.0, accuracy: 1e-6)
+        XCTAssertFalse(levels.isTP2Enabled)
+        XCTAssertEqual(levels.tp1, levels.tp2, accuracy: 1e-9)
+
+        let psych = PsychologyReport(
+            signalCategory: .strongSignal, proDirection: .long, retailCrowdDirection: .short,
+            provenanceBadge: "Test", whatHappened: "Test", beginnerPsychology: "B", proPsychology: "P",
+            behavioralBadges: [], evidence: []
+        )
+        let sig = TradeSignal(
+            id: "fixed-tp1-only", fingerprint: "fixed-tp1-only", symbol: "BTC/USDT", displayName: "Bitcoin",
+            marketClass: .crypto, timeframe: .h1, htfTimeframe: .h4,
+            category: .strongSignal, direction: .long, tier: .highConviction,
+            confidencePercent: 82.0, regime: .trending, riskState: .safe,
+            killzone: .newYork, htfBias: .long,
+            generatedAtEpochSeconds: base, barCloseEpochSeconds: base,
+            levels: levels, alignedStrategies: [], rejectionReasons: [],
+            psychologyReport: psych, dataProvider: "Fixture"
+        )
+        // Bar 1 hits TP1 (102.0), Bar 2 drops to SL (99.0) — with TP2 disabled, must resolve immediately as TP1 on Bar 1
+        let future = [
+            Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 100.0, high: 102.5, low: 99.8, close: 102.2, volume: 1000, isClosed: true),
+            Candle(openTimeEpochSeconds: base + 3600, closeTimeEpochSeconds: base + 7200, open: 102.2, high: 102.3, low: 98.5, close: 98.8, volume: 1000, isClosed: true)
+        ]
+        let out = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: future, roundTripCostBps: 10.0)
+        XCTAssertEqual(out.status, .hitTP1)
+        XCTAssertEqual(out.resolvedAtEpochSeconds, base + 3600)
+    }
+
+    func testCalibrationFilterRulesTP2OnlyCategoryAndThresholds() {
+        let records: [SignalOutcomeRecord] = [
+            // Strong TP2 Win (85% conf, 2.2 R:R)
+            SignalOutcomeRecord(
+                signalId: "r1", symbol: "GBP/USD", marketClass: .forex, category: .strongSignal,
+                direction: .long, predictedProbability: 0.85, status: .hitTP2,
+                netReturnPercent: 3.0, rMultiple: 3.0, strategyIds: ["ict_fvg"],
+                hadMacroCatalyst: false, resolvedAtEpochSeconds: 1_760_010_000,
+                regime: .trending, killzone: .london, timeframe: .h1, dataProvider: "Twelve Data",
+                riskRewardRatio: 2.2
+            ),
+            // Strong TP1 Partial (82% conf, 2.0 R:R)
+            SignalOutcomeRecord(
+                signalId: "r2", symbol: "GBP/USD", marketClass: .forex, category: .strongSignal,
+                direction: .long, predictedProbability: 0.82, status: .hitTP1,
+                netReturnPercent: 1.5, rMultiple: 1.5, strategyIds: ["ict_fvg"],
+                hadMacroCatalyst: false, resolvedAtEpochSeconds: 1_760_020_000,
+                regime: .trending, killzone: .london, timeframe: .h1, dataProvider: "Twelve Data",
+                riskRewardRatio: 2.0
+            ),
+            // Strong SL Loss (72% conf, 1.6 R:R)
+            SignalOutcomeRecord(
+                signalId: "r3", symbol: "EUR/USD", marketClass: .forex, category: .strongSignal,
+                direction: .short, predictedProbability: 0.72, status: .hitSL,
+                netReturnPercent: -1.0, rMultiple: -1.0, strategyIds: ["ict_fvg"],
+                hadMacroCatalyst: false, resolvedAtEpochSeconds: 1_760_030_000,
+                regime: .highVol, killzone: .newYork, timeframe: .h1, dataProvider: "biquote.io",
+                riskRewardRatio: 1.6
+            ),
+            // Trap Alert SL Loss (88% conf, 2.5 R:R)
+            SignalOutcomeRecord(
+                signalId: "r4", symbol: "BTC/USDT", marketClass: .crypto, category: .trapAlert,
+                direction: .short, predictedProbability: 0.88, status: .hitSL,
+                netReturnPercent: -1.0, rMultiple: -1.0, strategyIds: ["trap_osler"],
+                hadMacroCatalyst: false, resolvedAtEpochSeconds: 1_760_040_000,
+                regime: .highVol, killzone: .newYork, timeframe: .h1, dataProvider: "Binance Vision",
+                riskRewardRatio: 2.5
+            )
+        ]
+
+        // 1. TP2 Only = Win, Strong Only -> TP1 excluded as breakeven partial: 1 TP2 / (1 TP2 + 1 SL) = 50%
+        let tp2OnlyFilter = CalibrationFilterConfig(winDefinition: .tp2Only, categoryScope: .strongOnly)
+        let tp2Summary = PassiveOutcomeEvaluator.summarize(records: records, filter: tp2OnlyFilter)
+        XCTAssertEqual(tp2Summary.tp2Hits, 1)
+        XCTAssertEqual(tp2Summary.slHits, 1)
+        XCTAssertEqual(tp2Summary.tp1PartialsExcluded, 1)
+        XCTAssertEqual(tp2Summary.resolvedSignals, 2)
+        XCTAssertEqual(tp2Summary.winRate, 0.5, accuracy: 1e-6)
+
+        // 2. Min confidence >= 80% + Min R:R >= 2.0, TP1 or TP2 = Win, Strong Only -> r1 & r2 both win = 100%
+        let strictFilter = CalibrationFilterConfig(
+            winDefinition: .tp1OrTp2,
+            categoryScope: .strongOnly,
+            minimumConfidencePercent: 80.0,
+            minimumRiskReward: 2.0
+        )
+        let strictSummary = PassiveOutcomeEvaluator.summarize(records: records, filter: strictFilter)
+        XCTAssertEqual(strictSummary.resolvedSignals, 2)
+        XCTAssertEqual(strictSummary.winRate, 1.0, accuracy: 1e-6)
+    }
+
+    func testCustomSingleStrategySelectionAndConfidenceGate() {
+        let base: TimeInterval = 1_760_000_000
+        let asset = WatchlistDefaults.descriptor(for: "GBP/USD")!
+        let bar = Candle(openTimeEpochSeconds: base - 3600, closeTimeEpochSeconds: base, open: 1.3090, high: 1.3105, low: 1.3088, close: 1.3100, volume: nil, isClosed: true)
+        let fvgContrib = StrategyContribution(id: "ict_fvg", name: "Bullish FVG", group: .ictSmc, direction: .long, weight: 1.4, historicalWinRate: 0.65, detail: "FVG")
+        let ict = ICTAnalysis(swings: [], structureBreaks: [], sweeps: [], fvgs: [], orderBlocks: [], equilibriumPrice: 1.3110, currentStructureBias: .long, contributions: [fvgContrib])
+        let mom = TrendMomentumSnapshot(ema20: 1.3095, ema50: 1.3090, ema200: 1.3070, rsi14: 58, atr14: 0.0012, rvol: nil, htfTrendDirection: .long, contributions: [])
+        let regime = RegimeAssessment(regime: .trending, riskState: .safe, adx14: 30, atrPercentile: 0.45, detail: "Trending")
+
+        // Custom mode with 1 selected strategy (`ictFVG`) + Fixed % SL/TP + 60% confidence gate -> fires as Strong Signal
+        var cfg = EngineConfig(
+            minimumConfidencePercent: 60.0,
+            minimumRiskReward: 2.0,
+            levelCalculationMode: .fixedPercent,
+            fixedStopLossPercent: 0.5,
+            fixedTP1Percent: 1.0,
+            minimumAlignedStrategies: 3,
+            strategySelectionMode: .custom,
+            selectedStrategyConcepts: [.ictFVG],
+            customStrategyMatchRule: .requireAllSelected
+        )
+        let strongSig = ConfluenceScorer.score(
+            asset: asset, timeframe: .h1, htfTimeframe: .h4, candles: [bar], htfBias: .long,
+            ict: ict, htfICT: nil, candlestickContributions: [], momentum: mom, regimeAssessment: regime,
+            traps: [], positioning: nil, preNewsShield: nil, macroImpulse: nil,
+            config: cfg, dataProvider: "Twelve Data", isMarketClosed: false, nowEpochSeconds: base
+        )
+        XCTAssertEqual(strongSig?.category, .strongSignal)
+
+        // Raising Confidence % floor to 90% must demote the exact same setup to .weakSignal
+        cfg.minimumConfidencePercent = 90.0
+        let weakSig = ConfluenceScorer.score(
+            asset: asset, timeframe: .h1, htfTimeframe: .h4, candles: [bar], htfBias: .long,
+            ict: ict, htfICT: nil, candlestickContributions: [], momentum: mom, regimeAssessment: regime,
+            traps: [], positioning: nil, preNewsShield: nil, macroImpulse: nil,
+            config: cfg, dataProvider: "Twelve Data", isMarketClosed: false, nowEpochSeconds: base
+        )
+        XCTAssertEqual(weakSig?.category, .weakSignal)
+    }
 }

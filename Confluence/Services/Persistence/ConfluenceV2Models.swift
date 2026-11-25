@@ -507,3 +507,103 @@ public final class TradeLedgerEntry {
         )
     }
 }
+
+/// Purely additive v1.2 SwiftData table storing merged pre-entry + post-entry/exit candles
+/// for resolved trade chart replay (zero schema mutations on v1.0/v1.1 tables).
+@Model
+public final class TradeReplayCandleCache {
+    @Attribute(.unique) public var fingerprint: String
+    public var symbol: String
+    public var timeframeRaw: String
+    public var providerName: String
+    public var candlesJSON: Data
+    public var updatedAt: Date
+
+    public init(
+        fingerprint: String,
+        symbol: String,
+        timeframeRaw: String,
+        providerName: String,
+        candlesJSON: Data,
+        updatedAt: Date = Date()
+    ) {
+        self.fingerprint = fingerprint
+        self.symbol = symbol
+        self.timeframeRaw = timeframeRaw
+        self.providerName = providerName
+        self.candlesJSON = candlesJSON
+        self.updatedAt = updatedAt
+    }
+}
+
+/// Unified trade item surfaced inside Strategy Reliability Ranking -> Strategy Trades list
+/// and passed directly into `FullScreenChartSheet` Trade Replay Mode.
+public struct StrategyTradeItem: Identifiable, Sendable, Equatable, Hashable {
+    public var id: String { fingerprint }
+    public let fingerprint: String
+    public let symbol: String
+    public let displayName: String
+    public let marketClass: MarketClass
+    public let timeframe: Timeframe
+    public let direction: TradeDirection
+    public let category: SignalCategory
+    public let confidencePercent: Double
+    public let levels: TradeLevels
+    public let status: TradeLedgerStatus
+    public let netRMultiple: Double
+    public let dataProvider: String
+    public let entryEpochSeconds: TimeInterval
+    public let exitEpochSeconds: TimeInterval?
+    public let alignedStrategyIDs: [String]
+    public let sourceSignal: TradeSignal?
+
+    public init(
+        fingerprint: String,
+        symbol: String,
+        displayName: String,
+        marketClass: MarketClass,
+        timeframe: Timeframe,
+        direction: TradeDirection,
+        category: SignalCategory,
+        confidencePercent: Double,
+        levels: TradeLevels,
+        status: TradeLedgerStatus,
+        netRMultiple: Double,
+        dataProvider: String,
+        entryEpochSeconds: TimeInterval,
+        exitEpochSeconds: TimeInterval?,
+        alignedStrategyIDs: [String],
+        sourceSignal: TradeSignal?
+    ) {
+        self.fingerprint = fingerprint
+        self.symbol = symbol
+        self.displayName = displayName
+        self.marketClass = marketClass
+        self.timeframe = timeframe
+        self.direction = direction
+        self.category = category
+        self.confidencePercent = confidencePercent
+        self.levels = levels
+        self.status = status
+        self.netRMultiple = netRMultiple
+        self.dataProvider = dataProvider
+        self.entryEpochSeconds = entryEpochSeconds
+        self.exitEpochSeconds = exitEpochSeconds
+        self.alignedStrategyIDs = alignedStrategyIDs
+        self.sourceSignal = sourceSignal
+    }
+}
+
+/// Context passed into `FullScreenChartSheet` when opened in Trade Outcome Chart Replay Mode.
+public struct TradeReplayContext: Sendable, Equatable, Hashable {
+    public let trade: StrategyTradeItem
+    public let initialCandles: [Candle]
+    public let providerName: String
+
+    public init(trade: StrategyTradeItem, initialCandles: [Candle], providerName: String) {
+        self.trade = trade
+        self.initialCandles = initialCandles
+        self.providerName = providerName
+    }
+}
+

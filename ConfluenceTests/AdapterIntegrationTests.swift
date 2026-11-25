@@ -346,4 +346,129 @@ final class AdapterIntegrationTests: XCTestCase {
         XCTAssertTrue(report.contains("# Confluence Antigravity Diagnostic Report"))
         XCTAssertFalse(report.contains("AIzaSyDummy"))
     }
+
+    @MainActor
+    func testSwiftDataV1_1ToV1_2AdditiveMigrationPreservesDataAndAddsReplayCache() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("confluence_v12_mig_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let storeURL = dir.appendingPathComponent("confluence_v11.store")
+
+        // 1. Seed a v1.1 5-model container
+        do {
+            let v11Schema = Schema([
+                PersistedSignalRecord.self,
+                StoredNotificationItem.self,
+                DiagnosticLogEntry.self,
+                TrapLogEntry.self,
+                TradeLedgerEntry.self
+            ])
+            let v11Config = ModelConfiguration(schema: v11Schema, url: storeURL)
+            let v11Container = try ModelContainer(for: v11Schema, configurations: [v11Config])
+            let ctx = ModelContext(v11Container)
+            ctx.insert(StoredNotificationItem(
+                id: "v11-notif",
+                createdAt: Date(),
+                typeRaw: NotificationItemType.strongSignal.rawValue,
+                title: "Pre-v1.2 Alert",
+                subtitle: "Preserved"
+            ))
+            try ctx.save()
+        }
+
+        // 2. Open with v1.2 6-model ConfluenceDataStore (including TradeReplayCandleCache)
+        let upgraded = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
+        XCTAssertFalse(upgraded.didQuarantineCorruptStore)
+        XCTAssertEqual(upgraded.fetchNotifications().count, 1)
+
+        // 3. Verify TradeReplayCandleCache round-trip
+        let base: TimeInterval = 1_760_000_000
+        let sampleBars = [
+            Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 900, open: 1.31000, high: 1.31050, low: 1.30950, close: 1.31002, volume: nil, isClosed: true),
+            Candle(openTimeEpochSeconds: base + 900, closeTimeEpochSeconds: base + 1800, open: 1.31002, high: 1.31120, low: 1.30990, close: 1.31110, volume: nil, isClosed: true)
+        ]
+        upgraded.saveReplayCandles(fingerprint: "fp-replay-1", symbol: "GBP/USD", timeframe: .m15, providerName: "Twelve Data", candles: sampleBars)
+        let fetched = upgraded.fetchReplayCandles(fingerprint: "fp-replay-1")
+        XCTAssertEqual(fetched?.candles.count, 2)
+        XCTAssertEqual(fetched?.providerName, "Twelve Data")
+    }
+
+    @MainActor
+    func testAppSettingsBackwardsCompatibleDecodeAndThemeToggle() throws {
+        // Legacy v1.1 payload missing all v1.2 keys
+        let legacyJSON = """
+        {
+          "appearanceMode": "Dark Mode",
+          "themePreset": "AMOLED Vault",
+          "minimumConfidencePercent": 78.0,
+          "minimumRiskReward": 2.5
+        }
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(PersistedSettingsPayload.self, from: legacyJSON)
+        XCTAssertEqual(decoded.themePreset, .amoledVault)
+        XCTAssertEqual(decoded.lastDarkThemePreset, .amoledVault)
+        XCTAssertEqual(decoded.minimumConfidencePercent, 78.0)
+        XCTAssertEqual(decoded.levelCalculationMode, .structureATR)
+        XCTAssertEqual(decoded.strategySelectionMode, .defaultAll)
+        XCTAssertEqual(decoded.calibrationWinDefinition, .tp1OrTp2)
+
+        let settings = AppSettingsStore()
+        settings.payload = decoded
+        // Toggle Dark (AMOLED Vault) -> Light (Porcelain Desk) -> Dark (restores AMOLED Vault!)
+        settings.toggleDarkLightMode(currentlyDark: true)
+        XCTAssertEqual(settings.payload.appearanceMode, .light)
+        XCTAssertEqual(settings.payload.themePreset, .porcelainDesk)
+
+        settings.toggleDarkLightMode(currentlyDark: false)
+        XCTAssertEqual(settings.payload.appearanceMode, .dark)
+        XCTAssertEqual(settings.payload.themePreset, .amoledVault)
+    }
+
+    @MainActor
+    func testStrategyTradeMappingAndReplayMarkerSnapping() {
+        let base: TimeInterval = 1_760_000_000
+        let entryBar = Candle(openTimeEpochSeconds: base - 900, closeTimeEpochSeconds: base, open: 1.30980, high: 1.31020, low: 1.30950, close: 1.31002, volume: nil, isClosed: true)
+        let exitBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 900, open: 1.31002, high: 1.31250, low: 1.30990, close: 1.31220, volume: nil, isClosed: true)
+        let levels = TradeLevels(
+            entryLow: 1.30990, entryHigh: 1.31014, entryMid: 1.31002,
+            stopLoss: 1.30920, tp1: 1.31166, tp2: 1.31240,
+            riskPercent: 0.06, reward1Percent: 0.13, reward2Percent: 0.18,
+            riskRewardRatio: 2.0, tp2RiskRewardRatio: 2.9, isTP2Enabled: true
+        )
+        let psych = PsychologyReport(
+            signalCategory: .strongSignal, proDirection: .long, retailCrowdDirection: .short,
+            provenanceBadge: "CFTC COT", whatHappened: "Sweep", beginnerPsychology: "B", proPsychology: "P",
+            behavioralBadges: [], evidence: []
+        )
+        let contrib = StrategyContribution(id: "ict_liquidity_sweep", name: "Liquidity Sweep", group: .ictSmc, direction: .long, weight: 1.3, historicalWinRate: 0.65, detail: "Sweep")
+        let sig = TradeSignal(
+            id: "fp-gbp-replay", fingerprint: "fp-gbp-replay", symbol: "GBP/USD", displayName: "British Pound / US Dollar",
+            marketClass: .forex, timeframe: .m15, htfTimeframe: .h4,
+            category: .strongSignal, direction: .long, tier: .highConviction,
+            confidencePercent: 84.0, regime: .trending, riskState: .safe,
+            killzone: .london, htfBias: .long,
+            generatedAtEpochSeconds: base, barCloseEpochSeconds: base,
+            levels: levels, alignedStrategies: [contrib], rejectionReasons: [],
+            psychologyReport: psych, recentCandles: [entryBar], dataProvider: "Twelve Data"
+        )
+
+        let store = ConfluenceDataStore(inMemory: true)
+        store.upsertSignal(sig)
+        let outcome = PassiveOutcomeEvaluator.evaluate(signal: sig, subsequentClosedCandles: [exitBar], roundTripCostBps: 2.0)
+        XCTAssertEqual(outcome.status, .hitTP2)
+        store.updateOutcome(outcome)
+
+        let coordinator = MarketScannerCoordinator(settings: AppSettingsStore(), store: store)
+        let trades = coordinator.trades(forStrategyId: "ict_liquidity_sweep")
+        XCTAssertEqual(trades.count, 1)
+        let trade = trades[0]
+        XCTAssertEqual(trade.status, .tp2Win)
+
+        let markerResult = TradeReplayMarkerBuilder.buildMarkers(for: trade, candles: [entryBar, exitBar])
+        XCTAssertTrue(markerResult.hasEntryBar)
+        XCTAssertTrue(markerResult.hasExitBar)
+        XCTAssertEqual(markerResult.markers.count, 2)
+        XCTAssertEqual(markerResult.markers[0].text, "ENTRY LONG")
+        XCTAssertTrue(markerResult.markers[1].text?.hasPrefix("TP2 WIN") == true)
+    }
 }
