@@ -165,7 +165,7 @@ final class ScoringAndCalibrationTests: XCTestCase {
                 direction: .short, predictedProbability: 0.70, status: .hitSL,
                 netReturnPercent: -1.0, rMultiple: -1.0, strategyIds: ["ict_sweep"],
                 hadMacroCatalyst: false, resolvedAtEpochSeconds: 1_760_030_000,
-                regime: .highVol, killzone: .asia, timeframe: .h1, dataProvider: "biquote.io"
+                regime: .highVol, killzone: .offSession, timeframe: .h1, dataProvider: "biquote.io"
             )
         ]
 
@@ -185,14 +185,18 @@ final class ScoringAndCalibrationTests: XCTestCase {
     func testTrapRespectEvaluation() {
         let base: TimeInterval = 1_760_000_000
         let bullTrap = BehavioralTrap(
+            id: "trap-test-1",
             symbol: "BTC/USDT",
             direction: .bullTrap,
-            triggerKind: .roundNumberCluster,
-            state: .active,
+            triggerKind: .oslerRoundNumberSweep,
             level: 70_000.0,
+            extremePrice: 70_250.0,
             triggerBarIndex: 10,
             triggerEpochSeconds: base,
-            description: "Round-number sweep failed"
+            state: .active,
+            expiresAtEpochSeconds: base + 86_400,
+            pierceATRMultiple: 0.65,
+            detail: "Round-number sweep failed"
         )
 
         let respectedBars = [
