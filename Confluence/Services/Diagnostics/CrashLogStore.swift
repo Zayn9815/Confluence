@@ -95,14 +95,19 @@ public final class CrashLogStore {
 
     /// Starts native MetricKit diagnostic ingestion, imports any pending crash breadcrumbs from
     /// a previous crash, and arms NSSetUncaughtExceptionHandler + async-signal-safe POSIX handlers.
+    /// Automatically skips global handler registration when launched as an XCTest host.
     public func startMonitoring() {
         guard !isMonitoring else { return }
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            return
+        }
         isMonitoring = true
 
         // 1. Import any crash breadcrumbs written during a previous abnormal termination
         importPendingCrashBreadcrumbs()
 
-        // 2. Register MetricKit diagnostic subscriber & ingest past diagnostic payloads
+        // 2. Register MetricKit diagnostic subscriber & ingest past diagnostic payloads (physical devices)
+        #if !targetEnvironment(simulator)
         let bridge = MetricKitSubscriberBridge { [weak self] jsonPayloads in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -121,6 +126,7 @@ public final class CrashLogStore {
 
         // 3. Arm exception & async-signal-safe POSIX crash breadcrumb writers
         installNativeCrashBreadcrumbs()
+        #endif
     }
 
     public func reload() {
@@ -246,7 +252,7 @@ public final class CrashLogStore {
         }
         confluencePOSIXBreadcrumbPath = strdup(posixPath)
 
-        let signals: [Int32] = [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGTRAP]
+        let signals: [Int32] = [SIGABRT, SIGSEGV, SIGBUS, SIGILL]
         for sig in signals {
             var action = sigaction()
             action.__sigaction_u.__sa_handler = confluencePOSIXSignalHandler
