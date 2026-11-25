@@ -1,10 +1,10 @@
 import Foundation
 import SignalEngine
 
-/// Optional Gemini 4 Hydrogen (`gemini-4-hydrogen`) second-opinion & breaking-news catalyst judge.
+/// Optional Gemini second-opinion & breaking-news catalyst judge (`AIJudgeClient`).
 /// - Sends API key ONLY via `x-goog-api-key` header (never query strings or logs).
-/// - Uses `thinkingLevel: "LOW"` and `maxOutputTokens: 2048` (thought tokens count toward maxOutputTokens).
-/// - Enforces strict JSON schema and user-configured daily call limit persisted locally.
+/// - Uses `thinkingLevel: "LOW"` and `maxOutputTokens: 2048` (with 1 relaxed retry on HTTP 400 for non-thinking models).
+/// - Enforces strict JSON schema and shared user-configured daily call limit across all AI providers.
 /// - Never overrides deterministic code risk/confluence gates.
 public enum GeminiModelOption: String, Codable, Sendable, CaseIterable, Identifiable {
     case hydrogen = "gemini-4-hydrogen"
@@ -30,16 +30,86 @@ public enum GeminiModelOption: String, Codable, Sendable, CaseIterable, Identifi
     }
 }
 
-public actor GeminiJudgeClient {
+public actor GeminiJudgeClient: AIJudgeClient {
+    public nonisolated let provider: AIProviderOption = .gemini
     public static let modelID = "gemini-4-hydrogen"
-    private let http: any HTTPTransport
 
-    public init(http: any HTTPTransport) {
+    private let http: any HTTPTransport
+    private let suiteName: String?
+
+    public init(http: any HTTPTransport, suiteName: String? = nil) {
         self.http = http
+        self.suiteName = suiteName
     }
 
     public func dailyUsageCount() -> Int {
-        UserDefaults.standard.integer(forKey: todayUsageKey())
+        AIDailyUsageTracker.currentCount(suiteName: suiteName)
+    }
+
+    /// Verified `aistudio.google.com/api-reference/models/list-models`:
+    /// `GET https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000` with `x-goog-api-key` header,
+    /// filtering `supportedGenerationMethods.contains("generateContent")`, stripping `"models/"` prefix,
+    /// and following `nextPageToken`.
+    public func listModels(apiKey: String) async throws -> [AIModelInfo] {
+        let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanKey.isEmpty else {
+            throw NetworkAdapterError.missingAPIKey("Gemini")
+        }
+
+        struct ModelsResponse: Decodable {
+            struct ModelItem: Decodable {
+                let name: String
+                let displayName: String?
+                let supportedGenerationMethods: [String]?
+            }
+            let models: [ModelItem]?
+            let nextPageToken: String?
+        }
+
+        var collected: [AIModelInfo] = []
+        var pageToken: String? = nil
+        var pagesFetched = 0
+
+        repeat {
+            var comps = URLComponents(string: "https://generativelanguage.googleapis.com/v1beta/models")!
+            var items = [URLQueryItem(name: "pageSize", value: "1000")]
+            if let token = pageToken, !token.isEmpty {
+                items.append(URLQueryItem(name: "pageToken", value: token))
+            }
+            comps.queryItems = items
+            guard let url = comps.url else {
+                throw NetworkAdapterError.invalidURL("Gemini models.list")
+            }
+
+            var req = URLRequest(url: url)
+            req.httpMethod = "GET"
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            req.setValue(cleanKey, forHTTPHeaderField: "x-goog-api-key")
+
+            let res = try await sendHandling429(req)
+            let decoded = try JSONDecoder().decode(ModelsResponse.self, from: res.data)
+
+            for item in decoded.models ?? [] {
+                let methods = item.supportedGenerationMethods ?? []
+                guard methods.contains("generateContent") else { continue }
+                let cleanID = item.name.hasPrefix("models/")
+                    ? String(item.name.dropFirst("models/".count))
+                    : item.name
+                guard !cleanID.isEmpty else { continue }
+                let label = (item.displayName?.isEmpty == false) ? item.displayName! : cleanID
+                collected.append(AIModelInfo(
+                    id: cleanID,
+                    displayName: label,
+                    provider: .gemini,
+                    isFree: false
+                ))
+            }
+
+            pageToken = decoded.nextPageToken
+            pagesFetched += 1
+        } while (pageToken?.isEmpty == false) && pagesFetched < 5
+
+        return collected
     }
 
     public func judgeSignal(
@@ -52,9 +122,9 @@ public actor GeminiJudgeClient {
         guard !cleanKey.isEmpty else {
             throw NetworkAdapterError.missingAPIKey("Gemini")
         }
-        let used = dailyUsageCount()
+        let used = AIDailyUsageTracker.currentCount(suiteName: suiteName)
         guard used < dailyLimit else {
-            throw NetworkAdapterError.dailyLimitReached("Gemini (\(used)/\(dailyLimit))")
+            throw NetworkAdapterError.dailyLimitReached("AI (\(used)/\(dailyLimit))")
         }
 
         let compactSnapshot = SignalEngine.buildCompactReflexPrompt(for: signal)
@@ -79,33 +149,42 @@ public actor GeminiJudgeClient {
             ]
         ]
 
-        let body: [String: Any] = [
-            "contents": [
-                ["role": "user", "parts": [["text": prompt]]]
-            ],
-            "generationConfig": [
+        func makeRequest(includeThinking: Bool) throws -> URLRequest {
+            var genConfig: [String: Any] = [
                 "temperature": 0.1,
                 "maxOutputTokens": 2048,
                 "responseMimeType": "application/json",
-                "responseJsonSchema": schema,
-                "thinkingConfig": [
-                    "thinkingLevel": "LOW"
-                ]
+                "responseJsonSchema": schema
             ]
-        ]
+            if includeThinking {
+                genConfig["thinkingConfig"] = ["thinkingLevel": "LOW"]
+            }
+            let body: [String: Any] = [
+                "contents": [
+                    ["role": "user", "parts": [["text": prompt]]]
+                ],
+                "generationConfig": genConfig
+            ]
+            let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelID):generateContent")!
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue(cleanKey, forHTTPHeaderField: "x-goog-api-key")
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            return req
+        }
 
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelID):generateContent")!
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(cleanKey, forHTTPHeaderField: "x-goog-api-key")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let res = try await http.send(req, maxRetries: 1)
-        incrementDailyUsage()
+        let res: HTTPResponse
+        do {
+            res = try await sendHandling429(try makeRequest(includeThinking: true))
+        } catch NetworkAdapterError.httpStatus(let code, _) where code == 400 {
+            res = try await sendHandling429(try makeRequest(includeThinking: false))
+        }
+        AIDailyUsageTracker.increment(suiteName: suiteName)
 
         let text = try extractCandidateText(from: res.data)
-        guard let jsonData = text.data(using: .utf8) else {
+        let cleaned = OpenAICompatibleJudgeClient.extractJSONObjectString(from: text)
+        guard let jsonData = cleaned.data(using: .utf8) else {
             throw NetworkAdapterError.decodingFailed("Gemini returned non-UTF8 text")
         }
         return try JSONDecoder().decode(ReflexJudgment.self, from: jsonData)
@@ -120,27 +199,48 @@ public actor GeminiJudgeClient {
     ) async throws -> String {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanKey.isEmpty else { throw NetworkAdapterError.missingAPIKey("Gemini") }
-        guard dailyUsageCount() < dailyLimit else { throw NetworkAdapterError.dailyLimitReached("Gemini") }
+        let used = AIDailyUsageTracker.currentCount(suiteName: suiteName)
+        guard used < dailyLimit else { throw NetworkAdapterError.dailyLimitReached("AI (\(used)/\(dailyLimit))") }
 
         let prompt = "In 1 crisp sentence (<=22 words), state immediate market impact and whipsaw risk for \(affectedAssets.joined(separator: ", ")): \"\(headline)\""
-        let body: [String: Any] = [
-            "contents": [["role": "user", "parts": [["text": prompt]]]],
-            "generationConfig": [
-                "temperature": 0.1,
-                "maxOutputTokens": 1024,
-                "thinkingConfig": ["thinkingLevel": "LOW"]
-            ]
-        ]
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelID):generateContent")!
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(cleanKey, forHTTPHeaderField: "x-goog-api-key")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let res = try await http.send(req, maxRetries: 1)
-        incrementDailyUsage()
+        func makeRequest(includeThinking: Bool) throws -> URLRequest {
+            var genConfig: [String: Any] = [
+                "temperature": 0.1,
+                "maxOutputTokens": 1024
+            ]
+            if includeThinking {
+                genConfig["thinkingConfig"] = ["thinkingLevel": "LOW"]
+            }
+            let body: [String: Any] = [
+                "contents": [["role": "user", "parts": [["text": prompt]]]],
+                "generationConfig": genConfig
+            ]
+            let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelID):generateContent")!
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue(cleanKey, forHTTPHeaderField: "x-goog-api-key")
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            return req
+        }
+
+        let res: HTTPResponse
+        do {
+            res = try await sendHandling429(try makeRequest(includeThinking: true))
+        } catch NetworkAdapterError.httpStatus(let code, _) where code == 400 {
+            res = try await sendHandling429(try makeRequest(includeThinking: false))
+        }
+        AIDailyUsageTracker.increment(suiteName: suiteName)
         return try extractCandidateText(from: res.data).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func sendHandling429(_ req: URLRequest) async throws -> HTTPResponse {
+        do {
+            return try await http.send(req, maxRetries: 1)
+        } catch NetworkAdapterError.httpStatus(let code, _) where code == 429 {
+            throw AIProviderError.rateLimited(provider: "Google Gemini")
+        }
     }
 
     private func extractCandidateText(from data: Data) throws -> String {
@@ -152,25 +252,11 @@ public actor GeminiJudgeClient {
             throw NetworkAdapterError.decodingFailed("Gemini candidate content missing")
         }
         for part in parts {
-            // Skip any thought summary part if returned
             if let isThought = part["thought"] as? Bool, isThought { continue }
             if let text = part["text"] as? String, !text.isEmpty {
                 return text
             }
         }
         throw NetworkAdapterError.decodingFailed("Gemini text part empty")
-    }
-
-    private func todayUsageKey() -> String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(secondsFromGMT: 0)
-        df.dateFormat = "yyyy-MM-dd"
-        return "confluence.gemini.calls.\(df.string(from: Date()))"
-    }
-
-    private func incrementDailyUsage() {
-        let key = todayUsageKey()
-        UserDefaults.standard.set(UserDefaults.standard.integer(forKey: key) + 1, forKey: key)
     }
 }

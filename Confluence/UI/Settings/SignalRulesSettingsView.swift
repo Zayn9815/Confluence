@@ -332,55 +332,102 @@ public struct SignalRulesSettingsView: View {
                 }
             }
 
-            // SECTION 5 — Embedded AI Second-Opinion (Optional)
+            // SECTION 5 — Embedded AI Second-Opinion (Optional · Always Visible Provider & Model Picker)
             Section {
-                Toggle("Enable Gemini AI Judge", isOn: $coordinator.settings.payload.geminiEnabled)
+                Toggle("Enable AI Second Opinion", isOn: $coordinator.settings.payload.geminiEnabled)
 
-                if isAdvanced {
-                    Picker("Gemini Model", selection: $coordinator.settings.payload.geminiModel) {
-                        ForEach(GeminiModelOption.allCases) { option in
-                            Text(option.displayName).tag(option)
+                Picker("AI provider", selection: Binding(
+                    get: { coordinator.settings.payload.aiProvider },
+                    set: { newProvider in
+                        coordinator.settings.payload.aiProvider = newProvider
+                        let models = coordinator.availableModels(for: newProvider)
+                        if !models.contains(where: { $0.id == coordinator.settings.payload.aiModelID }) {
+                            coordinator.settings.payload.aiModelID = newProvider.defaultModelID
                         }
+                        Task {
+                            hasGeminiKey = await KeychainStore.shared.hasValue(for: newProvider.keychainKey)
+                        }
+                    }
+                )) {
+                    ForEach(AIProviderOption.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+
+                let activeProvider = coordinator.settings.payload.aiProvider
+                let models = coordinator.availableModels(for: activeProvider)
+                Picker("AI model", selection: $coordinator.settings.payload.aiModelID) {
+                    ForEach(models) { m in
+                        Text(m.displayName).tag(m.id)
+                    }
+                    if !models.contains(where: { $0.id == coordinator.settings.payload.aiModelID }) {
+                        Text(coordinator.settings.payload.aiModelID).tag(coordinator.settings.payload.aiModelID)
                     }
                 }
 
                 HStack {
                     SecureField(
-                        hasGeminiKey ? "Gemini Key Encrypted in Keychain" : "Enter Gemini API Key",
+                        hasGeminiKey ? "\(activeProvider.shortLabel) Key Encrypted in Keychain" : "Enter \(activeProvider.shortLabel) API Key",
                         text: $geminiKeyInput
                     )
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     Button("Save") {
                         Task {
-                            try? await KeychainStore.shared.save(geminiKeyInput, for: .geminiAPIKey)
+                            try? await KeychainStore.shared.save(geminiKeyInput, for: activeProvider.keychainKey)
                             geminiKeyInput = ""
-                            hasGeminiKey = await KeychainStore.shared.hasValue(for: .geminiAPIKey)
+                            hasGeminiKey = await KeychainStore.shared.hasValue(for: activeProvider.keychainKey)
                         }
                     }
                     .disabled(geminiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
+                Button {
+                    Task { await coordinator.testSelectedAIProviderKey() }
+                } label: {
+                    HStack {
+                        Label("Test key & list models", systemImage: "sparkles")
+                        Spacer()
+                        if coordinator.isTestingAIKey {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                }
+                .disabled(coordinator.isTestingAIKey)
+
+                if let msg = coordinator.aiKeyTestMessage {
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundStyle(msg.hasPrefix("Connected") ? palette.longEmerald : palette.trapAmber)
+                }
+
+                if let note = activeProvider.rateLimitNote {
+                    Text(note)
+                        .font(.caption2)
+                        .foregroundStyle(palette.secondaryInk)
+                }
+
                 if hasGeminiKey {
                     Button(role: .destructive) {
                         Task {
-                            try? await KeychainStore.shared.delete(.geminiAPIKey)
-                            hasGeminiKey = await KeychainStore.shared.hasValue(for: .geminiAPIKey)
+                            try? await KeychainStore.shared.delete(activeProvider.keychainKey)
+                            hasGeminiKey = await KeychainStore.shared.hasValue(for: activeProvider.keychainKey)
+                            coordinator.aiKeyTestMessage = nil
                         }
                     } label: {
-                        Label("Remove Saved Gemini Key", systemImage: "trash")
+                        Label("Remove Saved \(activeProvider.shortLabel) Key", systemImage: "trash")
                     }
                 }
 
                 Stepper(
-                    "Daily AI Call Limit: \(coordinator.settings.payload.geminiDailyCallLimit)",
+                    "Shared Daily AI Limit: \(coordinator.settings.payload.geminiDailyCallLimit)",
                     value: $coordinator.settings.payload.geminiDailyCallLimit,
                     in: 5...100,
                     step: 5
                 )
 
                 HStack {
-                    Text("Today's AI Usage")
+                    Text("Today's AI Usage (All Providers)")
                     Spacer()
                     Text("\(coordinator.geminiDailyCallsUsed) / \(coordinator.settings.payload.geminiDailyCallLimit)")
                         .monospacedDigit()
@@ -389,13 +436,14 @@ public struct SignalRulesSettingsView: View {
             } header: {
                 Text("AI Second-Opinion (Optional)")
             } footer: {
-                Text("Confluence works 100% natively with AI OFF. When enabled, Gemini reviews new Strong Signals & Trap Alerts using strict JSON schema, but can NEVER override deterministic SL/TP levels, risk limits, or Crisis suppression.")
+                Text("Confluence works 100% natively with AI OFF. When enabled, your selected provider reviews new Strong Signals, Trap Alerts, and News setups using strict JSON, but can NEVER override deterministic Stop loss / Target levels, risk limits, or Crisis suppression.")
             }
         }
         .navigationTitle("Signal Rules & AI")
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            hasGeminiKey = await KeychainStore.shared.hasValue(for: .geminiAPIKey)
+            let activeProvider = coordinator.settings.payload.aiProvider
+            hasGeminiKey = await KeychainStore.shared.hasValue(for: activeProvider.keychainKey)
         }
         .onChange(of: coordinator.settings.payload.calibrationWinDefinition) { _, _ in
             coordinator.recomputeCalibration()

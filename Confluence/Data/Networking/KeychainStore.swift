@@ -3,6 +3,8 @@ import Security
 
 public enum SecretKey: String, Sendable, CaseIterable {
     case geminiAPIKey = "com.bilal.confluence.secret.gemini"
+    case deepseekAPIKey = "com.bilal.confluence.secret.deepseek"
+    case openrouterAPIKey = "com.bilal.confluence.secret.openrouter"
     case twelveDataAPIKey = "com.bilal.confluence.secret.twelvedata"
     case finnhubAPIKey = "com.bilal.confluence.secret.finnhub"
 }

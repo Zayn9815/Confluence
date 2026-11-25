@@ -24,6 +24,7 @@ public struct NewsTradeAnalysisSheet: View {
     @State private var evaluation: NewsTradeEvaluation?
     @State private var isEvaluating: Bool = false
     @State private var chartSignal: TradeSignal?
+    @State private var aiNewsNote: String? = nil
 
     public init(target: NewsAnalysisTarget, coordinator: MarketScannerCoordinator, palette: ConfluencePalette) {
         self.target = target
@@ -57,6 +58,22 @@ public struct NewsTradeAnalysisSheet: View {
                     // 1. News / Event Recap Card
                     recapSection(currentSummary)
 
+                    // Optional AI Second-Opinion note (routed via selected AI provider; never overrides deterministic levels)
+                    if let aiNote = aiNewsNote, !aiNote.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("AI Second Opinion (\(coordinator.settings.payload.aiProvider.shortLabel))", systemImage: "sparkles")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(palette.champagneGold)
+                            Text(aiNote)
+                                .font(.caption)
+                                .foregroundStyle(palette.primaryInk)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .institutionalCard(palette: palette, accentBorder: palette.champagneGold.opacity(0.4))
+                    }
+
                     // 2. Expected Market Direction & Why It Moves Markets
                     directionSection(currentSummary)
 
@@ -82,6 +99,12 @@ public struct NewsTradeAnalysisSheet: View {
                 if selectedSymbol.isEmpty, let first = candidateSymbols.first {
                     selectedSymbol = first
                     await runEvaluation(summary: currentSummary, symbol: first)
+                }
+                if coordinator.settings.payload.geminiEnabled, aiNewsNote == nil {
+                    aiNewsNote = await coordinator.summarizeBreakingNewsImpact(
+                        headline: currentSummary.title,
+                        affectedAssets: candidateSymbols
+                    )
                 }
             }
         }

@@ -145,6 +145,8 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     // Section 5 — AI Second-Opinion (Optional)
     public var geminiEnabled: Bool = false
     public var geminiModel: GeminiModelOption = .hydrogen
+    public var aiProvider: AIProviderOption = .gemini
+    public var aiModelID: String = GeminiModelOption.hydrogen.rawValue
     public var geminiDailyCallLimit: Int = 25
     public var geminiConfirmationThreshold: Double = 0.80
 
@@ -180,7 +182,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         case manualUSDToAccountRate, customContractSpecs
         case calibrationWinDefinition, calibrationCategoryScope
         case calibrationMinConfidencePercent, calibrationMinRiskReward
-        case geminiEnabled, geminiModel, geminiDailyCallLimit, geminiConfirmationThreshold
+        case geminiEnabled, geminiModel, aiProvider, aiModelID, geminiDailyCallLimit, geminiConfirmationThreshold
         case tradFiLiveFeedMode, cryptoLiveFeedMode, defaultChartViewMode, showTradingViewOption
         case scanOnOpenEnabled, autoScanIntervalMinutes, demoWalletFeesEnabled
     }
@@ -279,7 +281,11 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         calibrationMinRiskReward = (try? c.decodeIfPresent(Double.self, forKey: .calibrationMinRiskReward)) ?? d.calibrationMinRiskReward
 
         geminiEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .geminiEnabled)) ?? d.geminiEnabled
-        geminiModel = (try? c.decodeIfPresent(GeminiModelOption.self, forKey: .geminiModel)) ?? d.geminiModel
+        let decodedLegacyGemini = (try? c.decodeIfPresent(GeminiModelOption.self, forKey: .geminiModel)) ?? d.geminiModel
+        geminiModel = decodedLegacyGemini
+        // Migrate legacy `geminiModel` cleanly to `aiProvider` + `aiModelID` when new keys are absent
+        aiProvider = (try? c.decodeIfPresent(AIProviderOption.self, forKey: .aiProvider)) ?? .gemini
+        aiModelID = (try? c.decodeIfPresent(String.self, forKey: .aiModelID)) ?? decodedLegacyGemini.rawValue
         geminiDailyCallLimit = (try? c.decodeIfPresent(Int.self, forKey: .geminiDailyCallLimit)) ?? d.geminiDailyCallLimit
         geminiConfirmationThreshold = (try? c.decodeIfPresent(Double.self, forKey: .geminiConfirmationThreshold)) ?? d.geminiConfirmationThreshold
 

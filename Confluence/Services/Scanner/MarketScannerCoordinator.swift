@@ -44,6 +44,8 @@ public final class MarketScannerCoordinator {
     private let calendarService: EconomicCalendarService
     private let newsService: BreakingNewsService
     private let geminiClient: GeminiJudgeClient
+    private let deepseekClient: OpenAICompatibleJudgeClient
+    private let openRouterClient: OpenAICompatibleJudgeClient
     private var dismissedSignalFingerprints: Set<String> = []
 
     // Live terminal state (strictly real fetched / computed data — zero mock signals or prints)
@@ -87,6 +89,9 @@ public final class MarketScannerCoordinator {
     public var feedHealthResults: [FeedHealthEntry] = []
     public var isCheckingHealth: Bool = false
     public var geminiDailyCallsUsed: Int = 0
+    public var discoveredAIModels: [AIProviderOption: [AIModelInfo]] = [:]
+    public var isTestingAIKey: Bool = false
+    public var aiKeyTestMessage: String? = nil
     public var twelveDataQuota: TwelveDataQuotaStatus?
     public var twelveDataLocalDailyUsed: Int = 0
     public var twelveDataTestMessage: String?
@@ -125,11 +130,72 @@ public final class MarketScannerCoordinator {
         self.calendarService = EconomicCalendarService(http: client)
         self.newsService = BreakingNewsService(http: client)
         self.geminiClient = GeminiJudgeClient(http: client)
+        self.deepseekClient = OpenAICompatibleJudgeClient(provider: .deepseek, http: client)
+        self.openRouterClient = OpenAICompatibleJudgeClient(provider: .openrouter, http: client)
         self.livePriceService = LivePriceService(http: client)
 
         wireNotificationRouter()
         wireLivePriceMonitor()
         loadPersistedState()
+    }
+
+    public func availableModels(for provider: AIProviderOption) -> [AIModelInfo] {
+        if let fetched = discoveredAIModels[provider], !fetched.isEmpty {
+            return fetched
+        }
+        return provider.fallbackModels
+    }
+
+    private func aiClient(for provider: AIProviderOption) -> any AIJudgeClient {
+        switch provider {
+        case .gemini: return geminiClient
+        case .deepseek: return deepseekClient
+        case .openrouter: return openRouterClient
+        }
+    }
+
+    public func testSelectedAIProviderKey() async {
+        let provider = settings.payload.aiProvider
+        isTestingAIKey = true
+        aiKeyTestMessage = nil
+        defer { isTestingAIKey = false }
+
+        guard let key = await KeychainStore.shared.read(provider.keychainKey), !key.isEmpty else {
+            aiKeyTestMessage = "Save a \(provider.shortLabel) API key first."
+            return
+        }
+        do {
+            let models = try await aiClient(for: provider).listModels(apiKey: key)
+            discoveredAIModels[provider] = models
+            if let first = models.first, !models.contains(where: { $0.id == settings.payload.aiModelID }) {
+                settings.payload.aiModelID = first.id
+            }
+            aiKeyTestMessage = "Connected to \(provider.displayName) · \(models.count) models listed."
+            diagnosticLog.log(.info, category: .ai, message: "AI discovery (\(provider.shortLabel)): \(models.count) models.")
+        } catch {
+            aiKeyTestMessage = "Failed: \(error.localizedDescription)"
+            diagnosticLog.log(.warn, category: .ai, message: "AI key test failed (\(provider.shortLabel)): \(error.localizedDescription)")
+        }
+    }
+
+    public func summarizeBreakingNewsImpact(headline: String, affectedAssets: [String]) async -> String? {
+        guard settings.payload.geminiEnabled else { return nil }
+        let provider = settings.payload.aiProvider
+        guard let key = await KeychainStore.shared.read(provider.keychainKey), !key.isEmpty else { return nil }
+        do {
+            let summary = try await aiClient(for: provider).summarizeBreakingImpact(
+                headline: headline,
+                affectedAssets: affectedAssets,
+                apiKey: key,
+                dailyLimit: settings.payload.geminiDailyCallLimit,
+                modelID: settings.payload.aiModelID
+            )
+            self.geminiDailyCallsUsed = AIDailyUsageTracker.currentCount()
+            return summary
+        } catch {
+            diagnosticLog.log(.warn, category: .ai, message: "AI news summary (\(provider.shortLabel)) failed: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     private func wireLivePriceMonitor() {
@@ -629,7 +695,8 @@ public final class MarketScannerCoordinator {
         let assets = settings.activeWatchlistAssets
         let twelveKey = await KeychainStore.shared.read(.twelveDataAPIKey)
         let finnhubKey = await KeychainStore.shared.read(.finnhubAPIKey)
-        let geminiKey = await KeychainStore.shared.read(.geminiAPIKey)
+        let activeAIProvider = settings.payload.aiProvider
+        let aiAPIKey = await KeychainStore.shared.read(activeAIProvider.keychainKey)
 
         let logHook: ProviderLogHook = { [weak self] sev, cat, msg in
             Task { @MainActor [weak self] in
@@ -855,21 +922,22 @@ public final class MarketScannerCoordinator {
                             cooldownSeconds: engineConfig.signalCooldownSeconds
                         )
 
-                        // Optional Gemini AI second-opinion ONLY on new Strong Signals or Trap Alerts when enabled
+                        // Optional AI second-opinion ONLY on new Strong Signals or Trap Alerts when enabled
                         if isNew,
                            settings.payload.geminiEnabled,
-                           let key = geminiKey, !key.isEmpty,
+                           let key = aiAPIKey, !key.isEmpty,
                            (signal.category == .strongSignal || signal.category == .trapAlert) {
-                            if let judgment = try? await geminiClient.judgeSignal(
+                            let client = aiClient(for: activeAIProvider)
+                            if let judgment = try? await client.judgeSignal(
                                 signal,
                                 apiKey: key,
                                 dailyLimit: settings.payload.geminiDailyCallLimit,
-                                modelID: settings.payload.geminiModel.rawValue
+                                modelID: settings.payload.aiModelID
                             ) {
                                 signal = signal.withAIJudgment(judgment, threshold: settings.payload.geminiConfirmationThreshold)
-                                self.geminiDailyCallsUsed = await geminiClient.dailyUsageCount()
+                                self.geminiDailyCallsUsed = AIDailyUsageTracker.currentCount()
                             } else {
-                                diagnosticLog.log(.warn, category: .ai, message: "Gemini second-opinion skipped or failed for \(signal.symbol).")
+                                diagnosticLog.log(.warn, category: .ai, message: "\(activeAIProvider.shortLabel) second-opinion skipped or failed for \(signal.symbol).")
                             }
                         }
 
