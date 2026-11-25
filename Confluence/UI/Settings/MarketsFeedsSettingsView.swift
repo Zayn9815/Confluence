@@ -166,7 +166,7 @@ public struct MarketsFeedsSettingsView: View {
                     BrokerPriceOffsetsCalibrationView(coordinator: coordinator, palette: palette)
                 } label: {
                     HStack {
-                        Label("Calibrate Broker Price Offsets", systemImage: "arrow.left.arrow.right")
+                        Label("Match to broker price", systemImage: "arrow.left.arrow.right")
                         Spacer()
                         Text("\(coordinator.settings.payload.brokerPriceOffsets.count) set")
                             .font(.caption.monospacedDigit())
@@ -174,9 +174,9 @@ public struct MarketsFeedsSettingsView: View {
                     }
                 }
             } header: {
-                Text("Broker Price Offsets (Display Only)")
+                Text("Match to broker price (Display Only)")
             } footer: {
-                Text("Adds your calibrated broker-vs-feed price delta to displayed Entry/SL/TP and Copy Setup without ever mutating deterministic engine math or stored Calibration outcomes.")
+                Text("Adds your broker-vs-feed price difference to displayed Entry, Stop loss, Target 1, and Target 2 without altering engine math or calibration stats.")
             }
         }
         .navigationTitle("Markets & Data")
@@ -233,7 +233,7 @@ private struct BrokerPriceOffsetsCalibrationView: View {
                         .monospacedDigit()
                 }
 
-                Button("Calibrate Offset from Broker Price") {
+                Button("Match to broker price") {
                     guard let bp = Double(brokerPriceText), let feed = lastFeedPrice else { return }
                     coordinator.settings.setBrokerOffset(bp - feed, for: selectedSymbol)
                     brokerPriceText = ""

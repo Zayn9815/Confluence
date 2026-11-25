@@ -2,27 +2,31 @@ import SwiftUI
 import SignalEngine
 
 /// High-performance 120Hz pure SwiftUI `Canvas` mini candlestick chart for Signal Cards.
-/// Plots closed candles, active FVG/OB zones, active Trap lifecycle lines (`Trigger`/`Active`),
-/// and numeric Entry/SL/TP1/TP2 execution levels with zero WKWebView overhead.
+/// Plots closed candles, optional display-only live price tick (throttled <= 1/s by caller),
+/// active FVG/OB zones, active Trap lifecycle lines (`Trigger`/`Active`),
+/// and numeric Entry / Stop loss / Target 1 / Target 2 levels with zero WKWebView overhead.
 public struct MiniCandlestickCanvas: View {
     let candles: [Candle]
     let levels: TradeLevels?
     let overlays: ChartOverlayData
     let palette: ConfluencePalette
     let height: CGFloat
+    let livePrice: Double?
 
     public init(
         candles: [Candle],
         levels: TradeLevels?,
         overlays: ChartOverlayData,
         palette: ConfluencePalette,
-        height: CGFloat = 112
+        height: CGFloat = 112,
+        livePrice: Double? = nil
     ) {
         self.candles = candles
         self.levels = levels
         self.overlays = overlays
         self.palette = palette
         self.height = height
+        self.livePrice = livePrice
     }
 
     public var body: some View {
@@ -32,14 +36,22 @@ public struct MiniCandlestickCanvas: View {
 
             var minPrice = slice.map(\.low).min() ?? 0
             var maxPrice = slice.map(\.high).max() ?? 1
+            let refClose = slice.last?.close ?? ((minPrice + maxPrice) * 0.5)
+
+            if let lp = livePrice, lp.isFinite, lp > 0, abs(lp - refClose) / max(refClose, 1e-9) <= 0.20 {
+                minPrice = min(minPrice, lp)
+                maxPrice = max(maxPrice, lp)
+            }
 
             if let lv = levels {
                 minPrice = min(minPrice, lv.stopLoss, lv.tp1, lv.entryLow)
                 maxPrice = max(maxPrice, lv.stopLoss, lv.tp1, lv.entryHigh)
             }
             for trap in overlays.traps where trap.isActionable {
-                minPrice = min(minPrice, trap.level)
-                maxPrice = max(maxPrice, trap.level)
+                if abs(trap.level - refClose) / max(refClose, 1e-9) <= 0.20 {
+                    minPrice = min(minPrice, trap.level)
+                    maxPrice = max(maxPrice, trap.level)
+                }
             }
 
             let span = max(maxPrice - minPrice, 1e-9)
@@ -73,6 +85,7 @@ public struct MiniCandlestickCanvas: View {
 
             // 3. Active Trap Lifecycle Lines (Trigger / Active / Returned)
             for trap in overlays.traps where trap.isActionable {
+                guard trap.level >= lowBound && trap.level <= highBound else { continue }
                 let y = yFor(trap.level)
                 var line = Path()
                 line.move(to: CGPoint(x: 0, y: y))
@@ -84,7 +97,7 @@ public struct MiniCandlestickCanvas: View {
                 )
             }
 
-            // 4. Trade Levels (Entry Band, Stop Loss, TP1, TP2)
+            // 4. Trade Levels (Entry Band, Stop loss, Target 1, Target 2)
             if let lv = levels {
                 let entryTop = yFor(lv.entryHigh)
                 let entryBot = yFor(lv.entryLow)
@@ -94,12 +107,14 @@ public struct MiniCandlestickCanvas: View {
                 drawLevelLine(context: context, width: size.width, y: yFor(lv.stopLoss), color: palette.shortCrimson.opacity(0.85), dash: [3, 3])
                 drawLevelLine(context: context, width: size.width, y: yFor(lv.tp1), color: palette.longEmerald.opacity(0.85), dash: [4, 2])
                 if lv.isTP2Enabled && lv.tp2 >= lowBound && lv.tp2 <= highBound {
-                    drawLevelLine(context: context, width: size.width, y: yFor(lv.tp2), color: palette.champagneGold.opacity(0.75), dash: [2, 3])
+                    drawLevelLine(context: context, width: size.width, y: yFor(lv.tp2), color: palette.macroIceBlue.opacity(0.8), dash: [2, 3])
                 }
             }
 
-            // 5. Candlesticks
-            let stepX = size.width / CGFloat(max(slice.count, 1))
+            // 5. Candlesticks (+ optional display-only live tick marker)
+            let hasLive = livePrice != nil && (livePrice ?? 0) > 0
+            let totalSlots = slice.count + (hasLive ? 1 : 0)
+            let stepX = size.width / CGFloat(max(totalSlots, 1))
             let bodyWidth = max(2.0, stepX * 0.62)
 
             for (i, bar) in slice.enumerated() {
@@ -120,6 +135,23 @@ public struct MiniCandlestickCanvas: View {
                     height: max(1.5, abs(cY - oY))
                 )
                 context.fill(Path(bodyRect), with: .color(color))
+            }
+
+            if let lp = livePrice, lp.isFinite, lp > 0, lp >= lowBound, lp <= highBound {
+                let isUp = lp >= refClose
+                let liveColor = isUp ? palette.longEmerald : palette.shortCrimson
+                let y = yFor(lp)
+                drawLevelLine(context: context, width: size.width, y: y, color: liveColor.opacity(0.75), dash: [2, 2])
+
+                let cx = (CGFloat(slice.count) + 0.5) * stepX
+                let oY = yFor(refClose)
+                let liveRect = CGRect(
+                    x: cx - bodyWidth * 0.5,
+                    y: min(oY, y),
+                    width: bodyWidth,
+                    height: max(2.0, abs(y - oY))
+                )
+                context.fill(Path(liveRect), with: .color(liveColor.opacity(0.85)))
             }
         }
         .frame(height: height)

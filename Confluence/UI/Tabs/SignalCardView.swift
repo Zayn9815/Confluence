@@ -19,6 +19,7 @@ public struct SignalCardView: View {
     let hapticsEnabled: Bool
     let isSelecting: Bool
     let isSelected: Bool
+    let livePrice: Double?
     let onToggleSelect: (() -> Void)?
     let onDelete: (() -> Void)?
     let onToggleBrokerAdjusted: (() -> Void)?
@@ -35,6 +36,8 @@ public struct SignalCardView: View {
     @State private var showScoreExplanation = false
     @State private var arrivalTriggerCount = 0
     @State private var didCopy = false
+    @State private var throttledLivePrice: Double? = nil
+    @State private var miniThrottle = LiveChartThrottle(minimumIntervalSeconds: 1.0)
 
     public init(
         signal: TradeSignal,
@@ -53,6 +56,7 @@ public struct SignalCardView: View {
         hapticsEnabled: Bool,
         isSelecting: Bool = false,
         isSelected: Bool = false,
+        livePrice: Double? = nil,
         onToggleSelect: (() -> Void)? = nil,
         onDelete: (() -> Void)? = nil,
         onToggleBrokerAdjusted: (() -> Void)? = nil,
@@ -77,6 +81,7 @@ public struct SignalCardView: View {
         self.hapticsEnabled = hapticsEnabled
         self.isSelecting = isSelecting
         self.isSelected = isSelected
+        self.livePrice = livePrice
         self.onToggleSelect = onToggleSelect
         self.onDelete = onDelete
         self.onToggleBrokerAdjusted = onToggleBrokerAdjusted
@@ -84,6 +89,7 @@ public struct SignalCardView: View {
         self.onMarkAsTaken = onMarkAsTaken
         self.onOpenGlossaryTerm = onOpenGlossaryTerm
         self.onOpenChart = onOpenChart
+        _throttledLivePrice = State(initialValue: livePrice)
     }
 
     private var activeLevels: TradeLevels? {
@@ -199,8 +205,16 @@ public struct SignalCardView: View {
                             levels: signal.levels,
                             overlays: signal.overlays,
                             palette: palette,
-                            height: density == .compact ? 86 : 112
+                            height: density == .compact ? 86 : 112,
+                            livePrice: throttledLivePrice
                         )
+                        .onChange(of: livePrice) { _, newPrice in
+                            guard let newPrice else { return }
+                            let now = Date().timeIntervalSince1970
+                            if miniThrottle.shouldEmit(at: now) {
+                                throttledLivePrice = newPrice
+                            }
+                        }
                         Label("Interactive", systemImage: "arrow.up.left.and.arrow.down.right")
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(palette.secondaryInk)
@@ -231,25 +245,25 @@ public struct SignalCardView: View {
                     metricCell(
                         title: "R:R RATIO",
                         value: "1:\(String(format: "%.2f", lv.riskRewardRatio))",
-                        sub: lv.isTP2Enabled ? "TP2 1:\(String(format: "%.1f", lv.tp2RiskRewardRatio))" : "TP1 Target Only",
+                        sub: lv.isTP2Enabled ? "Target 2 1:\(String(format: "%.1f", lv.tp2RiskRewardRatio))" : "Target 1 Only",
                         accent: palette.primaryInk
                     )
                     metricCell(
-                        title: "TP1 TARGET",
+                        title: "TARGET 1",
                         value: PriceFormatHelper.format(lv.tp1, decimals: levelDec),
                         sub: "+\(String(format: "%.2f", lv.reward1Percent))%",
                         accent: palette.longEmerald
                     )
                     if lv.isTP2Enabled {
                         metricCell(
-                            title: "TP2 TARGET",
+                            title: "TARGET 2",
                             value: PriceFormatHelper.format(lv.tp2, decimals: levelDec),
                             sub: "+\(String(format: "%.2f", lv.reward2Percent))%",
                             accent: palette.macroIceBlue
                         )
                     } else {
                         metricCell(
-                            title: "TP2 TARGET",
+                            title: "TARGET 2",
                             value: "Disabled",
                             sub: "Settings -> Rules",
                             accent: palette.tertiaryInk

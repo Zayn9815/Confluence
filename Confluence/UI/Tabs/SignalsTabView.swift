@@ -191,6 +191,7 @@ public struct SignalsTabView: View {
                                         hapticsEnabled: coordinator.settings.payload.hapticsEnabled,
                                         isSelecting: isSelecting,
                                         isSelected: isRowSelected,
+                                        livePrice: coordinator.livePriceService.latest(for: sig.symbol)?.price,
                                         onToggleSelect: {
                                             toggleSelection(for: sig.fingerprint)
                                         },
