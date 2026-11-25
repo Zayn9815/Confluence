@@ -45,7 +45,7 @@ public struct AISecondOpinionSettingsView: View {
                 if hasGeminiKey {
                     Button(role: .destructive) {
                         Task {
-                            await KeychainStore.shared.delete(.geminiAPIKey)
+                            try? await KeychainStore.shared.delete(.geminiAPIKey)
                             hasGeminiKey = await KeychainStore.shared.hasValue(for: .geminiAPIKey)
                         }
                     } label: {

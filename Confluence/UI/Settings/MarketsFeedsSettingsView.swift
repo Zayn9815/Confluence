@@ -88,7 +88,7 @@ public struct MarketsFeedsSettingsView: View {
                 if hasTwelveDataKey {
                     Button(role: .destructive) {
                         Task {
-                            await KeychainStore.shared.delete(.twelveDataAPIKey)
+                            try? await KeychainStore.shared.delete(.twelveDataAPIKey)
                             hasTwelveDataKey = await KeychainStore.shared.readEffectiveTwelveDataKey() != nil
                             coordinator.twelveDataQuota = nil
                             coordinator.twelveDataTestMessage = nil
