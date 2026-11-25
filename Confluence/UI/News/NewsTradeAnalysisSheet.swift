@@ -37,7 +37,7 @@ public struct NewsTradeAnalysisSheet: View {
             return NewsTradeAnalyzer.summarize(
                 event: ev,
                 nowEpochSeconds: Date().timeIntervalSince1970,
-                whipsawWindowMinutes: coordinator.settings.payload.postNewsWhipsawMinutesAfter
+                whipsawWindowMinutes: coordinator.settings.buildEngineConfig().postNewsWhipsawMinutesAfter
             )
         case .article(let item):
             return NewsTradeAnalyzer.summarize(newsItem: item)
