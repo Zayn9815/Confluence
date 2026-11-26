@@ -659,7 +659,7 @@ public final class MarketScannerCoordinator {
 
             // Build candidate symbol -> cached candle map (from scan cache or existing signal snapshots)
             var entryBySym = self.cachedClosedCandlesBySymbol
-            var htfBySym = self.cachedHTFCandlesBySymbol
+            let htfBySym = self.cachedHTFCandlesBySymbol
             var providerBySym = self.cachedProviderBySymbol
             for sig in self.signals {
                 if entryBySym[sig.symbol] == nil && !sig.recentCandles.isEmpty {
