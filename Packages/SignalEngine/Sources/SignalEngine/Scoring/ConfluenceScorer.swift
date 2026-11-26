@@ -503,7 +503,7 @@ public enum ConfluenceScorer {
                 notes.append("Opposing \(trap.direction.rawValue) (-10)")
             }
         }
-        if let pos = effectivePositioning, pos.proDirection != .neutral {
+        if let pos = positioning, pos.proDirection != .neutral {
             if pos.provenance == .okxFundingOI {
                 if pos.proDirection == dominantDirection {
                     psychScore += 5.0
