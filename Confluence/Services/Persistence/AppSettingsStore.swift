@@ -156,6 +156,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var tradFiLiveFeedMode: TradFiLiveFeedMode = .autoStreamWithBackup
     public var cryptoLiveFeedMode: CryptoLiveFeedMode = .liveStream
     public var defaultChartViewMode: DefaultChartViewMode = .confluence
+    public var chartEngine: ChartEngineOption = .lightweightCharts
     public var showTradingViewOption: Bool = true
     public var scanOnOpenEnabled: Bool = true
     public var autoScanIntervalMinutes: Int = ScanSchedulePolicy.defaultIntervalMinutes
@@ -185,7 +186,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         case calibrationWinDefinition, calibrationCategoryScope
         case calibrationMinConfidencePercent, calibrationMinRiskReward
         case geminiEnabled, geminiModel, aiProvider, aiModelID, geminiDailyCallLimit, geminiConfirmationThreshold
-        case tradFiLiveFeedMode, cryptoLiveFeedMode, defaultChartViewMode, showTradingViewOption
+        case tradFiLiveFeedMode, cryptoLiveFeedMode, defaultChartViewMode, chartEngine, showTradingViewOption
         case scanOnOpenEnabled, autoScanIntervalMinutes, demoWalletFeesEnabled
     }
 
@@ -321,6 +322,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         tradFiLiveFeedMode = (try? c.decodeIfPresent(TradFiLiveFeedMode.self, forKey: .tradFiLiveFeedMode)) ?? d.tradFiLiveFeedMode
         cryptoLiveFeedMode = (try? c.decodeIfPresent(CryptoLiveFeedMode.self, forKey: .cryptoLiveFeedMode)) ?? d.cryptoLiveFeedMode
         defaultChartViewMode = (try? c.decodeIfPresent(DefaultChartViewMode.self, forKey: .defaultChartViewMode)) ?? d.defaultChartViewMode
+        chartEngine = (try? c.decodeIfPresent(ChartEngineOption.self, forKey: .chartEngine)) ?? d.chartEngine
         showTradingViewOption = (try? c.decodeIfPresent(Bool.self, forKey: .showTradingViewOption)) ?? d.showTradingViewOption
         scanOnOpenEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .scanOnOpenEnabled)) ?? d.scanOnOpenEnabled
         autoScanIntervalMinutes = (try? c.decodeIfPresent(Int.self, forKey: .autoScanIntervalMinutes)) ?? d.autoScanIntervalMinutes
@@ -341,14 +343,24 @@ public final class AppSettingsStore {
 
     public init() {
         if let data = UserDefaults.standard.data(forKey: Self.storageKey),
-           let decoded = try? JSONDecoder().decode(PersistedSettingsPayload.self, from: data) {
+           var decoded = try? JSONDecoder().decode(PersistedSettingsPayload.self, from: data) {
+            if let storedEngineRaw = UserDefaults.standard.string(forKey: ChartEngineOption.appStorageKey),
+               let storedEngine = ChartEngineOption(rawValue: storedEngineRaw) {
+                decoded.chartEngine = storedEngine
+            }
             self.payload = decoded
         } else {
-            self.payload = PersistedSettingsPayload()
+            var initial = PersistedSettingsPayload()
+            if let storedEngineRaw = UserDefaults.standard.string(forKey: ChartEngineOption.appStorageKey),
+               let storedEngine = ChartEngineOption(rawValue: storedEngineRaw) {
+                initial.chartEngine = storedEngine
+            }
+            self.payload = initial
         }
     }
 
     private func save() {
+        UserDefaults.standard.set(payload.chartEngine.rawValue, forKey: ChartEngineOption.appStorageKey)
         if let data = try? JSONEncoder().encode(payload) {
             UserDefaults.standard.set(data, forKey: Self.storageKey)
         }
