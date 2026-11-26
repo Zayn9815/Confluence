@@ -70,7 +70,7 @@ final class Step2MasterUpgradeTests: XCTestCase {
             existingURL: existing
         )
         XCTAssertEqual(synced.host, "www.tradingview.com")
-        XCTAssertEqual(synced.path, "/chart/AbCdEf12/")
+        XCTAssertEqual(synced.path, "/chart/AbCdEf12")
         XCTAssertTrue(synced.absoluteString.contains("BINANCE"))
         XCTAssertTrue(synced.absoluteString.contains("BTCUSDT"))
         XCTAssertTrue(synced.absoluteString.contains("interval=240"))
