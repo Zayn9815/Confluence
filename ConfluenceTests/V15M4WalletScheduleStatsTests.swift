@@ -4,9 +4,9 @@ import XCTest
 import SignalEngine
 
 final class V15M4WalletScheduleStatsTests: XCTestCase {
-    // MARK: - JournalLiveRowTests
+    // MARK: - Live Quote Freshness & Automatic Journal Tick Tracking Tests
 
-    func testLivePositionRowMetricsProgressBarAndOfflineFreshness() {
+    func testLiveQuoteFreshnessAndAutomaticJournalLiveTickTracking() {
         let now: TimeInterval = 1_776_175_200
         let liveQuote = LivePriceQuote(
             symbol: "BTC/USDT",
@@ -15,26 +15,9 @@ final class V15M4WalletScheduleStatsTests: XCTestCase {
             sourceLabel: "Binance Live",
             isStreaming: true
         )
-        // Entry 60k, SL 59k, Target 1 62k -> span = 3k; 61k is 2k above SL -> 2/3 progress, +1.0R
-        let m = LivePositionRowMetrics.compute(
-            direction: .long,
-            entryPrice: 60_000,
-            stopLoss: 59_000,
-            target1: 62_000,
-            liveQuote: liveQuote,
-            fallbackPrice: 60_000,
-            pnlUSD: 20.0,
-            marginUSD: 200.0,
-            nowEpochSeconds: now
-        )
-        XCTAssertEqual(m.rMultiple, 1.0, accuracy: 0.001)
-        XCTAssertEqual(m.returnPercent, 10.0, accuracy: 0.01)
-        XCTAssertEqual(m.pnlUSD ?? 0, 20.0, accuracy: 0.01)
-        XCTAssertEqual(m.stopToTargetProgress, 2.0 / 3.0, accuracy: 0.001)
-        XCTAssertEqual(m.entryMarkerFraction, 1.0 / 3.0, accuracy: 0.001)
-        XCTAssertEqual(m.freshness, .live)
+        XCTAssertEqual(liveQuote.freshness(nowEpochSeconds: now), .live)
 
-        // Stale >60s quote -> OFFLINE badge
+        // Stale >60s quote -> OFFLINE freshness
         let staleQuote = LivePriceQuote(
             symbol: "BTC/USDT",
             price: 61_000,
@@ -42,16 +25,39 @@ final class V15M4WalletScheduleStatsTests: XCTestCase {
             sourceLabel: "Binance Live",
             isStreaming: true
         )
-        let mStale = LivePositionRowMetrics.compute(
+        XCTAssertEqual(staleQuote.freshness(nowEpochSeconds: now), .offline)
+
+        // Entry 60k, SL 59k, Target 1 62k, live 61k -> +1.0R, +1.67%
+        let entry = TrackedJournalTrade(
+            id: "tj-live-1",
+            symbol: "BTC/USDT",
+            assetClass: .crypto,
+            timeframe: .m30,
             direction: .long,
+            section: .strongSignals,
+            status: .live,
+            score: 82.0,
+            signalBarTimestamp: now - 600,
+            entryZoneLow: 59_900,
+            entryZoneHigh: 60_100,
             entryPrice: 60_000,
+            fillPrice: 60_000,
             stopLoss: 59_000,
             target1: 62_000,
-            liveQuote: staleQuote,
-            fallbackPrice: 60_000,
-            nowEpochSeconds: now
+            target2: 63_500,
+            isTP2Enabled: true,
+            currentPrice: 60_000,
+            createdAt: now - 600,
+            filledAt: now - 300
         )
-        XCTAssertEqual(mStale.freshness, .offline)
+        let updated = SignalJournalEngine.evaluateLiveTick(
+            entry: entry,
+            livePrice: liveQuote.price,
+            now: now
+        )
+        XCTAssertEqual(updated.status, .live)
+        XCTAssertEqual(updated.liveRMultiple, 1.0, accuracy: 0.001)
+        XCTAssertEqual(updated.livePnLPercent, (1_000.0 / 60_000.0) * 100.0, accuracy: 0.01)
     }
 
     // MARK: - ScanOnOpenTests
