@@ -5,11 +5,13 @@ import SignalEngine
 
 /// Native 120Hz SwiftUI Canvas candlestick engine powered by `LalanaChami/CandleKit` (`v0.2.0+`).
 /// - Persists `@State private var chartState = CandleChartState(candleSpacing: 10)` so live ticks never reset pan/zoom.
-/// - Maps sorted unique-timestamp `CandleKitCore.Candle` bars + `ChartOrderLine`s for Entry/SL/TP1/TP2/Confirmed Walls.
-/// - Wires `.volumeVisible(true)`, `.headerVisible(false)`, `.priceFractionDigits(pricePrecision.precision)`, and `.onCrosshairChange`.
+/// - Maps sorted unique-timestamp `CandleKitCore.Candle` bars and locked horizontal `Drawing` lines
+///   for Entry, Stop Loss, TP1, TP2, Breakeven, Traps, and Confirmed Crypto Bid/Ask Walls.
+/// - Wires `.volumeVisible(true)`, `.headerVisible(false)`, `.priceFractionDigits(pricePrecision.precision)`,
+///   and `.onCrosshairChange`, layered with a non-blocking Liquid Glass `ChartSignalOverlayHUD`.
 public struct CandleKitAdapterView: ConfluenceChartAdapter {
-    public let candles: [Candle]
-    public let formingCandle: Candle?
+    public let candles: [SignalEngine.Candle]
+    public let formingCandle: SignalEngine.Candle?
     public let liveTick: LiveTick?
     public let overlayModel: ChartSignalOverlayModel
     public let timeframe: Timeframe
@@ -21,8 +23,8 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
     @State private var chartState = CandleChartState(candleSpacing: 10)
 
     public init(
-        candles: [Candle],
-        formingCandle: Candle?,
+        candles: [SignalEngine.Candle],
+        formingCandle: SignalEngine.Candle?,
         liveTick: LiveTick?,
         overlayModel: ChartSignalOverlayModel,
         timeframe: Timeframe,
@@ -43,84 +45,106 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
     }
 
     private var mappedCandles: [CandleKitCore.Candle] {
-        var byTime: [Int: SignalEngine.Candle] = [:]
-        for bar in candles where bar.open.isFinite && bar.high.isFinite && bar.low.isFinite && bar.close.isFinite {
-            let key = Int(bar.openTimeEpochSeconds.rounded())
-            byTime[key] = bar
+        var byEpoch: [TimeInterval: SignalEngine.Candle] = [:]
+        byEpoch.reserveCapacity(candles.count + 1)
+        for c in candles where c.open.isFinite && c.high.isFinite && c.low.isFinite && c.close.isFinite && c.openTimeEpochSeconds.isFinite {
+            byEpoch[c.openTimeEpochSeconds] = c
         }
-        if let forming = formingCandle,
-           forming.open.isFinite, forming.high.isFinite, forming.low.isFinite, forming.close.isFinite {
-            let key = Int(forming.openTimeEpochSeconds.rounded())
-            byTime[key] = forming
+        if let f = formingCandle,
+           f.open.isFinite && f.high.isFinite && f.low.isFinite && f.close.isFinite && f.openTimeEpochSeconds.isFinite {
+            byEpoch[f.openTimeEpochSeconds] = f
         }
-        return byTime.values
-            .sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
-            .map { bar in
-                CandleKitCore.Candle(
-                    time: Date(timeIntervalSince1970: bar.openTimeEpochSeconds),
-                    open: bar.open,
-                    high: bar.high,
-                    low: bar.low,
-                    close: bar.close,
-                    volume: max(0.0, bar.volume ?? 0.0)
-                )
-            }
+        let sortedKeys = byEpoch.keys.sorted()
+        return sortedKeys.compactMap { ts in
+            guard let c = byEpoch[ts] else { return nil }
+            let vol = (c.volume != nil && c.volume!.isFinite && c.volume! >= 0) ? c.volume! : 0.0
+            return CandleKitCore.Candle(
+                time: Date(timeIntervalSince1970: ts),
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
+                volume: vol
+            )
+        }
     }
 
-    private var mappedOrderLines: [ChartOrderLine] {
-        var lines: [ChartOrderLine] = []
+    private func buildHorizontalOverlayDrawings(anchorDate: Date) -> [Drawing] {
+        var result: [Drawing] = []
+
+        func addLine(price: Double, color: DrawingColor, lineWidth: Double, dash: [Double]?) {
+            guard price.isFinite && price > 0 else { return }
+            result.append(Drawing(
+                kind: .horizontalLine,
+                anchors: [DrawingAnchor(time: anchorDate, price: price)],
+                style: DrawingStyle(color: color, lineWidth: lineWidth, dash: dash),
+                isLocked: true,
+                isHidden: false
+            ))
+        }
+
+        let gold = DrawingColor(red: 0.831, green: 0.686, blue: 0.216, opacity: 0.95)
+        let crimson = DrawingColor(red: 0.937, green: 0.267, blue: 0.267, opacity: 0.95)
+        let emerald = DrawingColor(red: 0.063, green: 0.725, blue: 0.506, opacity: 0.95)
+        let iceBlue = DrawingColor(red: 0.220, green: 0.741, blue: 0.973, opacity: 0.90)
+        let amber = DrawingColor(red: 0.961, green: 0.620, blue: 0.043, opacity: 0.90)
+
         if let entry = overlayModel.entryPrice {
-            lines.append(ChartOrderLine(id: "entry", price: entry, kind: .position, label: "ENTRY"))
+            addLine(price: entry, color: gold, lineWidth: 1.5, dash: [6, 4])
         }
         if let sl = overlayModel.stopLoss {
-            lines.append(ChartOrderLine(id: "sl", price: sl, kind: .stopLoss, label: "SL"))
+            addLine(price: sl, color: crimson, lineWidth: 1.8, dash: nil)
         }
         if let tp1 = overlayModel.takeProfit1 {
-            lines.append(ChartOrderLine(id: "tp1", price: tp1, kind: .takeProfit, label: "TP1"))
+            addLine(price: tp1, color: emerald, lineWidth: 1.8, dash: nil)
         }
         if overlayModel.isTP2Enabled, let tp2 = overlayModel.takeProfit2 {
-            lines.append(ChartOrderLine(id: "tp2", price: tp2, kind: .takeProfit, label: "TP2"))
+            addLine(price: tp2, color: iceBlue, lineWidth: 1.3, dash: [5, 4])
         }
-        if overlayModel.marketClass == .crypto, let of = overlayModel.orderFlowSummary {
-            if of.bidWallConfirmed, let bp = of.bidWallPrice {
-                lines.append(ChartOrderLine(id: "bid_wall", price: bp, kind: .buy, label: "BID WALL"))
+        if let be = overlayModel.breakevenPrice {
+            addLine(price: be, color: iceBlue, lineWidth: 1.2, dash: [2, 3])
+        }
+        for trap in overlayModel.traps where trap.isActionable {
+            addLine(price: trap.price, color: amber, lineWidth: 1.2, dash: [5, 4])
+        }
+        if overlayModel.marketClass == .crypto, let orderFlow = overlayModel.orderFlowSummary {
+            if orderFlow.bidWallConfirmed, let bidWall = orderFlow.bidWallPrice {
+                addLine(price: bidWall, color: emerald, lineWidth: 1.2, dash: [2, 3])
             }
-            if of.askWallConfirmed, let ap = of.askWallPrice {
-                lines.append(ChartOrderLine(id: "ask_wall", price: ap, kind: .sell, label: "ASK WALL"))
+            if orderFlow.askWallConfirmed, let askWall = orderFlow.askWallPrice {
+                addLine(price: askWall, color: crimson, lineWidth: 1.2, dash: [2, 3])
             }
         }
-        return lines
+        return result
     }
 
     public var body: some View {
-        let ckCandles = mappedCandles
+        let series = mappedCandles
         ZStack(alignment: .topLeading) {
-            if ckCandles.isEmpty {
+            if series.isEmpty {
                 NativeCanvasFallbackChartView(
                     candles: candles,
                     formingCandle: formingCandle,
+                    liveTick: liveTick,
                     overlayModel: overlayModel,
                     timeframe: timeframe,
                     pricePrecision: pricePrecision,
                     palette: palette,
-                    showVolumePane: true,
+                    isDark: isDark,
+                    engineLabel: "CandleKit",
                     onCrosshairChange: onCrosshairChange
                 )
             } else {
-                CandlestickChart(ckCandles, state: chartState)
-                    .candleChartStyle(CandleChartStyle(
-                        upColor: palette.longEmerald,
-                        downColor: palette.shortCrimson,
-                        gridColor: palette.border.opacity(0.45),
-                        axisLabelColor: palette.secondaryInk,
-                        crosshairColor: palette.champagneGold.opacity(0.8)
-                    ))
-                    .orderLines(mappedOrderLines)
+                let anchorDate = series.last?.time ?? Date()
+                let drawings = buildHorizontalOverlayDrawings(anchorDate: anchorDate)
+
+                CandlestickChart(series, state: chartState)
                     .volumeVisible(true)
                     .headerVisible(false)
                     .priceFractionDigits(pricePrecision.precision)
-                    .onCrosshairChange { candle in
-                        if let c = candle {
+                    .drawings(.constant(drawings))
+                    .onCrosshairChange { inspected in
+                        if let c = inspected {
                             onCrosshairChange(ChartCrosshairReadout(
                                 epochSeconds: c.time.timeIntervalSince1970,
                                 open: c.open,
@@ -132,25 +156,22 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
                             onCrosshairChange(nil)
                         }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(palette.canvas)
-            }
+                    .id("\(overlayModel.symbol)|\(timeframe.rawValue)")
 
-            ChartSignalOverlayHUD(
-                overlayModel: overlayModel,
-                precision: pricePrecision,
-                palette: palette,
-                engineBadge: "CandleKit"
-            )
-            .padding(10)
-            .allowsHitTesting(false)
+                if overlayModel.hasAnyOverlayLevels {
+                    ChartSignalOverlayHUD(
+                        overlayModel: overlayModel,
+                        precision: pricePrecision,
+                        palette: palette,
+                        engineBadge: "CandleKit"
+                    )
+                    .padding(10)
+                    .allowsHitTesting(false)
+                }
+            }
         }
-        .onChange(of: overlayModel.symbol) { _, _ in
-            chartState.scrollToLatest()
-            onCrosshairChange(nil)
-        }
-        .onChange(of: timeframe) { _, _ in
-            chartState.scrollToLatest()
-            onCrosshairChange(nil)
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
