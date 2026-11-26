@@ -10,8 +10,8 @@ import SignalEngine
 /// - Wires `.volumeVisible(true)`, `.headerVisible(false)`, `.priceFractionDigits(pricePrecision.precision)`,
 ///   and `.onCrosshairChange`, layered with a non-blocking Liquid Glass `ChartSignalOverlayHUD`.
 public struct CandleKitAdapterView: ConfluenceChartAdapter {
-    public let candles: [SignalEngine.Candle]
-    public let formingCandle: SignalEngine.Candle?
+    public let candles: [EngineCandle]
+    public let formingCandle: EngineCandle?
     public let liveTick: LiveTick?
     public let overlayModel: ChartSignalOverlayModel
     public let timeframe: Timeframe
@@ -23,8 +23,8 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
     @State private var chartState = CandleChartState(candleSpacing: 10)
 
     public init(
-        candles: [SignalEngine.Candle],
-        formingCandle: SignalEngine.Candle?,
+        candles: [EngineCandle],
+        formingCandle: EngineCandle?,
         liveTick: LiveTick?,
         overlayModel: ChartSignalOverlayModel,
         timeframe: Timeframe,
@@ -45,7 +45,7 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
     }
 
     private var mappedCandles: [CandleKitCore.Candle] {
-        var byEpoch: [TimeInterval: SignalEngine.Candle] = [:]
+        var byEpoch: [TimeInterval: EngineCandle] = [:]
         byEpoch.reserveCapacity(candles.count + 1)
         for c in candles where c.open.isFinite && c.high.isFinite && c.low.isFinite && c.close.isFinite && c.openTimeEpochSeconds.isFinite {
             byEpoch[c.openTimeEpochSeconds] = c

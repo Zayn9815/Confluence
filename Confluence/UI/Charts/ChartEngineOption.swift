@@ -123,6 +123,9 @@ public struct ChartCrosshairReadout: Sendable, Equatable {
     }
 }
 
+/// Unambiguous alias to SignalEngine's `Candle` model (avoids module/type name collision with `CandleKitCore.Candle`).
+public typealias EngineCandle = Candle
+
 /// Shared chart adapter contract implemented by `LightweightChartsAdapterView` and Step-2 adapter slots
 /// (`DGChartsAdapterView`, `SwiftTradingViewAdapterView`, `CandleKitAdapterView`).
 @MainActor
