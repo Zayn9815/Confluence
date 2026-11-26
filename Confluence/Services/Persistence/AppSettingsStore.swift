@@ -122,6 +122,8 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var enableTP2Target: Bool = true
     public var minimumAlignedStrategies: Int = 3
     public var enabledStrategyGroups: Set<StrategyGroup> = Set(StrategyGroup.allCases)
+    /// v1.6 individual strategy toggles (JSON array of `StrategyID` raw values). Fresh installs start with Proven Winners.
+    public var enabledStrategies: Set<StrategyID> = StrategyID.provenWinners
     public var strategySelectionMode: StrategySelectionMode = .defaultAll
     public var selectedStrategyConcepts: Set<StrategyConcept> = Set(StrategyConcept.allCases)
     public var customStrategyMatchRule: CustomStrategyMatchRule = .anyWithMinConfluence
@@ -175,7 +177,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         case htfTimeframe, entryTimeframe, minimumConfidencePercent, minimumRiskReward
         case maxStopLossPercentCryptoStocks, maxStopLossPercentFXMetalsIndices
         case levelCalculationMode, fixedStopLossPercent, fixedTP1Percent, fixedTP2Percent
-        case enableTP2Target, minimumAlignedStrategies, enabledStrategyGroups
+        case enableTP2Target, minimumAlignedStrategies, enabledStrategyGroups, enabledStrategies
         case strategySelectionMode, selectedStrategyConcepts, customStrategyMatchRule
         case showWeakFilteredSignals, autoSuppressCrisisAlerts, oneSignalPerCorrelatedCluster
         case defaultAccountBalance, defaultRiskPercent, defaultAccountCurrency
@@ -190,6 +192,20 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     private enum LegacyCodingKeys: String, CodingKey {
         case themePreset
         case lastDarkThemePreset
+    }
+
+    /// Maps legacy v1.2–v1.5 rule settings to individual `StrategyID`s (custom concepts win over groups).
+    public static func migrateLegacyStrategies(
+        mode: StrategySelectionMode,
+        groups: Set<StrategyGroup>,
+        concepts: Set<StrategyConcept>
+    ) -> Set<StrategyID> {
+        switch mode {
+        case .custom where !concepts.isEmpty:
+            return StrategyID.migrate(fromConcepts: concepts)
+        default:
+            return StrategyID.migrate(fromGroups: groups)
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -265,6 +281,19 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         strategySelectionMode = (try? c.decodeIfPresent(StrategySelectionMode.self, forKey: .strategySelectionMode)) ?? d.strategySelectionMode
         selectedStrategyConcepts = (try? c.decodeIfPresent(Set<StrategyConcept>.self, forKey: .selectedStrategyConcepts)) ?? d.selectedStrategyConcepts
         customStrategyMatchRule = (try? c.decodeIfPresent(CustomStrategyMatchRule.self, forKey: .customStrategyMatchRule)) ?? d.customStrategyMatchRule
+        if let raw = try? c.decodeIfPresent([String].self, forKey: .enabledStrategies) {
+            // Unknown raw values (future/removed detectors) are skipped instead of resetting the whole selection.
+            enabledStrategies = Set(raw.compactMap(StrategyID.init(rawValue:)))
+        } else if c.contains(.enabledStrategyGroups) || c.contains(.strategySelectionMode) || c.contains(.selectedStrategyConcepts) {
+            // One-time legacy migration: map the old grouped / custom-concept selection to individual StrategyIDs.
+            enabledStrategies = PersistedSettingsPayload.migrateLegacyStrategies(
+                mode: strategySelectionMode,
+                groups: enabledStrategyGroups,
+                concepts: selectedStrategyConcepts
+            )
+        } else {
+            enabledStrategies = d.enabledStrategies
+        }
         showWeakFilteredSignals = (try? c.decodeIfPresent(Bool.self, forKey: .showWeakFilteredSignals)) ?? d.showWeakFilteredSignals
         autoSuppressCrisisAlerts = (try? c.decodeIfPresent(Bool.self, forKey: .autoSuppressCrisisAlerts)) ?? d.autoSuppressCrisisAlerts
         oneSignalPerCorrelatedCluster = (try? c.decodeIfPresent(Bool.self, forKey: .oneSignalPerCorrelatedCluster)) ?? d.oneSignalPerCorrelatedCluster
@@ -397,20 +426,6 @@ public final class AppSettingsStore {
     public func buildEngineConfig(
         reliabilityWeights: [String: Double] = [:]
     ) -> EngineConfig {
-        let concepts: Set<StrategyConcept>
-        switch payload.strategySelectionMode {
-        case .defaultAll:
-            concepts = Set(StrategyConcept.allCases)
-        case .custom:
-            concepts = payload.selectedStrategyConcepts.isEmpty
-                ? Set(StrategyConcept.allCases)
-                : payload.selectedStrategyConcepts
-        }
-
-        let groups: Set<StrategyGroup> = (payload.strategySelectionMode == .defaultAll)
-            ? payload.enabledStrategyGroups
-            : Set(concepts.map(\.group))
-
         return EngineConfig(
             htfTimeframe: payload.htfTimeframe,
             entryTimeframe: payload.entryTimeframe,
@@ -424,17 +439,19 @@ public final class AppSettingsStore {
             fixedTP2Percent: payload.fixedTP2Percent,
             enableTP2Target: payload.enableTP2Target,
             minimumAlignedStrategies: payload.minimumAlignedStrategies,
-            enabledStrategyGroups: groups,
-            strategySelectionMode: payload.strategySelectionMode,
-            selectedStrategyConcepts: concepts,
-            customStrategyMatchRule: payload.customStrategyMatchRule,
+            // Legacy group/concept gates are neutralised; individual `enabledStrategies` is the single source of truth.
+            enabledStrategyGroups: Set(StrategyGroup.allCases),
+            strategySelectionMode: .defaultAll,
+            selectedStrategyConcepts: Set(StrategyConcept.allCases),
+            customStrategyMatchRule: .anyWithMinConfluence,
             pauseSignalsDuringPreNewsWindow: payload.pauseSignalsDuringPreNewsWindow,
             preNewsBlackoutMinutesBefore: 15,
             postNewsWhipsawMinutesAfter: 5,
             suppressAlertsInCrisisRegime: payload.autoSuppressCrisisAlerts,
             aiConfirmationThreshold: payload.geminiConfirmationThreshold,
             signalCooldownSeconds: 3_600,
-            historicalReliabilityWeights: reliabilityWeights
+            historicalReliabilityWeights: reliabilityWeights,
+            enabledStrategies: payload.enabledStrategies
         )
     }
 
@@ -451,6 +468,14 @@ public final class AppSettingsStore {
             payload.enabledStrategyGroups.remove(group)
         } else {
             payload.enabledStrategyGroups.insert(group)
+        }
+    }
+
+    public func toggleStrategy(_ id: StrategyID) {
+        if payload.enabledStrategies.contains(id) {
+            payload.enabledStrategies.remove(id)
+        } else {
+            payload.enabledStrategies.insert(id)
         }
     }
 

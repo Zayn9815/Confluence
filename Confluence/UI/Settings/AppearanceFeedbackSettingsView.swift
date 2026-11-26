@@ -20,14 +20,14 @@ public struct AppearanceFeedbackSettingsView: View {
                             Text(mode.rawValue).tag(mode)
                         }
                     }
-                    InfoButton(.appearanceMode)
+                    ConfluenceInfoButton(.appearanceMode)
                 }
 
                 if coordinator.settings.payload.appearanceMode != .light {
                     Toggle(isOn: $coordinator.settings.payload.usePureBlackAMOLED) {
                         HStack(spacing: 6) {
                             Text(SettingHelpKey.pureBlackBackground.copy.label)
-                            InfoButton(.pureBlackBackground)
+                            ConfluenceInfoButton(.pureBlackBackground)
                         }
                     }
                 }
@@ -35,7 +35,7 @@ public struct AppearanceFeedbackSettingsView: View {
                 Toggle(isOn: $coordinator.settings.payload.useColorBlindSafePalette) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.colorBlindSafePalette.copy.label)
-                        InfoButton(.colorBlindSafePalette)
+                        ConfluenceInfoButton(.colorBlindSafePalette)
                     }
                 }
             } header: {
@@ -48,13 +48,13 @@ public struct AppearanceFeedbackSettingsView: View {
                 Toggle(isOn: $coordinator.settings.payload.use24HourTime) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.clock24Hour.copy.label)
-                        InfoButton(.clock24Hour)
+                        ConfluenceInfoButton(.clock24Hour)
                     }
                 }
                 Toggle(isOn: $coordinator.settings.payload.useUTCTimeZone) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.universalTimeDisplay.copy.label)
-                        InfoButton(.universalTimeDisplay)
+                        ConfluenceInfoButton(.universalTimeDisplay)
                     }
                 }
             }
@@ -66,13 +66,13 @@ public struct AppearanceFeedbackSettingsView: View {
                             Text(d.rawValue).tag(d)
                         }
                     }
-                    InfoButton(.cardDensity)
+                    ConfluenceInfoButton(.cardDensity)
                 }
 
                 Toggle(isOn: $coordinator.settings.payload.showMiniCharts) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.miniCharts.copy.label)
-                        InfoButton(.miniCharts)
+                        ConfluenceInfoButton(.miniCharts)
                     }
                 }
             }
@@ -106,13 +106,13 @@ public struct AppearanceFeedbackSettingsView: View {
                 Toggle(isOn: $coordinator.settings.payload.hapticsEnabled) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.haptics.copy.label)
-                        InfoButton(.haptics)
+                        ConfluenceInfoButton(.haptics)
                     }
                 }
                 Toggle(isOn: $coordinator.settings.payload.arrivalAnimationsEnabled) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.arrivalAnimations.copy.label)
-                        InfoButton(.arrivalAnimations)
+                        ConfluenceInfoButton(.arrivalAnimations)
                     }
                 }
             }

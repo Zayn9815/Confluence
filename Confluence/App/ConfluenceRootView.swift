@@ -67,6 +67,17 @@ public struct ConfluenceRootView: View {
                 coordinator.settings.payload.hasCompletedOnboarding = true
             }
         }
+        .alert(
+            "Scan not started",
+            isPresented: Binding(
+                get: { coordinator.scanBlockedMessage != nil },
+                set: { if !$0 { coordinator.scanBlockedMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { coordinator.scanBlockedMessage = nil }
+        } message: {
+            Text(coordinator.scanBlockedMessage ?? "")
+        }
         .sheet(isPresented: $coordinator.isNotificationInboxPresented) {
             NotificationInboxSheet(coordinator: coordinator, palette: palette)
         }

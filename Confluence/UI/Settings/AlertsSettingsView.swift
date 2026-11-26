@@ -137,7 +137,7 @@ public struct AlertsSettingsView: View {
                 Toggle(isOn: $coordinator.settings.payload.pauseSignalsDuringPreNewsWindow) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.pauseDuringPreNews.copy.label)
-                        InfoButton(.pauseDuringPreNews)
+                        ConfluenceInfoButton(.pauseDuringPreNews)
                     }
                 }
             } header: {
@@ -150,7 +150,7 @@ public struct AlertsSettingsView: View {
                 Toggle(isOn: $coordinator.settings.payload.autoSuppressCrisisAlerts) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.crisisAlertSuppression.copy.label)
-                        InfoButton(.crisisAlertSuppression)
+                        ConfluenceInfoButton(.crisisAlertSuppression)
                     }
                 }
             }

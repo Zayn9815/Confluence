@@ -58,6 +58,15 @@ public enum ConfluenceScorer {
         guard let lastBar = candles.last else { return nil }
         let killzone = SessionCalendar.killzone(at: lastBar.closeTimeEpochSeconds)
 
+        // Hard per-strategy gate: disabled detectors contribute zero contributions, zero traps and 0 score.
+        let enabled = config.enabledStrategies
+        let traps = traps.filter { trap in
+            StrategyID.forTrapKind(trap.triggerKind).map { enabled.contains($0) } ?? false
+        }
+        let positioning: PositioningAssessment? = positioning.flatMap { pos in
+            enabled.contains(pos.provenance == .okxFundingOI ? .positioningOkx : .positioningCot) ? pos : nil
+        }
+
         // Gather all enabled strategy contributions
         var allContributions: [StrategyContribution] = []
         if config.enabledStrategyGroups.contains(.ictSmc) {
@@ -106,7 +115,7 @@ public enum ConfluenceScorer {
 
         // Macro Surprise catalyst contribution
         var macroAlignedDir: TradeDirection = .neutral
-        if config.enabledStrategyGroups.contains(.macroCatalyst), let imp = macroImpulse {
+        if config.enabledStrategyGroups.contains(.macroCatalyst), enabled.contains(.macroSurpriseCatalyst), let imp = macroImpulse {
             macroAlignedDir = MacroPolarityTable.impactDirection(for: asset, currency: imp.currency, stance: imp.netStance)
             if macroAlignedDir != .neutral && !imp.isWhipsawCautionActive {
                 allContributions.append(
@@ -121,6 +130,12 @@ public enum ConfluenceScorer {
                     )
                 )
             }
+        }
+
+        // Drop any contribution whose StrategyID is disabled (defense in depth; detectors already gate at source)
+        allContributions = allContributions.filter { contrib in
+            guard let sid = contrib.strategyID else { return true }
+            return enabled.contains(sid)
         }
 
         // Apply Custom concept filtering deterministically
@@ -207,7 +222,8 @@ public enum ConfluenceScorer {
         let isCustomMode = (config.strategySelectionMode == .custom)
         let requiredAlignedCount: Int = isCustomMode
             ? max(1, min(config.minimumAlignedStrategies, activeConcepts.count))
-            : max(3, config.minimumAlignedStrategies)
+            : config.effectiveMinConfluence(configured: max(3, config.minimumAlignedStrategies))
+        let enabledGroupCount = Set(enabled.map(\.group)).count
 
         if config.strategySelectionMode == .custom && config.customStrategyMatchRule == .requireAllSelected {
             let missingConcepts = activeConcepts.filter { concept in
@@ -222,7 +238,9 @@ public enum ConfluenceScorer {
                 rejectionReasons.append("Only \(aligned.count)/\(requiredAlignedCount) independent strategies aligned")
             }
             let selectedGroupCount = Set(activeConcepts.map(\.group)).count
-            let requireTwoGroups = !isCustomMode || (requiredAlignedCount >= 2 && selectedGroupCount >= 2)
+            let requireTwoGroups = isCustomMode
+                ? (requiredAlignedCount >= 2 && selectedGroupCount >= 2)
+                : (requiredAlignedCount >= 2 && enabledGroupCount >= 2)
             if requireTwoGroups && distinctGroups.count < 2 && aligned.count >= requiredAlignedCount {
                 rejectionReasons.append("Lacks multi-pillar independence (only \(distinctGroups.count) strategy group)")
             }
@@ -371,7 +389,13 @@ public enum ConfluenceScorer {
             dataProvider: dataProvider,
             isMarketClosedSnapshot: isMarketClosed,
             marketClosedReason: marketClosedReason,
-            strengthBreakdown: breakdown
+            strengthBreakdown: breakdown,
+            matchedStrategyIDs: StrategyID.resolveMatched(
+                alignedStrategies: aligned,
+                category: category,
+                trapDirection: trapDir,
+                traps: traps
+            )
         )
     }
 

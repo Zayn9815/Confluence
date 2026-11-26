@@ -429,50 +429,6 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
     }
 }
 
-/// Compact `(i)` help button that opens a clean popover with plain-English explanation.
-public struct InfoButton: View {
-    public let key: SettingHelpKey
-    @State private var isPresented = false
-
-    public init(_ key: SettingHelpKey) {
-        self.key = key
-    }
-
-    /// ScrollView has no intrinsic height inside a popover, so estimate from text length (clamped); longer text scrolls.
-    private var popoverHeight: CGFloat {
-        let chars = key.copy.helpText.count + key.copy.label.count
-        let lines = CGFloat(chars) / 34.0 + 3
-        return min(max(lines * 19 + 32, 140), 420)
-    }
-
-    public var body: some View {
-        Button {
-            isPresented.toggle()
-        } label: {
-            Image(systemName: "info.circle")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("About \(key.copy.label)")
-        .popover(isPresented: $isPresented, arrowEdge: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(key.copy.label)
-                    .font(.headline)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(key.copy.helpText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(16)
-            .frame(minWidth: 260, maxWidth: 320, alignment: .leading)
-            .presentationCompactAdaptation(.popover)
-        }
-    }
-}
-
 /// Reusable section header with a plain-English title and `(i)` popover trigger.
 public struct SettingsSectionHeader: View {
     public let title: String
@@ -486,7 +442,7 @@ public struct SettingsSectionHeader: View {
     public var body: some View {
         HStack(spacing: 6) {
             Text(title)
-            InfoButton(helpKey)
+            ConfluenceInfoButton(helpKey)
         }
     }
 }

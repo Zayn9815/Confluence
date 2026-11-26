@@ -91,9 +91,9 @@ public enum SignalEngine {
 
         // Compute causal positioning assessment (OKX for Crypto, CFTC COT for FX/Gold/Indices/CME BTC)
         var positioning: PositioningAssessment? = nil
-        if let okx = okxDerivatives {
+        if let okx = okxDerivatives, config.enabledStrategies.contains(.positioningOkx) {
             positioning = PositioningAnalyzer.analyzeOKX(snapshot: okx, candles: entrySeries.candles)
-        } else if !cftcCOTRecords.isEmpty {
+        } else if okxDerivatives == nil, !cftcCOTRecords.isEmpty, config.enabledStrategies.contains(.positioningCot) {
             positioning = PositioningAnalyzer.analyzeCFTCCOT(records: cftcCOTRecords, asOfEpochSeconds: serverNowEpochSeconds)
         }
 
@@ -186,9 +186,10 @@ public enum SignalEngine {
         nowEpochSeconds: TimeInterval
     ) -> DetailedSanitizedEvaluation {
         let regime = MarketRegimeClassifier.classify(candles: entryCandles, marketClass: asset.marketClass)
-        let ict = CausalICTDetector.analyze(candles: entryCandles, weights: config.historicalReliabilityWeights)
-        let candlestick = CandlestickPatternDetector.detect(candles: entryCandles, weights: config.historicalReliabilityWeights)
-        let momentum = TrendMomentumDetector.analyze(candles: entryCandles, weights: config.historicalReliabilityWeights)
+        let enabled = config.enabledStrategies
+        let ict = CausalICTDetector.analyze(candles: entryCandles, weights: config.historicalReliabilityWeights, enabled: enabled)
+        let candlestick = CandlestickPatternDetector.detect(candles: entryCandles, weights: config.historicalReliabilityWeights, enabled: enabled)
+        let momentum = TrendMomentumDetector.analyze(candles: entryCandles, weights: config.historicalReliabilityWeights, enabled: enabled)
 
         let htfICT: ICTAnalysis?
         let htfBias: TradeDirection
@@ -234,7 +235,8 @@ public enum SignalEngine {
             roundNumberStep: asset.roundNumberStep,
             candles: entryCandles,
             ict: ict,
-            recentNewsImpulses: macroClusters
+            recentNewsImpulses: macroClusters,
+            enabled: enabled
         )
 
         let signal = ConfluenceScorer.score(

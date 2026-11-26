@@ -11,8 +11,15 @@ public enum TrapLifecycleEngine {
         ict: ICTAnalysis,
         recentNewsImpulses: [MacroClusterImpulse] = [],
         upTo endIndex: Int? = nil,
-        lifetimeHours: Double = 48.0
+        lifetimeHours: Double = 48.0,
+        enabled: Set<StrategyID> = StrategyID.allSet
     ) -> [BehavioralTrap] {
+        // Hard gate: zero computation when every trap toggle is off; each detector below is gated individually.
+        let detectNews = enabled.contains(.trapNewsWhipsaw)
+        let detectOsler = enabled.contains(.trapOslerRoundNumber)
+        let detectSwing = enabled.contains(.trapLiquiditySwingSweep)
+        let detectFomo = enabled.contains(.trapAttentionFomo)
+        guard detectNews || detectOsler || detectSwing || detectFomo else { return [] }
         let lastIdx = min(endIndex ?? (candles.count - 1), candles.count - 1)
         guard lastIdx >= 15 else { return [] }
 
@@ -103,7 +110,7 @@ public enum TrapLifecycleEngine {
                 abs(bar.openTimeEpochSeconds - imp.clusterEpochSeconds) <= 900 ||
                 (imp.clusterEpochSeconds >= bar.openTimeEpochSeconds && imp.clusterEpochSeconds <= bar.closeTimeEpochSeconds)
             }
-            if let macro = matchingMacro, bar.rangeSize >= atr * 1.4 {
+            if detectNews, let macro = matchingMacro, bar.rangeSize >= atr * 1.4 {
                 if wickRatioUpper >= 0.45 && bar.close < bar.open {
                     let level = bar.open + bar.rangeSize * 0.25
                     traps.append(
@@ -148,7 +155,7 @@ public enum TrapLifecycleEngine {
             }
 
             // 2b. Osler Psychological Round-Number Stop-Cluster Sweep
-            if roundNumberStep > 0 {
+            if detectOsler, roundNumberStep > 0 {
                 let nearestUpperRound = floor(bar.high / roundNumberStep) * roundNumberStep
                 if nearestUpperRound > 0 &&
                     bar.high > nearestUpperRound &&
@@ -205,7 +212,7 @@ public enum TrapLifecycleEngine {
             }
 
             // 2c. Confirmed ICT Swing Liquidity Sweep Trap
-            if let sweep = ict.liquiditySweeps.first(where: { $0.sweepBarIndex == i }) {
+            if detectSwing, let sweep = ict.liquiditySweeps.first(where: { $0.sweepBarIndex == i }) {
                 let pierceATR = sweep.pierceDepth / atr
                 if pierceATR >= 0.15 {
                     let trapDir: TrapDirection = (sweep.reversalDirection == .short) ? .bullTrap : .bearTrap
@@ -233,7 +240,7 @@ public enum TrapLifecycleEngine {
             // 2d. Barber & Odean Attention-Driven Retail FOMO Spike (RVOL > 3.0x or extreme parabolic extension + failure close)
             let isAttentionVolumeSpike = (rvol ?? 0.0) >= 3.0
             let isParabolicRange = bar.rangeSize >= atr * 2.4
-            if (isAttentionVolumeSpike || isParabolicRange), let eq = ema20 {
+            if detectFomo, (isAttentionVolumeSpike || isParabolicRange), let eq = ema20 {
                 let distFromEMA = (bar.high - eq) / atr
                 let distBelowEMA = (eq - bar.low) / atr
 

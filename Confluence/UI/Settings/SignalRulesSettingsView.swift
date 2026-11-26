@@ -26,6 +26,28 @@ public struct SignalRulesSettingsView: View {
         return "1 : \(String(format: "%.2f", ratio))"
     }
 
+    private var enabledStrategyCount: Int {
+        coordinator.settings.payload.enabledStrategies.count
+    }
+
+    /// Mirrors the engine rule: `min(configured, max(1, enabled count))`.
+    private var effectiveMinAligned: Int {
+        min(max(3, coordinator.settings.payload.minimumAlignedStrategies), max(1, enabledStrategyCount))
+    }
+
+    private func strategyPresetButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(palette.primaryInk)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(palette.elevatedSurface, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
     public var body: some View {
         let isAdvanced = coordinator.settings.payload.showAdvancedSettings
 
@@ -82,7 +104,7 @@ public struct SignalRulesSettingsView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text(SettingHelpKey.minimumRewardRatio.copy.label)
-                        InfoButton(.minimumRewardRatio)
+                        ConfluenceInfoButton(.minimumRewardRatio)
                         Spacer()
                         Text("1 : \(String(format: "%.1f", coordinator.settings.payload.minimumRiskReward))")
                             .monospacedDigit()
@@ -119,13 +141,13 @@ public struct SignalRulesSettingsView: View {
                 Toggle(isOn: $coordinator.settings.payload.enableTP2Target) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.enableTarget2.copy.label)
-                        InfoButton(.enableTarget2)
+                        ConfluenceInfoButton(.enableTarget2)
                     }
                 }
                 Toggle(isOn: $coordinator.settings.payload.showWeakFilteredSignals) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.showWeakFilteredSignals.copy.label)
-                        InfoButton(.showWeakFilteredSignals)
+                        ConfluenceInfoButton(.showWeakFilteredSignals)
                     }
                 }
                 Toggle(isOn: Binding(
@@ -137,7 +159,7 @@ public struct SignalRulesSettingsView: View {
                 )) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.oneSignalPerCorrelatedCluster.copy.label)
-                        InfoButton(.oneSignalPerCorrelatedCluster)
+                        ConfluenceInfoButton(.oneSignalPerCorrelatedCluster)
                     }
                 }
 
@@ -148,7 +170,7 @@ public struct SignalRulesSettingsView: View {
                                 Text(SettingHelpKey.displayLabel(for: mode)).tag(mode)
                             }
                         }
-                        InfoButton(.levelCalculationMode)
+                        ConfluenceInfoButton(.levelCalculationMode)
                     }
 
                     if coordinator.settings.payload.levelCalculationMode == .fixedPercent {
@@ -202,7 +224,7 @@ public struct SignalRulesSettingsView: View {
                     VStack(alignment: .leading) {
                         HStack {
                             Text("Max Stop loss % (Crypto / Stocks)")
-                            InfoButton(.maxStopLossCap)
+                            ConfluenceInfoButton(.maxStopLossCap)
                             Spacer()
                             Text(String(format: "%.1f%%", coordinator.settings.payload.maxStopLossPercentCryptoStocks))
                                 .monospacedDigit()
@@ -228,64 +250,72 @@ public struct SignalRulesSettingsView: View {
                      : "Turn on \"Show extra controls\" in Settings for fixed-percentage levels, custom rule filters, and custom stats views.")
             }
 
-            // SECTION 3 — Strategy & Concept Selection (Advanced)
-            if isAdvanced {
-                Section {
-                    Picker("Rule mix", selection: $coordinator.settings.payload.strategySelectionMode) {
-                        ForEach(StrategySelectionMode.allCases) { mode in
-                            Text(SettingHelpKey.displayLabel(for: mode)).tag(mode)
-                        }
+            // SECTION 3 — Individual Strategy Toggles (each StrategyID gates exactly one detector)
+            Section {
+                HStack {
+                    Text("Selected strategies (\(enabledStrategyCount)/\(StrategyID.allCases.count))")
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                    Spacer()
+                    Text("Min aligned: \(effectiveMinAligned)")
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(palette.champagneGold)
+                }
+                HStack(spacing: 8) {
+                    strategyPresetButton("Proven Winners") {
+                        coordinator.settings.payload.enabledStrategies = StrategyID.provenWinners
                     }
-
-                    if coordinator.settings.payload.strategySelectionMode == .defaultAll {
-                        ForEach(StrategyGroup.allCases, id: \.self) { group in
-                            Toggle(group.displayName, isOn: Binding(
-                                get: { coordinator.settings.payload.enabledStrategyGroups.contains(group) },
-                                set: { _ in coordinator.settings.toggleStrategyGroup(group) }
-                            ))
-                        }
-                    } else {
-                        Picker("Custom match rule", selection: $coordinator.settings.payload.customStrategyMatchRule) {
-                            ForEach(CustomStrategyMatchRule.allCases) { rule in
-                                Text(SettingHelpKey.displayLabel(for: rule)).tag(rule)
-                            }
-                        }
-
-                        if coordinator.settings.payload.customStrategyMatchRule == .anyWithMinConfluence {
-                            Stepper(
-                                "Minimum aligned rules: \(coordinator.settings.payload.minimumAlignedStrategies)",
-                                value: $coordinator.settings.payload.minimumAlignedStrategies,
-                                in: 1...6,
-                                step: 1
-                            )
-                        }
-
-                        HStack {
-                            Text("Selected rules (\(coordinator.settings.payload.selectedStrategyConcepts.count)/\(StrategyConcept.allCases.count))")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.secondaryInk)
-                            Spacer()
-                            Button("Select All") {
-                                coordinator.settings.payload.selectedStrategyConcepts = Set(StrategyConcept.allCases)
-                            }
-                            .font(.caption2.weight(.semibold))
-                        }
-
-                        ForEach(StrategyConcept.allCases) { concept in
-                            Toggle(concept.displayName, isOn: Binding(
-                                get: { coordinator.settings.payload.selectedStrategyConcepts.contains(concept) },
-                                set: { _ in coordinator.settings.toggleStrategyConcept(concept) }
-                            ))
-                        }
+                    strategyPresetButton("Select All") {
+                        coordinator.settings.payload.enabledStrategies = StrategyID.allSet
                     }
-                } header: {
-                    SettingsSectionHeader(SettingHelpKey.strategySelection.copy.label, helpKey: .strategySelection)
-                } footer: {
-                    if coordinator.settings.payload.strategySelectionMode == .custom {
-                        Text("When 1–2 custom rules are selected, Confluence matches the required count to your selection so custom rules can fire cleanly.")
+                    strategyPresetButton("Clear All") {
+                        coordinator.settings.payload.enabledStrategies = []
                     }
                 }
+                if isAdvanced {
+                    Stepper(
+                        "Minimum aligned strategies: \(max(3, coordinator.settings.payload.minimumAlignedStrategies))",
+                        value: Binding(
+                            get: { max(3, coordinator.settings.payload.minimumAlignedStrategies) },
+                            set: { coordinator.settings.payload.minimumAlignedStrategies = $0 }
+                        ),
+                        in: 3...6,
+                        step: 1
+                    )
+                    .font(.caption)
+                }
+                if enabledStrategyCount == 0 {
+                    Label(MarketScannerCoordinator.noStrategiesEnabledMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(palette.trapAmber)
+                }
+            } header: {
+                SettingsSectionHeader(SettingHelpKey.strategySelection.copy.label, helpKey: .strategySelection)
+            } footer: {
+                Text("Only selected strategies are scanned. If you pick fewer strategies than the minimum, the required count drops to match your selection (never below 1).")
+            }
 
+            ForEach(StrategyCategory.allCases) { category in
+                Section {
+                    ForEach(category.strategies) { sid in
+                        Toggle(sid.displayName, isOn: Binding(
+                            get: { coordinator.settings.payload.enabledStrategies.contains(sid) },
+                            set: { isOn in
+                                if isOn {
+                                    coordinator.settings.payload.enabledStrategies.insert(sid)
+                                } else {
+                                    coordinator.settings.payload.enabledStrategies.remove(sid)
+                                }
+                            }
+                        ))
+                    }
+                } header: {
+                    let selected = category.strategies.filter { coordinator.settings.payload.enabledStrategies.contains($0) }.count
+                    Text("\(category.displayName) (\(selected)/\(category.strategies.count))")
+                }
+            }
+
+            if isAdvanced {
                 // SECTION 4 — Custom Calibration View Filter (Advanced — never alters Fixed Headline Win Rate)
                 Section {
                     Picker("Win rule", selection: $coordinator.settings.payload.calibrationWinDefinition) {
@@ -357,7 +387,7 @@ public struct SignalRulesSettingsView: View {
                 Toggle(isOn: $coordinator.settings.payload.geminiEnabled) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.aiSecondOpinion.copy.label)
-                        InfoButton(.aiSecondOpinion)
+                        ConfluenceInfoButton(.aiSecondOpinion)
                     }
                 }
 
@@ -379,7 +409,7 @@ public struct SignalRulesSettingsView: View {
                             Text(provider.displayName).tag(provider)
                         }
                     }
-                    InfoButton(.aiProviderAndModel)
+                    ConfluenceInfoButton(.aiProviderAndModel)
                 }
 
                 let activeProvider = coordinator.settings.payload.aiProvider
@@ -454,7 +484,7 @@ public struct SignalRulesSettingsView: View {
                         in: 5...100,
                         step: 5
                     )
-                    InfoButton(.sharedDailyAILimit)
+                    ConfluenceInfoButton(.sharedDailyAILimit)
                 }
 
                 HStack {

@@ -159,7 +159,7 @@ public struct MarketsFeedsSettingsView: View {
                             Text(mode.displayLabel).tag(mode)
                         }
                     }
-                    InfoButton(.tradFiLiveFeed)
+                    ConfluenceInfoButton(.tradFiLiveFeed)
                 }
 
                 HStack(spacing: 6) {
@@ -174,7 +174,7 @@ public struct MarketsFeedsSettingsView: View {
                             Text(mode.displayLabel).tag(mode)
                         }
                     }
-                    InfoButton(.cryptoLiveFeed)
+                    ConfluenceInfoButton(.cryptoLiveFeed)
                 }
 
                 HStack(spacing: 6) {
@@ -183,13 +183,13 @@ public struct MarketsFeedsSettingsView: View {
                             Text(mode.displayLabel).tag(mode)
                         }
                     }
-                    InfoButton(.defaultChartView)
+                    ConfluenceInfoButton(.defaultChartView)
                 }
 
                 Toggle(isOn: $coordinator.settings.payload.showTradingViewOption) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.showTradingViewOption.copy.label)
-                        InfoButton(.showTradingViewOption)
+                        ConfluenceInfoButton(.showTradingViewOption)
                     }
                 }
             } header: {
@@ -202,7 +202,7 @@ public struct MarketsFeedsSettingsView: View {
                 Toggle(isOn: $coordinator.settings.payload.scanOnOpenEnabled) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.scanOnOpen.copy.label)
-                        InfoButton(.scanOnOpen)
+                        ConfluenceInfoButton(.scanOnOpen)
                     }
                 }
 
@@ -218,7 +218,7 @@ public struct MarketsFeedsSettingsView: View {
                             Text(opt.displayLabel).tag(opt)
                         }
                     }
-                    InfoButton(.autoScanSchedule)
+                    ConfluenceInfoButton(.autoScanSchedule)
                 }
 
                 if let nextEpoch = coordinator.nextScheduledScanEpochSeconds {
@@ -252,7 +252,7 @@ public struct MarketsFeedsSettingsView: View {
                 )) {
                     HStack(spacing: 6) {
                         Text(SettingHelpKey.backgroundRefresh.copy.label)
-                        InfoButton(.backgroundRefresh)
+                        ConfluenceInfoButton(.backgroundRefresh)
                     }
                 }
             } header: {

@@ -339,21 +339,24 @@ public struct SignalCardView: View {
                 }
             }
 
-            // 6. Aligned Strategies Chips (Expandable with Glossary (i) deep-link)
-            if !signal.alignedStrategies.isEmpty {
+            // 6. Matched Strategies Provenance Chips (Expandable with Glossary (i) deep-link)
+            if !signal.alignedStrategies.isEmpty || !signal.matchedStrategyIDs.isEmpty {
+                let matchedCount = max(signal.matchedStrategyIDs.count, signal.alignedStrategies.count)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) { showStrategies.toggle() }
                         } label: {
                             HStack {
-                                Text("Aligned Strategies (\(signal.alignedStrategies.count))")
+                                Text("Matched Strategies (\(matchedCount))")
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(palette.secondaryInk)
                                 Spacer()
-                                Image(systemName: showStrategies ? "chevron.up" : "chevron.down")
-                                    .font(.caption2)
-                                    .foregroundStyle(palette.tertiaryInk)
+                                if !signal.alignedStrategies.isEmpty {
+                                    Image(systemName: showStrategies ? "chevron.up" : "chevron.down")
+                                        .font(.caption2)
+                                        .foregroundStyle(palette.tertiaryInk)
+                                }
                             }
                         }
                         .buttonStyle(.plain)
@@ -373,13 +376,24 @@ public struct SignalCardView: View {
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
-                            ForEach(signal.alignedStrategies) { strat in
-                                Button {
-                                    onOpenGlossaryTerm?(strat.name)
-                                } label: {
-                                    badgePill(strat.name, color: palette.primaryInk, fill: palette.elevatedSurface)
+                            if !signal.matchedStrategyIDs.isEmpty {
+                                ForEach(signal.matchedStrategyIDs) { sid in
+                                    Button {
+                                        onOpenGlossaryTerm?(sid.displayName)
+                                    } label: {
+                                        badgePill(sid.displayName, color: palette.primaryInk, fill: palette.elevatedSurface)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
+                            } else {
+                                ForEach(signal.alignedStrategies) { strat in
+                                    Button {
+                                        onOpenGlossaryTerm?(strat.name)
+                                    } label: {
+                                        badgePill(strat.name, color: palette.primaryInk, fill: palette.elevatedSurface)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
                         }
                     }

@@ -5,8 +5,11 @@ public enum CandlestickPatternDetector {
     public static func detect(
         candles: [Candle],
         upTo endIndex: Int? = nil,
-        weights: [String: Double] = [:]
+        weights: [String: Double] = [:],
+        enabled: Set<StrategyID> = StrategyID.allSet
     ) -> [StrategyContribution] {
+        // Hard gate: zero computation when every candlestick toggle is off.
+        guard !enabled.isDisjoint(with: StrategyCategory.candlestickPatterns.strategies) else { return [] }
         let lastIdx = min(endIndex ?? (candles.count - 1), candles.count - 1)
         guard lastIdx >= 14 else { return [] }
 
@@ -26,7 +29,8 @@ public enum CandlestickPatternDetector {
         var results: [StrategyContribution] = []
 
         // 1. Bullish / Bearish Engulfing
-        if current.isBullish && prev.isBearish &&
+        if enabled.contains(.candleBullishEngulfing),
+            current.isBullish && prev.isBearish &&
             current.bodySize > prev.bodySize * 1.05 &&
             current.close >= prev.open &&
             current.open <= prev.close &&
@@ -43,7 +47,8 @@ public enum CandlestickPatternDetector {
                     detail: "Closed bullish body engulfed prior bearish candle (\(String(format: "%.2f", current.bodySize / atr))x ATR)."
                 )
             )
-        } else if current.isBearish && prev.isBullish &&
+        } else if enabled.contains(.candleBearishEngulfing),
+                    current.isBearish && prev.isBullish &&
                     current.bodySize > prev.bodySize * 1.05 &&
                     current.close <= prev.open &&
                     current.open >= prev.close &&
@@ -63,12 +68,12 @@ public enum CandlestickPatternDetector {
         }
 
         // 2. Pin Bar / Hammer / Shooting Star Rejection Wick
-        if current.rangeSize >= atr * 0.65 {
+        if enabled.contains(.candleHammerPinbar) || enabled.contains(.candleShootingStar), current.rangeSize >= atr * 0.65 {
             let lowerWickRatio = current.lowerWick / current.rangeSize
             let upperWickRatio = current.upperWick / current.rangeSize
             let bodyRatio = current.bodySize / current.rangeSize
 
-            if lowerWickRatio >= 0.55 && upperWickRatio <= 0.22 && bodyRatio <= 0.35 {
+            if enabled.contains(.candleHammerPinbar), lowerWickRatio >= 0.55 && upperWickRatio <= 0.22 && bodyRatio <= 0.35 {
                 let id = "candle_hammer_pinbar"
                 results.append(
                     StrategyContribution(
@@ -81,7 +86,7 @@ public enum CandlestickPatternDetector {
                         detail: "Strong lower rejection wick (\(Int((lowerWickRatio * 100).rounded()))% of bar range) signaling demand absorption."
                     )
                 )
-            } else if upperWickRatio >= 0.55 && lowerWickRatio <= 0.22 && bodyRatio <= 0.35 {
+            } else if enabled.contains(.candleShootingStar), upperWickRatio >= 0.55 && lowerWickRatio <= 0.22 && bodyRatio <= 0.35 {
                 let id = "candle_shooting_star"
                 results.append(
                     StrategyContribution(
@@ -98,7 +103,7 @@ public enum CandlestickPatternDetector {
         }
 
         // 3. Strong Displacement / Marubozu
-        if current.rangeSize >= atr * 1.25 && current.bodySize / max(current.rangeSize, 1e-12) >= 0.72 {
+        if enabled.contains(.candleDisplacement), current.rangeSize >= atr * 1.25 && current.bodySize / max(current.rangeSize, 1e-12) >= 0.72 {
             let dir: TradeDirection = current.isBullish ? .long : .short
             let id = "candle_displacement"
             results.append(
@@ -116,7 +121,7 @@ public enum CandlestickPatternDetector {
 
         // 4. Inside Bar Breakout (prev inside prev2, current breaks and closes outside prev2)
         let prevInsidePrev2 = prev.high <= prev2.high && prev.low >= prev2.low
-        if prevInsidePrev2 {
+        if enabled.contains(.candleInsideBreakout), prevInsidePrev2 {
             if current.close > prev2.high {
                 let id = "candle_inside_breakout"
                 results.append(

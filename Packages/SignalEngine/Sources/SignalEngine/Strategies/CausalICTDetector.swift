@@ -171,8 +171,12 @@ public enum CausalICTDetector {
         candles: [Candle],
         upTo endIndex: Int? = nil,
         swingWing: Int = 3,
-        weights: [String: Double] = [:]
+        weights: [String: Double] = [:],
+        enabled: Set<StrategyID> = StrategyID.allSet
     ) -> ICTAnalysis {
+        // NOTE: structural primitives (swings, FVG/OB zones, sweeps, EQ) are always computed because
+        // Stop loss / Target anchoring, trap detection and chart overlays depend on them. Only the
+        // scored StrategyContributions below are hard-gated per `StrategyID`.
         let lastIdx = min(endIndex ?? (candles.count - 1), candles.count - 1)
         guard lastIdx >= max(swingWing * 2 + 2, 10) else {
             return ICTAnalysis(
@@ -375,6 +379,7 @@ public enum CausalICTDetector {
         if let recentBreak = structureBreaks.last, lastIdx - recentBreak.breakBarIndex <= 6 {
             freshStructureBreak = recentBreak
             let id = recentBreak.kind == .mss ? "ict_mss" : "ict_bos"
+            if enabled.contains(recentBreak.kind == .mss ? .ictMss : .ictBos) {
             contributions.append(
                 StrategyContribution(
                     id: id,
@@ -386,6 +391,7 @@ public enum CausalICTDetector {
                     detail: "\(recentBreak.kind.rawValue) \(recentBreak.direction.rawValue.uppercased()) closed past swing level \(priceFmt.format(recentBreak.brokenLevel))."
                 )
             )
+            }
         } else {
             freshStructureBreak = nil
         }
@@ -395,6 +401,7 @@ public enum CausalICTDetector {
         if let recentSweep = sweeps.last, lastIdx - recentSweep.sweepBarIndex <= 3 {
             freshSweep = recentSweep
             let id = "ict_liquidity_sweep"
+            if enabled.contains(.ictLiquiditySweep) {
             contributions.append(
                 StrategyContribution(
                     id: id,
@@ -406,12 +413,13 @@ public enum CausalICTDetector {
                     detail: "Swept liquidity at \(priceFmt.format(recentSweep.sweptLevel)) and reclaimed inside range."
                 )
             )
+            }
         } else {
             freshSweep = nil
         }
 
         // Active FVG: must be freshly formed (age <= 4) OR actively retested / proximate within 1.25 * ATR
-        let recentActiveFVG = fvgs.reversed().first { fvg in
+        let recentActiveFVG: FairValueGap? = !enabled.contains(.ictFvg) ? nil : fvgs.reversed().first(where: { fvg in
             let age = lastIdx - fvg.formedAtIndex
             guard age >= 0 && age <= 18 else { return false }
             let distanceToZone: Double
@@ -433,7 +441,7 @@ public enum CausalICTDetector {
                        (fvg.direction == .short && lastBar.close <= fvg.top && distanceToZone <= proximityLimit)
             }
             return false
-        }
+        })
         if let fvg = recentActiveFVG {
             let id = "ict_fvg"
             contributions.append(
@@ -450,7 +458,7 @@ public enum CausalICTDetector {
         }
 
         // Order Block: must be freshly validated (age <= 4) OR actively tapped / within 1.25 * ATR
-        let recentOB = orderBlocks.reversed().first { ob in
+        let recentOB: OrderBlock? = !enabled.contains(.ictOrderBlock) ? nil : orderBlocks.reversed().first(where: { ob in
             let age = lastIdx - ob.validFromIndex
             guard age >= 0 && age <= 25 else { return false }
             let distanceToZone: Double
@@ -471,7 +479,7 @@ public enum CausalICTDetector {
                 return age <= 4 || nearZone
             }
             return nearZone && (ob.mitigatedAtIndex.map { lastIdx - $0 <= 1 } ?? false)
-        }
+        })
         if let ob = recentOB {
             let id = "ict_order_block"
             contributions.append(
@@ -491,7 +499,7 @@ public enum CausalICTDetector {
         if let zone = dealingZone, let eq = eqPrice {
             if zone == .discount {
                 let opposesFreshBreak = (freshStructureBreak?.direction == .short) && (freshSweep?.reversalDirection != .long)
-                if !opposesFreshBreak {
+                if !opposesFreshBreak && enabled.contains(.ictDiscountEq) {
                     let id = "ict_discount_eq"
                     contributions.append(
                         StrategyContribution(
@@ -507,7 +515,7 @@ public enum CausalICTDetector {
                 }
             } else if zone == .premium {
                 let opposesFreshBreak = (freshStructureBreak?.direction == .long) && (freshSweep?.reversalDirection != .short)
-                if !opposesFreshBreak {
+                if !opposesFreshBreak && enabled.contains(.ictPremiumEq) {
                     let id = "ict_premium_eq"
                     contributions.append(
                         StrategyContribution(

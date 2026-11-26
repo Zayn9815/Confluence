@@ -82,6 +82,9 @@ public final class MarketScannerCoordinator {
     public var scanProgressByMarket: [MarketClass: String] = [:]
     public var lastScanDate: Date?
     public var lastScanError: String?
+    /// Set when a foreground scan is aborted before any network call (e.g. zero strategies enabled).
+    public var scanBlockedMessage: String?
+    public static let noStrategiesEnabledMessage = "Enable at least 1 strategy in Signal Rules & AI before scanning."
     public var scheduledPreNewsCount: Int = 0
     public var notificationStatusDescription: String = "Checking..."
     public var activeBanner: FloatingAlertBanner?
@@ -675,6 +678,13 @@ public final class MarketScannerCoordinator {
 
     public func scanAllMarkets(isBackground: Bool = false) async {
         guard !isScanning else { return }
+        // Zero-strategy guard: abort before any network call.
+        guard !settings.payload.enabledStrategies.isEmpty else {
+            lastScanError = Self.noStrategiesEnabledMessage
+            if !isBackground { scanBlockedMessage = Self.noStrategiesEnabledMessage }
+            diagnosticLog.log(.warn, category: isBackground ? .background : .engine, message: "Scan skipped: 0 strategies enabled.")
+            return
+        }
         isScanning = true
         lastScanError = nil
         newlyArrivedSignalIds = []

@@ -270,6 +270,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
     public let calibratedProbability: Double?
     public let calibrationSampleCount: Int?
     public let origin: SignalOrigin
+    /// Exact `StrategyID` list that fired for this signal/trap card (provenance tagging).
+    public let matchedStrategyIDs: [StrategyID]
 
     public init(
         id: String,
@@ -306,7 +308,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         strengthBreakdown: SignalStrengthBreakdown? = nil,
         calibratedProbability: Double? = nil,
         calibrationSampleCount: Int? = nil,
-        origin: SignalOrigin = .scanner
+        origin: SignalOrigin = .scanner,
+        matchedStrategyIDs: [StrategyID]? = nil
     ) {
         self.id = id
         self.fingerprint = fingerprint
@@ -343,6 +346,7 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         self.calibratedProbability = calibratedProbability
         self.calibrationSampleCount = calibrationSampleCount
         self.origin = origin
+        self.matchedStrategyIDs = matchedStrategyIDs ?? StrategyID.resolveMatched(alignedStrategies: alignedStrategies, category: category, trapDirection: trapDirection, traps: overlays.traps)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -352,7 +356,7 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         case alignedStrategies, rejectionReasons, psychologyReport, preNewsBadge
         case postNewsCatalystBadge, overlays, recentCandles, aiJudgment, aiConfirmed
         case dataProvider, isMarketClosedSnapshot, marketClosedReason, strengthBreakdown
-        case calibratedProbability, calibrationSampleCount, origin
+        case calibratedProbability, calibrationSampleCount, origin, matchedStrategyIDs
     }
 
     public init(from decoder: Decoder) throws {
@@ -392,6 +396,11 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         calibratedProbability = try c.decodeIfPresent(Double.self, forKey: .calibratedProbability)
         calibrationSampleCount = try c.decodeIfPresent(Int.self, forKey: .calibrationSampleCount)
         origin = (try? c.decodeIfPresent(SignalOrigin.self, forKey: .origin)) ?? .scanner
+        if let decodedIDs = try? c.decodeIfPresent([StrategyID].self, forKey: .matchedStrategyIDs) {
+            matchedStrategyIDs = decodedIDs
+        } else {
+            matchedStrategyIDs = StrategyID.resolveMatched(alignedStrategies: alignedStrategies, category: category, trapDirection: trapDirection, traps: overlays.traps)
+        }
     }
 
     public func withAIJudgment(_ judgment: ReflexJudgment, threshold: Double) -> TradeSignal {
@@ -430,7 +439,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             strengthBreakdown: strengthBreakdown,
             calibratedProbability: calibratedProbability,
             calibrationSampleCount: calibrationSampleCount,
-            origin: origin
+            origin: origin,
+            matchedStrategyIDs: matchedStrategyIDs
         )
     }
 
@@ -471,7 +481,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             strengthBreakdown: strengthBreakdown,
             calibratedProbability: probability,
             calibrationSampleCount: sampleCount,
-            origin: origin
+            origin: origin,
+            matchedStrategyIDs: matchedStrategyIDs
         )
     }
 
@@ -511,7 +522,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             strengthBreakdown: strengthBreakdown,
             calibratedProbability: calibratedProbability,
             calibrationSampleCount: calibrationSampleCount,
-            origin: newOrigin
+            origin: newOrigin,
+            matchedStrategyIDs: matchedStrategyIDs
         )
     }
 
@@ -680,6 +692,8 @@ public struct EngineConfig: Codable, Sendable, Equatable {
     public var aiConfirmationThreshold: Double
     public var signalCooldownSeconds: TimeInterval
     public var historicalReliabilityWeights: [String: Double]
+    /// Individually enabled detectors. Disabled strategies emit zero contributions/traps and add 0 to the score.
+    public var enabledStrategies: Set<StrategyID>
 
     public init(
         htfTimeframe: Timeframe = .h4,
@@ -704,7 +718,8 @@ public struct EngineConfig: Codable, Sendable, Equatable {
         suppressAlertsInCrisisRegime: Bool = true,
         aiConfirmationThreshold: Double = 0.80,
         signalCooldownSeconds: TimeInterval = 3_600,
-        historicalReliabilityWeights: [String: Double] = [:]
+        historicalReliabilityWeights: [String: Double] = [:],
+        enabledStrategies: Set<StrategyID> = StrategyID.allSet
     ) {
         self.htfTimeframe = htfTimeframe
         self.entryTimeframe = entryTimeframe
@@ -729,6 +744,12 @@ public struct EngineConfig: Codable, Sendable, Equatable {
         self.aiConfirmationThreshold = aiConfirmationThreshold
         self.signalCooldownSeconds = signalCooldownSeconds
         self.historicalReliabilityWeights = historicalReliabilityWeights
+        self.enabledStrategies = enabledStrategies
+    }
+
+    /// `min(configured, max(1, enabled count))` so 1–2 strategy selections can still fire.
+    public func effectiveMinConfluence(configured: Int) -> Int {
+        min(configured, max(1, enabledStrategies.count))
     }
 
     public func maxStopLossPercent(for marketClass: MarketClass) -> Double {

@@ -37,8 +37,11 @@ public enum TrendMomentumDetector {
     public static func analyze(
         candles: [Candle],
         upTo endIndex: Int? = nil,
-        weights: [String: Double] = [:]
+        weights: [String: Double] = [:],
+        enabled: Set<StrategyID> = StrategyID.allSet
     ) -> TrendMomentumSnapshot {
+        // NOTE: EMA/ATR/RVOL values are always computed (ATR anchors Stop loss / Targets and EMAs feed HTF bias);
+        // only the scored momentum StrategyContributions are hard-gated per `StrategyID`.
         let lastIdx = min(endIndex ?? (candles.count - 1), candles.count - 1)
         guard lastIdx >= 20 else {
             return TrendMomentumSnapshot(
@@ -81,7 +84,7 @@ public enum TrendMomentumDetector {
         var contributions: [StrategyContribution] = []
 
         // 1. EMA Stack Pullback / Trend Continuation
-        if let v20 = e20, let v50 = e50, atr > 0 {
+        if enabled.contains(.momentumEmaPullback), let v20 = e20, let v50 = e50, atr > 0 {
             let bullishStack = (e200 == nil) ? (v20 > v50) : (v20 > v50 && v50 > e200!)
             let bearishStack = (e200 == nil) ? (v20 < v50) : (v20 < v50 && v50 < e200!)
 
@@ -115,7 +118,7 @@ public enum TrendMomentumDetector {
         }
 
         // 2. Causal RSI(14) Divergence over recent 14-bar lookback (verifies genuine 3-bar local pivot)
-        if rsiSeries.count >= 16, let currentRSI = rsi, currentRSI.isFinite {
+        if enabled.contains(.momentumRsiDivergence), rsiSeries.count >= 16, let currentRSI = rsi, currentRSI.isFinite {
             let lookback = 12
             let windowStart = max(1, lastIdx - lookback)
             let windowEnd = lastIdx - 2
@@ -189,7 +192,7 @@ public enum TrendMomentumDetector {
         }
 
         // 3. ATR Squeeze Breakout (prior 10 bars compressed below 0.80 * 40-bar avg ATR, current bar expands & breaks range)
-        if atrSeries.count >= 25 && lastIdx >= 12 {
+        if enabled.contains(.momentumAtrSqueeze), atrSeries.count >= 25 && lastIdx >= 12 {
             let recentBaseline = atrSeries.suffix(25).dropLast()
             let avgATR = recentBaseline.reduce(0, +) / Double(max(recentBaseline.count, 1))
             let prevATR = atrSeries[atrSeries.count - 2]
@@ -227,7 +230,7 @@ public enum TrendMomentumDetector {
         }
 
         // 4. RVOL Confirmation (ONLY when real volume exists; never emits on OTC nil volume)
-        if let rv = rvol, rv >= 1.5 {
+        if enabled.contains(.momentumRvol), let rv = rvol, rv >= 1.5 {
             let dir: TradeDirection = lastBar.isBullish ? .long : .short
             let id = "momentum_rvol"
             contributions.append(

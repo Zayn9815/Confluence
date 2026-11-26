@@ -98,7 +98,7 @@ public struct SettingsTabView: View {
                                     .foregroundStyle(palette.secondaryInk)
                             }
                             Spacer(minLength: 4)
-                            InfoButton(.showAdvancedSettings)
+                            ConfluenceInfoButton(.showAdvancedSettings)
                         }
                     }
                     .tint(palette.champagneGold)
