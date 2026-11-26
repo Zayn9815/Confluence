@@ -116,6 +116,9 @@ public struct DemoOrderRequest: Codable, Sendable, Equatable {
     public let limitExpiryEpochSeconds: TimeInterval?
     public let allowStalePriceFill: Bool
     public let feesEnabled: Bool
+    public let activeStrategyProfileKey: String
+    public let enabledStrategyIDsCSV: String
+    public let orderFlowStatus: String
 
     public init(
         id: String = UUID().uuidString,
@@ -137,7 +140,10 @@ public struct DemoOrderRequest: Codable, Sendable, Equatable {
         contractSpec: InstrumentContractSpec? = nil,
         limitExpiryEpochSeconds: TimeInterval? = nil,
         allowStalePriceFill: Bool = false,
-        feesEnabled: Bool = false
+        feesEnabled: Bool = false,
+        activeStrategyProfileKey: String = "",
+        enabledStrategyIDsCSV: String = "",
+        orderFlowStatus: String = "off"
     ) {
         self.id = id
         self.signalId = signalId
@@ -159,6 +165,9 @@ public struct DemoOrderRequest: Codable, Sendable, Equatable {
         self.limitExpiryEpochSeconds = limitExpiryEpochSeconds
         self.allowStalePriceFill = allowStalePriceFill
         self.feesEnabled = feesEnabled
+        self.activeStrategyProfileKey = activeStrategyProfileKey
+        self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
+        self.orderFlowStatus = orderFlowStatus
     }
 }
 
@@ -202,6 +211,9 @@ public struct DemoPosition: Codable, Sendable, Equatable, Identifiable {
     public var realizedPnLUSD: Double
     public var feesPaidUSD: Double
     public var rMultiple: Double
+    public var activeStrategyProfileKey: String
+    public var enabledStrategyIDsCSV: String
+    public var orderFlowStatus: String
 
     public init(
         id: String,
@@ -237,7 +249,10 @@ public struct DemoPosition: Codable, Sendable, Equatable, Identifiable {
         closedAtEpochSeconds: TimeInterval? = nil,
         realizedPnLUSD: Double = 0,
         feesPaidUSD: Double = 0,
-        rMultiple: Double = 0
+        rMultiple: Double = 0,
+        activeStrategyProfileKey: String = "",
+        enabledStrategyIDsCSV: String = "",
+        orderFlowStatus: String = "off"
     ) {
         self.id = id
         self.signalId = signalId
@@ -273,6 +288,60 @@ public struct DemoPosition: Codable, Sendable, Equatable, Identifiable {
         self.realizedPnLUSD = realizedPnLUSD
         self.feesPaidUSD = feesPaidUSD
         self.rMultiple = rMultiple
+        self.activeStrategyProfileKey = activeStrategyProfileKey
+        self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
+        self.orderFlowStatus = orderFlowStatus
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, signalId, symbol, marketClass, timeframe, direction, orderType
+        case createdAtEpochSeconds, entryPrice, entryLow, entryHigh
+        case filledPrice, filledAtEpochSeconds, fillBarOpenEpochSeconds, limitExpiryEpochSeconds
+        case stopLoss, initialStopLoss, target1, target2, exitTarget, isStopLossAtBreakeven
+        case quantity, unitLabel, contractSpec, leverage, marginReservedUSD, wasClampedToFreeMargin
+        case feesEnabled, status, exitPrice, closedAtEpochSeconds, realizedPnLUSD, feesPaidUSD, rMultiple
+        case activeStrategyProfileKey, enabledStrategyIDsCSV, orderFlowStatus
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        signalId = try c.decodeIfPresent(String.self, forKey: .signalId)
+        symbol = try c.decode(String.self, forKey: .symbol)
+        marketClass = try c.decode(MarketClass.self, forKey: .marketClass)
+        timeframe = try c.decode(Timeframe.self, forKey: .timeframe)
+        direction = try c.decode(TradeDirection.self, forKey: .direction)
+        orderType = try c.decode(DemoOrderType.self, forKey: .orderType)
+        createdAtEpochSeconds = try c.decode(TimeInterval.self, forKey: .createdAtEpochSeconds)
+        entryPrice = try c.decode(Double.self, forKey: .entryPrice)
+        entryLow = try c.decode(Double.self, forKey: .entryLow)
+        entryHigh = try c.decode(Double.self, forKey: .entryHigh)
+        filledPrice = try c.decodeIfPresent(Double.self, forKey: .filledPrice)
+        filledAtEpochSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .filledAtEpochSeconds)
+        fillBarOpenEpochSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .fillBarOpenEpochSeconds)
+        limitExpiryEpochSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .limitExpiryEpochSeconds)
+        stopLoss = try c.decode(Double.self, forKey: .stopLoss)
+        initialStopLoss = try c.decode(Double.self, forKey: .initialStopLoss)
+        target1 = try c.decode(Double.self, forKey: .target1)
+        target2 = try c.decodeIfPresent(Double.self, forKey: .target2)
+        exitTarget = try c.decode(DemoExitTarget.self, forKey: .exitTarget)
+        isStopLossAtBreakeven = try c.decode(Bool.self, forKey: .isStopLossAtBreakeven)
+        quantity = try c.decode(Double.self, forKey: .quantity)
+        unitLabel = try c.decode(String.self, forKey: .unitLabel)
+        contractSpec = try c.decode(InstrumentContractSpec.self, forKey: .contractSpec)
+        leverage = try c.decode(Double.self, forKey: .leverage)
+        marginReservedUSD = try c.decode(Double.self, forKey: .marginReservedUSD)
+        wasClampedToFreeMargin = try c.decode(Bool.self, forKey: .wasClampedToFreeMargin)
+        feesEnabled = try c.decode(Bool.self, forKey: .feesEnabled)
+        status = try c.decode(DemoPositionStatus.self, forKey: .status)
+        exitPrice = try c.decodeIfPresent(Double.self, forKey: .exitPrice)
+        closedAtEpochSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .closedAtEpochSeconds)
+        realizedPnLUSD = try c.decode(Double.self, forKey: .realizedPnLUSD)
+        feesPaidUSD = try c.decode(Double.self, forKey: .feesPaidUSD)
+        rMultiple = try c.decode(Double.self, forKey: .rMultiple)
+        activeStrategyProfileKey = (try? c.decodeIfPresent(String.self, forKey: .activeStrategyProfileKey)) ?? ""
+        enabledStrategyIDsCSV = (try? c.decodeIfPresent(String.self, forKey: .enabledStrategyIDsCSV)) ?? ""
+        orderFlowStatus = (try? c.decodeIfPresent(String.self, forKey: .orderFlowStatus)) ?? "off"
     }
 
     public var activeTargetPrice: Double {
@@ -656,7 +725,10 @@ public enum DemoWalletEngine {
             marginReservedUSD: requiredMargin,
             wasClampedToFreeMargin: wasClamped,
             feesEnabled: request.feesEnabled,
-            status: isMarket ? .open : .pendingLimit
+            status: isMarket ? .open : .pendingLimit,
+            activeStrategyProfileKey: request.activeStrategyProfileKey,
+            enabledStrategyIDsCSV: request.enabledStrategyIDsCSV,
+            orderFlowStatus: request.orderFlowStatus
         )
 
         var updated = wallet

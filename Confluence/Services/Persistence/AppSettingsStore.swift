@@ -124,6 +124,8 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var enabledStrategyGroups: Set<StrategyGroup> = Set(StrategyGroup.allCases)
     /// v1.6 individual strategy toggles (JSON array of `StrategyID` raw values). Fresh installs start with Proven Winners.
     public var enabledStrategies: Set<StrategyID> = StrategyID.provenWinners
+    /// Crypto-only live Order Flow & Institutional Absorption module (skipped on Forex/TradFi with zero penalty).
+    public var isOrderFlowEnabled: Bool = false
     public var strategySelectionMode: StrategySelectionMode = .defaultAll
     public var selectedStrategyConcepts: Set<StrategyConcept> = Set(StrategyConcept.allCases)
     public var customStrategyMatchRule: CustomStrategyMatchRule = .anyWithMinConfluence
@@ -157,6 +159,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var cryptoLiveFeedMode: CryptoLiveFeedMode = .liveStream
     public var defaultChartViewMode: DefaultChartViewMode = .confluence
     public var chartEngine: ChartEngineOption = .lightweightCharts
+    public var tradingViewPreferDesktop: Bool = false
     public var showTradingViewOption: Bool = true
     public var scanOnOpenEnabled: Bool = true
     public var autoScanIntervalMinutes: Int = ScanSchedulePolicy.defaultIntervalMinutes
@@ -178,7 +181,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         case htfTimeframe, entryTimeframe, minimumConfidencePercent, minimumRiskReward
         case maxStopLossPercentCryptoStocks, maxStopLossPercentFXMetalsIndices
         case levelCalculationMode, fixedStopLossPercent, fixedTP1Percent, fixedTP2Percent
-        case enableTP2Target, minimumAlignedStrategies, enabledStrategyGroups, enabledStrategies
+        case enableTP2Target, minimumAlignedStrategies, enabledStrategyGroups, enabledStrategies, isOrderFlowEnabled
         case strategySelectionMode, selectedStrategyConcepts, customStrategyMatchRule
         case showWeakFilteredSignals, autoSuppressCrisisAlerts, oneSignalPerCorrelatedCluster
         case defaultAccountBalance, defaultRiskPercent, defaultAccountCurrency
@@ -186,7 +189,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         case calibrationWinDefinition, calibrationCategoryScope
         case calibrationMinConfidencePercent, calibrationMinRiskReward
         case geminiEnabled, geminiModel, aiProvider, aiModelID, geminiDailyCallLimit, geminiConfirmationThreshold
-        case tradFiLiveFeedMode, cryptoLiveFeedMode, defaultChartViewMode, chartEngine, showTradingViewOption
+        case tradFiLiveFeedMode, cryptoLiveFeedMode, defaultChartViewMode, chartEngine, tradingViewPreferDesktop, showTradingViewOption
         case scanOnOpenEnabled, autoScanIntervalMinutes, demoWalletFeesEnabled
     }
 
@@ -295,6 +298,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         } else {
             enabledStrategies = d.enabledStrategies
         }
+        isOrderFlowEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .isOrderFlowEnabled)) ?? d.isOrderFlowEnabled
         showWeakFilteredSignals = (try? c.decodeIfPresent(Bool.self, forKey: .showWeakFilteredSignals)) ?? d.showWeakFilteredSignals
         autoSuppressCrisisAlerts = (try? c.decodeIfPresent(Bool.self, forKey: .autoSuppressCrisisAlerts)) ?? d.autoSuppressCrisisAlerts
         oneSignalPerCorrelatedCluster = (try? c.decodeIfPresent(Bool.self, forKey: .oneSignalPerCorrelatedCluster)) ?? d.oneSignalPerCorrelatedCluster
@@ -323,6 +327,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         cryptoLiveFeedMode = (try? c.decodeIfPresent(CryptoLiveFeedMode.self, forKey: .cryptoLiveFeedMode)) ?? d.cryptoLiveFeedMode
         defaultChartViewMode = (try? c.decodeIfPresent(DefaultChartViewMode.self, forKey: .defaultChartViewMode)) ?? d.defaultChartViewMode
         chartEngine = (try? c.decodeIfPresent(ChartEngineOption.self, forKey: .chartEngine)) ?? d.chartEngine
+        tradingViewPreferDesktop = (try? c.decodeIfPresent(Bool.self, forKey: .tradingViewPreferDesktop)) ?? d.tradingViewPreferDesktop
         showTradingViewOption = (try? c.decodeIfPresent(Bool.self, forKey: .showTradingViewOption)) ?? d.showTradingViewOption
         scanOnOpenEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .scanOnOpenEnabled)) ?? d.scanOnOpenEnabled
         autoScanIntervalMinutes = (try? c.decodeIfPresent(Int.self, forKey: .autoScanIntervalMinutes)) ?? d.autoScanIntervalMinutes
@@ -426,6 +431,14 @@ public final class AppSettingsStore {
         }
     }
 
+    /// Single source of truth for currently enabled strategies + Crypto-Only Order Flow.
+    public var activeStrategyProfile: ActiveStrategyProfile {
+        ActiveStrategyProfile(
+            enabledStrategies: payload.enabledStrategies,
+            isOrderFlowEnabled: payload.isOrderFlowEnabled
+        )
+    }
+
     public func buildCalibrationFilterConfig() -> CalibrationFilterConfig {
         CalibrationFilterConfig(
             winDefinition: payload.calibrationWinDefinition,
@@ -463,7 +476,8 @@ public final class AppSettingsStore {
             aiConfirmationThreshold: payload.geminiConfirmationThreshold,
             signalCooldownSeconds: 3_600,
             historicalReliabilityWeights: reliabilityWeights,
-            enabledStrategies: payload.enabledStrategies
+            enabledStrategies: payload.enabledStrategies,
+            isOrderFlowEnabled: payload.isOrderFlowEnabled
         )
     }
 
@@ -489,6 +503,24 @@ public final class AppSettingsStore {
         } else {
             payload.enabledStrategies.insert(id)
         }
+    }
+
+    /// Settings UI helper enforcing a minimum of 1 enabled core OHLC strategy.
+    /// Returns `false` if turning off `id` was blocked because it is the last enabled core OHLC strategy.
+    @discardableResult
+    public func setStrategyEnforcingCoreFloor(_ id: StrategyID, enabled: Bool) -> Bool {
+        if enabled {
+            payload.enabledStrategies.insert(id)
+            return true
+        }
+        if id.isCoreOHLC {
+            let remainingCore = payload.enabledStrategies.filter { $0.isCoreOHLC && $0 != id }
+            if remainingCore.isEmpty {
+                return false
+            }
+        }
+        payload.enabledStrategies.remove(id)
+        return true
     }
 
     public func toggleStrategyConcept(_ concept: StrategyConcept) {

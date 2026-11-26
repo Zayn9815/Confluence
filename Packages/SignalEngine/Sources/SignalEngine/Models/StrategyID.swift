@@ -112,6 +112,32 @@ public enum StrategyID: String, CaseIterable, Identifiable, Codable, Sendable, H
         }
     }
 
+    /// True for OHLC / candle-driven core strategies (excludes external live-only/positioning add-ons).
+    public var isCoreOHLC: Bool {
+        switch category {
+        case .ictStructure, .behavioralTraps, .candlestickPatterns, .momentumVolume:
+            return true
+        case .positioningMacro:
+            return false
+        }
+    }
+
+    public static let coreOHLCStrategies: Set<StrategyID> = Set(allCases.filter(\.isCoreOHLC))
+
+    /// True if this strategy detector can legitimately fire on the given market class.
+    public func isApplicable(to marketClass: MarketClass) -> Bool {
+        switch self {
+        case .positioningOkx:
+            return marketClass == .crypto
+        case .positioningCot:
+            return marketClass == .forex || marketClass == .metals || marketClass == .indices || marketClass == .crypto
+        case .momentumRvol:
+            return !marketClass.isOTCVolumeUnavailable
+        default:
+            return true
+        }
+    }
+
     /// Trap trigger kind gated by this toggle (nil for non-trap strategies).
     public var trapKind: TrapTriggerKind? {
         switch self {

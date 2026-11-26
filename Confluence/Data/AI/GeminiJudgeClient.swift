@@ -130,7 +130,8 @@ public actor GeminiJudgeClient: AIJudgeClient {
         let compactSnapshot = SignalEngine.buildCompactReflexPrompt(for: signal)
         let prompt = """
         You are an institutional risk reviewer evaluating a deterministic trade setup snapshot.
-        Never invent prices. Return ONLY strict JSON matching the schema with a concise 1-sentence bear/invalidation check.
+        Never invent prices. Never penalize a setup for strategies the user disabled in strategy_profile or for absent Order Flow on Forex/Metals/Indices/Stocks markets.
+        Return ONLY strict JSON matching the schema with a concise 1-sentence bear/invalidation check.
         Snapshot: \(compactSnapshot)
         """
 

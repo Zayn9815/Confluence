@@ -76,8 +76,56 @@ public struct ChartTrapOverlay: Codable, Sendable, Equatable, Hashable, Identifi
     }
 }
 
+/// Compact Crypto-Only live Order Flow summary attached to `ChartSignalOverlayModel`
+/// for rendering the non-blocking Bid/Ask Pressure Bar, venue badge, absorption/divergence tags,
+/// and optional confirmed resting liquidity walls on all chart engines.
+public struct ChartOrderFlowSummary: Codable, Sendable, Equatable, Hashable {
+    public let obiWeighted: Double
+    public let cvdRatio: Double
+    public let divergenceTag: String?
+    public let absorptionTag: String?
+    public let alignment: String
+    public let venue: String
+    public let isLiveStream: Bool
+    public let bidWallPrice: Double?
+    public let bidWallConfirmed: Bool
+    public let askWallPrice: Double?
+    public let askWallConfirmed: Bool
+
+    public init(
+        obiWeighted: Double,
+        cvdRatio: Double,
+        divergenceTag: String? = nil,
+        absorptionTag: String? = nil,
+        alignment: String = "neutral",
+        venue: String,
+        isLiveStream: Bool,
+        bidWallPrice: Double? = nil,
+        bidWallConfirmed: Bool = false,
+        askWallPrice: Double? = nil,
+        askWallConfirmed: Bool = false
+    ) {
+        self.obiWeighted = obiWeighted.isFinite ? min(1.0, max(-1.0, obiWeighted)) : 0.0
+        self.cvdRatio = cvdRatio.isFinite ? min(1.0, max(-1.0, cvdRatio)) : 0.0
+        self.divergenceTag = divergenceTag
+        self.absorptionTag = absorptionTag
+        self.alignment = alignment
+        self.venue = venue
+        self.isLiveStream = isLiveStream
+        self.bidWallPrice = (bidWallPrice != nil && bidWallPrice!.isFinite && bidWallPrice! > 0) ? bidWallPrice : nil
+        self.bidWallConfirmed = bidWallConfirmed
+        self.askWallPrice = (askWallPrice != nil && askWallPrice!.isFinite && askWallPrice! > 0) ? askWallPrice : nil
+        self.askWallConfirmed = askWallConfirmed
+    }
+
+    /// Fraction in `[0.0, 1.0]` representing Bid share of the pressure bar (`0.5` = balanced).
+    public var bidPressureFraction: Double {
+        min(0.95, max(0.05, (obiWeighted + 1.0) * 0.5))
+    }
+}
+
 /// Clean, engine-agnostic overlay model fed by `SignalEngine` for all chart engines
-/// (`LightweightChartsIOS`, `DGCharts`, `SwiftTradingView`, `CandleKit`, and native SwiftUI fallback HUD).
+/// (`LightweightChartsIOS`, `DGCharts`, `SwiftTradingView`, `CandleKit`, `TradingViewWeb`, and native SwiftUI fallback HUD).
 public struct ChartSignalOverlayModel: Codable, Sendable, Equatable, Hashable {
     public let symbol: String
     public let marketClass: MarketClass
@@ -105,6 +153,9 @@ public struct ChartSignalOverlayModel: Codable, Sendable, Equatable, Hashable {
     // Live reference
     public let livePrice: Double?
 
+    // Optional Crypto-Only Order Flow summary (always nil on Forex/TradFi or when OFF)
+    public let orderFlowSummary: ChartOrderFlowSummary?
+
     public init(
         symbol: String,
         marketClass: MarketClass,
@@ -124,7 +175,8 @@ public struct ChartSignalOverlayModel: Codable, Sendable, Equatable, Hashable {
         traps: [ChartTrapOverlay] = [],
         structureEvents: [StructureOverlayEvent] = [],
         zones: [PriceZoneOverlay] = [],
-        livePrice: Double? = nil
+        livePrice: Double? = nil,
+        orderFlowSummary: ChartOrderFlowSummary? = nil
     ) {
         self.symbol = symbol
         self.marketClass = marketClass
@@ -145,6 +197,44 @@ public struct ChartSignalOverlayModel: Codable, Sendable, Equatable, Hashable {
         self.structureEvents = structureEvents.filter { $0.price.isFinite && $0.price > 0 && $0.timestampEpochSeconds.isFinite && $0.timestampEpochSeconds > 0 }
         self.zones = zones.filter { $0.top.isFinite && $0.bottom.isFinite && $0.top > 0 && $0.bottom > 0 }
         self.livePrice = Self.sanitizedPositive(livePrice)
+        self.orderFlowSummary = (marketClass == .crypto) ? orderFlowSummary : nil
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case symbol, marketClass, timeframe, direction
+        case entryPrice, entryLow, entryHigh, entryTimestamp
+        case stopLoss, takeProfit1, takeProfit2, isTP2Enabled
+        case riskRewardRatio, tp2RiskRewardRatio, breakevenPrice
+        case traps, structureEvents, zones, livePrice, orderFlowSummary
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let sym = try c.decode(String.self, forKey: .symbol)
+        let mc = try c.decode(MarketClass.self, forKey: .marketClass)
+        let tf = try c.decode(Timeframe.self, forKey: .timeframe)
+        self.init(
+            symbol: sym,
+            marketClass: mc,
+            timeframe: tf,
+            direction: try c.decodeIfPresent(TradeDirection.self, forKey: .direction),
+            entryPrice: try c.decodeIfPresent(Double.self, forKey: .entryPrice),
+            entryLow: try c.decodeIfPresent(Double.self, forKey: .entryLow),
+            entryHigh: try c.decodeIfPresent(Double.self, forKey: .entryHigh),
+            entryTimestamp: try c.decodeIfPresent(TimeInterval.self, forKey: .entryTimestamp),
+            stopLoss: try c.decodeIfPresent(Double.self, forKey: .stopLoss),
+            takeProfit1: try c.decodeIfPresent(Double.self, forKey: .takeProfit1),
+            takeProfit2: try c.decodeIfPresent(Double.self, forKey: .takeProfit2),
+            isTP2Enabled: (try? c.decodeIfPresent(Bool.self, forKey: .isTP2Enabled)) ?? false,
+            riskRewardRatio: try c.decodeIfPresent(Double.self, forKey: .riskRewardRatio),
+            tp2RiskRewardRatio: try c.decodeIfPresent(Double.self, forKey: .tp2RiskRewardRatio),
+            breakevenPrice: try c.decodeIfPresent(Double.self, forKey: .breakevenPrice),
+            traps: (try? c.decodeIfPresent([ChartTrapOverlay].self, forKey: .traps)) ?? [],
+            structureEvents: (try? c.decodeIfPresent([StructureOverlayEvent].self, forKey: .structureEvents)) ?? [],
+            zones: (try? c.decodeIfPresent([PriceZoneOverlay].self, forKey: .zones)) ?? [],
+            livePrice: try c.decodeIfPresent(Double.self, forKey: .livePrice),
+            orderFlowSummary: try c.decodeIfPresent(ChartOrderFlowSummary.self, forKey: .orderFlowSummary)
+        )
     }
 
     /// Most recent actionable behavioral trap (if any).
@@ -171,7 +261,7 @@ public struct ChartSignalOverlayModel: Codable, Sendable, Equatable, Hashable {
     }
 
     public var hasAnyOverlayLevels: Bool {
-        entryPrice != nil || stopLoss != nil || takeProfit1 != nil || primaryTrap != nil
+        entryPrice != nil || stopLoss != nil || takeProfit1 != nil || primaryTrap != nil || orderFlowSummary != nil
     }
 
     /// Builds a `ChartSignalOverlayModel` from raw signal/chart components.
@@ -184,7 +274,8 @@ public struct ChartSignalOverlayModel: Codable, Sendable, Equatable, Hashable {
         overlays: ChartOverlayData,
         entryTimestamp: TimeInterval? = nil,
         breakevenPrice: Double? = nil,
-        livePrice: Double? = nil
+        livePrice: Double? = nil,
+        orderFlowSummary: ChartOrderFlowSummary? = nil
     ) -> ChartSignalOverlayModel {
         let trapOverlays = overlays.traps
             .filter(\.isActionable)
@@ -217,7 +308,8 @@ public struct ChartSignalOverlayModel: Codable, Sendable, Equatable, Hashable {
             traps: trapOverlays,
             structureEvents: overlays.structureEvents,
             zones: overlays.zones,
-            livePrice: livePrice
+            livePrice: livePrice,
+            orderFlowSummary: orderFlowSummary
         )
     }
 
@@ -226,7 +318,8 @@ public struct ChartSignalOverlayModel: Codable, Sendable, Equatable, Hashable {
         signal: TradeSignal,
         overrideLevels: TradeLevels? = nil,
         breakevenPrice: Double? = nil,
-        livePrice: Double? = nil
+        livePrice: Double? = nil,
+        orderFlowSummary: ChartOrderFlowSummary? = nil
     ) -> ChartSignalOverlayModel {
         build(
             symbol: signal.symbol,
@@ -237,7 +330,8 @@ public struct ChartSignalOverlayModel: Codable, Sendable, Equatable, Hashable {
             overlays: signal.overlays,
             entryTimestamp: signal.recentCandles.last?.openTimeEpochSeconds ?? signal.barCloseEpochSeconds,
             breakevenPrice: breakevenPrice,
-            livePrice: livePrice
+            livePrice: livePrice,
+            orderFlowSummary: orderFlowSummary ?? signal.orderFlowSummary
         )
     }
 

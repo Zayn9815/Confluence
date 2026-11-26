@@ -97,7 +97,9 @@ public enum WalkForwardReplayEngine {
                 config: config,
                 dataProvider: "WalkForwardFixture",
                 isMarketClosed: false,
-                nowEpochSeconds: nowEpoch
+                nowEpochSeconds: nowEpoch,
+                orderFlowSnapshot: nil,
+                isLiveEvaluation: false
             ) else { continue }
 
             if signal.category == .trapAlert {

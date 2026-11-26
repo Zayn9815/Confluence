@@ -248,4 +248,141 @@ public enum WinRateBreakdown {
             )
         }
     }
+
+    /// Overall vs active-profile performance comparison (pre-upgrade empty keys map to `"legacy_baseline"`).
+    public static func byActiveProfile(
+        records: [SignalOutcomeRecord],
+        activeProfileKey: String,
+        filter: CalibrationFilterConfig = .headlineFixed
+    ) -> ProfileWinRateComparison {
+        let resolved = records.filter {
+            filter.matchesRecord($0) && filter.isCountedInWinRateDenominator($0.status)
+        }
+        let targetKey = ActiveStrategyProfile.normalizedKey(activeProfileKey)
+        let matching = resolved.filter { $0.effectiveStrategyProfileKey == targetKey }
+        return ProfileWinRateComparison(
+            activeProfileKey: targetKey,
+            overall: computeSliceStat(label: "Overall", records: resolved, filter: filter),
+            activeProfile: computeSliceStat(label: "Active Profile", records: matching, filter: filter)
+        )
+    }
+
+    /// Crypto-Only Order Flow Edge Delta comparing win rate and average R:R when Order Flow was
+    /// Aligned vs. Conflicting vs. Off.
+    public static func cryptoOrderFlowEdgeDelta(
+        records: [SignalOutcomeRecord],
+        filter: CalibrationFilterConfig = .headlineFixed
+    ) -> CryptoOrderFlowEdgeDelta {
+        let cryptoResolved = records.filter {
+            $0.marketClass == .crypto &&
+            filter.matchesRecord($0) &&
+            filter.isCountedInWinRateDenominator($0.status)
+        }
+        let aligned = cryptoResolved.filter { $0.orderFlowStatus == OrderFlowAlignment.aligned.rawValue }
+        let conflicting = cryptoResolved.filter { $0.orderFlowStatus == OrderFlowAlignment.conflicting.rawValue }
+        let off = cryptoResolved.filter {
+            $0.orderFlowStatus == "off" || $0.orderFlowStatus == OrderFlowAlignment.unavailable.rawValue || $0.orderFlowStatus.isEmpty
+        }
+
+        let alignedStat = computeSliceStat(label: "Order Flow Aligned", records: aligned, filter: filter)
+        let conflictingStat = computeSliceStat(label: "Order Flow Conflicting", records: conflicting, filter: filter)
+        let offStat = computeSliceStat(label: "Order Flow Off", records: off, filter: filter)
+
+        let wrDelta: Double? = (alignedStat.totalResolved > 0 && conflictingStat.totalResolved > 0)
+            ? (alignedStat.winRate - conflictingStat.winRate)
+            : nil
+        let rDelta: Double? = (alignedStat.totalResolved > 0 && conflictingStat.totalResolved > 0)
+            ? (alignedStat.averageR - conflictingStat.averageR)
+            : nil
+
+        return CryptoOrderFlowEdgeDelta(
+            aligned: alignedStat,
+            conflicting: conflictingStat,
+            off: offStat,
+            winRateDeltaAlignedVsConflicting: wrDelta,
+            avgRDeltaAlignedVsConflicting: rDelta
+        )
+    }
+
+    private static func computeSliceStat(
+        label: String,
+        records: [SignalOutcomeRecord],
+        filter: CalibrationFilterConfig
+    ) -> WinRateSliceStat {
+        let wins = records.filter { filter.isCountedWin($0.status) }.count
+        let total = records.count
+        let losses = total - wins
+        let avgR = total == 0 ? 0.0 : (records.reduce(0.0) { $0 + $1.rMultiple } / Double(total))
+        return WinRateSliceStat(
+            label: label,
+            wins: wins,
+            losses: losses,
+            totalResolved: total,
+            winRate: total == 0 ? 0.0 : Double(wins) / Double(total),
+            averageR: avgR,
+            winRateCI: WilsonInterval.compute(wins: wins, total: total)
+        )
+    }
+}
+
+public struct WinRateSliceStat: Codable, Sendable, Equatable, Hashable {
+    public let label: String
+    public let wins: Int
+    public let losses: Int
+    public let totalResolved: Int
+    public let winRate: Double
+    public let averageR: Double
+    public let winRateCI: WilsonInterval?
+
+    public init(
+        label: String,
+        wins: Int,
+        losses: Int,
+        totalResolved: Int,
+        winRate: Double,
+        averageR: Double,
+        winRateCI: WilsonInterval?
+    ) {
+        self.label = label
+        self.wins = wins
+        self.losses = losses
+        self.totalResolved = totalResolved
+        self.winRate = winRate
+        self.averageR = averageR
+        self.winRateCI = winRateCI
+    }
+}
+
+public struct ProfileWinRateComparison: Codable, Sendable, Equatable, Hashable {
+    public let activeProfileKey: String
+    public let overall: WinRateSliceStat
+    public let activeProfile: WinRateSliceStat
+
+    public init(activeProfileKey: String, overall: WinRateSliceStat, activeProfile: WinRateSliceStat) {
+        self.activeProfileKey = activeProfileKey
+        self.overall = overall
+        self.activeProfile = activeProfile
+    }
+}
+
+public struct CryptoOrderFlowEdgeDelta: Codable, Sendable, Equatable, Hashable {
+    public let aligned: WinRateSliceStat
+    public let conflicting: WinRateSliceStat
+    public let off: WinRateSliceStat
+    public let winRateDeltaAlignedVsConflicting: Double?
+    public let avgRDeltaAlignedVsConflicting: Double?
+
+    public init(
+        aligned: WinRateSliceStat,
+        conflicting: WinRateSliceStat,
+        off: WinRateSliceStat,
+        winRateDeltaAlignedVsConflicting: Double?,
+        avgRDeltaAlignedVsConflicting: Double?
+    ) {
+        self.aligned = aligned
+        self.conflicting = conflicting
+        self.off = off
+        self.winRateDeltaAlignedVsConflicting = winRateDeltaAlignedVsConflicting
+        self.avgRDeltaAlignedVsConflicting = avgRDeltaAlignedVsConflicting
+    }
 }

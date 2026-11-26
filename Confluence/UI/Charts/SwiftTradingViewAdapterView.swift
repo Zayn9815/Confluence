@@ -1,9 +1,11 @@
 import SwiftUI
+@preconcurrency import SwiftTradingView
 import SignalEngine
 
-/// Step-1 adapter stub for **Swift Trading View (Multi-Pane SwiftUI)**.
-/// Renders Confluence's native SwiftUI Canvas candlestick fallback + the universal Signal Level HUD
-/// so Step 1 compiles 100% cleanly on CI without adding external SPM dependencies.
+/// Multi-pane SwiftUI financial chart powered by `sergiikhliustin/swift-trading-view` (`SwiftTradingView`).
+/// - Renders Candlesticks + MA overlay in primary pane and Volume in secondary pane.
+/// - Stable `.id` tied strictly to `symbol|timeframe` so live ticks update smoothly without resetting scroll position.
+/// - Non-blocking Liquid Glass `ChartSignalOverlayHUD` layered cleanly on top.
 public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
     public let candles: [Candle]
     public let formingCandle: Candle?
@@ -37,33 +39,80 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
         self.onCrosshairChange = onCrosshairChange
     }
 
-    public var body: some View {
-        // STEP 2 ADAPTER SLOT: Replace body with `swift-trading-view` Multi-Pane SwiftUI chart
-        // Exact inputs available:
-        // - `candles: [Candle]` (closed UTC bars sorted ascending)
-        // - `formingCandle: Candle?` (display-only active bar)
-        // - `liveTick: LiveTick?` (latest foreground tick for incremental update)
-        // - `overlayModel: ChartSignalOverlayModel` (Entry, SL, TP1/TP2, R:R, Trap price/zone, ICT structure events)
-        // - `timeframe: Timeframe`
-        // - `pricePrecision: ChartPricePrecision`
-        // - `onCrosshairChange: (ChartCrosshairReadout?) -> Void`
-        ZStack(alignment: .topLeading) {
-            NativeCanvasFallbackChartView(
-                candles: candles,
-                formingCandle: formingCandle,
-                overlayModel: overlayModel,
-                pricePrecision: pricePrecision,
-                palette: palette,
-                onCrosshairChange: onCrosshairChange
+    private var mappedCandleData: [CandleData] {
+        var combined = candles.sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
+        if let forming = formingCandle {
+            if let last = combined.last, abs(last.openTimeEpochSeconds - forming.openTimeEpochSeconds) < 1.0 {
+                combined[combined.count - 1] = forming
+            } else if (combined.last?.openTimeEpochSeconds ?? -1) < forming.openTimeEpochSeconds {
+                combined.append(forming)
+            }
+        }
+        return combined.map { bar in
+            CandleData(
+                time: bar.openTimeEpochSeconds,
+                open: bar.open,
+                close: bar.close,
+                high: bar.high,
+                low: bar.low,
+                volume: bar.volume ?? 0.0
             )
+        }
+    }
+
+    public var body: some View {
+        let data = mappedCandleData
+        ZStack(alignment: .topLeading) {
+            if data.isEmpty {
+                NativeCanvasFallbackChartView(
+                    candles: candles,
+                    formingCandle: formingCandle,
+                    overlayModel: overlayModel,
+                    timeframe: timeframe,
+                    pricePrecision: pricePrecision,
+                    palette: palette,
+                    showVolumePane: true,
+                    showMovingAverages: true,
+                    onCrosshairChange: onCrosshairChange
+                )
+            } else {
+                TradingView(
+                    data: data,
+                    candleWidth: 3...22,
+                    candleSpacing: 2,
+                    secondaryContentHeight: 76,
+                    primaryContent: [
+                        Candles(),
+                        MAIndicator(
+                            periods: [
+                                .init(value: 20, color: palette.champagneGold),
+                                .init(value: 50, color: palette.macroIceBlue)
+                            ],
+                            lineWidth: 1.25
+                        )
+                    ],
+                    secondaryContent: [
+                        VolumeIndicator()
+                    ]
+                )
+                .id("\(overlayModel.symbol)|\(timeframe.rawValue)")
+                .background(palette.canvas)
+            }
 
             ChartSignalOverlayHUD(
                 overlayModel: overlayModel,
                 precision: pricePrecision,
                 palette: palette,
-                engineBadge: "Swift Trading View · Step 2 Slot"
+                engineBadge: "Swift Trading View"
             )
             .padding(10)
+            .allowsHitTesting(false)
+        }
+        .onChange(of: overlayModel.symbol) { _, _ in
+            onCrosshairChange(nil)
+        }
+        .onChange(of: timeframe) { _, _ in
+            onCrosshairChange(nil)
         }
     }
 }

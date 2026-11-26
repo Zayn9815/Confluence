@@ -41,6 +41,7 @@ public final class MarketScannerCoordinator {
     private let tradFiRouter: TradFiOHLCVRouter
     private let okxPositioning: OKXPositioningAdapter
     private let cftcCOT: CFTCCOTAdapter
+    private let orderFlowAdapter: CryptoOrderFlowAdapter
     private let calendarService: EconomicCalendarService
     private let newsService: BreakingNewsService
     private let geminiClient: GeminiJudgeClient
@@ -68,7 +69,14 @@ public final class MarketScannerCoordinator {
     public var journalSummary: JournalSummaryStats = JournalSummaryStats.compute(entries: [], totalSystemStrongSignals: 0)
     public var correlationWarningsByFingerprint: [String: [CorrelationPairWarning]] = [:]
     public var netExposureSummary: NetExposureSummary = NetExposureSummary(exposures: [], concentratedClusters: [], totalStrongSignals: 0)
+    public var profileWinRateComparison: ProfileWinRateComparison = WinRateBreakdown.byActiveProfile(records: [], activeProfileKey: "")
+    public var cryptoOrderFlowEdgeDelta: CryptoOrderFlowEdgeDelta = WinRateBreakdown.cryptoOrderFlowEdgeDelta(records: [])
+    public var traderPsychologyReport: TraderPsychologyCoachReport = PsychologyReportBuilder.buildBehavioralAudit(outcomes: [], activeProfile: ActiveStrategyProfile())
     private var cachedClosedCandlesBySymbol: [String: [Candle]] = [:]
+    private var cachedHTFCandlesBySymbol: [String: [Candle]] = [:]
+    private var cachedProviderBySymbol: [String: String] = [:]
+    private var cachedOrderFlowBySymbol: [String: OrderFlowSnapshot] = [:]
+    private var reevaluationTask: Task<Void, Never>?
 
     // Notification Bell Inbox & Deep-Link Routing
     public var notifications: [NotificationItemSnapshot] = []
@@ -101,6 +109,7 @@ public final class MarketScannerCoordinator {
     public var isTestingTwelveData: Bool = false
 
     public let livePriceService: LivePriceService
+    public let liveOrderFlowService: LiveOrderFlowService
     public var demoWallet: DemoWallet = DemoWallet()
     public var manualTradeSuggestions: [String: ManualTradeLevelSuggestion] = [:]
     public var originWinRates: [OriginWinRateStat] = WinRateBreakdown.byOrigin(records: [])
@@ -130,12 +139,16 @@ public final class MarketScannerCoordinator {
         self.tradFiRouter = TradFiOHLCVRouter(http: client, twelveData: td)
         self.okxPositioning = OKXPositioningAdapter(http: client)
         self.cftcCOT = CFTCCOTAdapter(http: client)
+        let ofAdapter = CryptoOrderFlowAdapter(http: client)
+        self.orderFlowAdapter = ofAdapter
         self.calendarService = EconomicCalendarService(http: client)
         self.newsService = BreakingNewsService(http: client)
         self.geminiClient = GeminiJudgeClient(http: client)
         self.deepseekClient = OpenAICompatibleJudgeClient(provider: .deepseek, http: client)
         self.openRouterClient = OpenAICompatibleJudgeClient(provider: .openrouter, http: client)
         self.livePriceService = LivePriceService(http: client)
+        self.liveOrderFlowService = LiveOrderFlowService(adapter: ofAdapter)
+        self.liveOrderFlowService.setEnabled(settings.payload.isOrderFlowEnabled)
 
         wireNotificationRouter()
         wireLivePriceMonitor()
@@ -221,6 +234,8 @@ public final class MarketScannerCoordinator {
 
     public func handleScenePhaseActive(_ isActive: Bool) {
         livePriceService.setForegroundActive(isActive)
+        liveOrderFlowService.setEnabled(settings.payload.isOrderFlowEnabled)
+        liveOrderFlowService.setForegroundActive(isActive)
         if isActive {
             syncLiveFeedModesFromSettings()
             acquireActivePositionsLiveFeed()
@@ -228,6 +243,7 @@ public final class MarketScannerCoordinator {
             restartAutoScanLoop()
         } else {
             stopAutoScanLoop()
+            TradingViewWebSessionManager.shared.flushCookieVaultOnBackground()
         }
     }
 
@@ -499,8 +515,13 @@ public final class MarketScannerCoordinator {
     }
 
     public func exportBackupArchiveURL() -> URL? {
-        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.0"
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
         return BackupArchiveService.exportBackupFile(settings: settings.payload, store: store, appVersion: ver)
+    }
+
+    public func exportBackupJSONString() -> String? {
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
+        return BackupArchiveService.exportBackupJSONString(settings: settings.payload, store: store, appVersion: ver)
     }
 
     public func importBackupArchive(from data: Data, mode: BackupImportMode) throws -> BackupImportSummary {
@@ -510,6 +531,7 @@ public final class MarketScannerCoordinator {
             settingsStore: settings,
             dataStore: store
         )
+        liveOrderFlowService.setEnabled(settings.payload.isOrderFlowEnabled)
         loadPersistedState()
         diagnosticLog.log(
             .info,
@@ -529,13 +551,14 @@ public final class MarketScannerCoordinator {
         return BackupArchiveService.writeCSVToTemporaryFile(content: csv, filename: "Confluence_Trade_Journal.csv")
     }
 
-    /// Recomputes Calibration KPIs (fixed headline + active custom filter), display-only Platt calibrator,
-    /// and per-strategy rankings immediately.
+    /// Recomputes Calibration KPIs (fixed headline + active custom filter), slice-aware Platt calibrator,
+    /// Crypto Order Flow edge delta, active-profile stats, and adaptive Psychology coaching report immediately.
     public func recomputeCalibration() {
         let filter = settings.buildCalibrationFilterConfig()
+        let activeProfile = settings.activeStrategyProfile
         let signalsByFP = store.fetchSignalsByFingerprint(limit: 500)
         let enriched: [SignalOutcomeRecord] = outcomeRecords.map { rec in
-            if rec.riskRewardRatio != nil && rec.entryBarCloseEpochSeconds != nil {
+            if rec.riskRewardRatio != nil && rec.entryBarCloseEpochSeconds != nil && !rec.activeStrategyProfileKey.isEmpty {
                 return rec
             }
             let sig = signalsByFP[rec.signalId]
@@ -562,10 +585,17 @@ public final class MarketScannerCoordinator {
                 filledAtEpochSeconds: rec.filledAtEpochSeconds,
                 fillWindowBars: rec.fillWindowBars,
                 isLegacyImmediateFill: rec.isLegacyImmediateFill,
-                origin: sig?.origin ?? rec.origin
+                origin: sig?.origin ?? rec.origin,
+                activeStrategyProfileKey: rec.activeStrategyProfileKey.isEmpty ? (sig?.activeStrategyProfileKey ?? "") : rec.activeStrategyProfileKey,
+                enabledStrategyIDsCSV: rec.enabledStrategyIDsCSV,
+                orderFlowStatus: rec.orderFlowStatus == "off" ? (sig?.orderFlowStatus ?? rec.orderFlowStatus) : rec.orderFlowStatus
             )
         }
-        self.confidenceCalibrator = ConfidenceCalibrator.fit(records: enriched, filter: .headlineFixed)
+        self.confidenceCalibrator = ConfidenceCalibrator.fit(
+            records: enriched,
+            filter: .headlineFixed,
+            activeProfileKey: activeProfile.profileKey
+        )
         self.headlineCalibrationSummary = PassiveOutcomeEvaluator.summarize(records: enriched, filter: .headlineFixed)
         self.calibrationSummary = PassiveOutcomeEvaluator.summarize(records: enriched, filter: filter)
         self.strategyBreakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: enriched, filter: filter)
@@ -582,7 +612,144 @@ public final class MarketScannerCoordinator {
             records: enriched,
             filter: .headlineFixed
         )
+        self.profileWinRateComparison = WinRateBreakdown.byActiveProfile(
+            records: enriched,
+            activeProfileKey: activeProfile.profileKey,
+            filter: .headlineFixed
+        )
+        self.cryptoOrderFlowEdgeDelta = WinRateBreakdown.cryptoOrderFlowEdgeDelta(
+            records: enriched,
+            filter: .headlineFixed
+        )
+        self.traderPsychologyReport = PsychologyReportBuilder.buildBehavioralAudit(
+            outcomes: enriched,
+            demoPositions: demoWallet.positions,
+            activeProfile: activeProfile
+        )
         recomputeJournalSummary()
+    }
+
+    /// Instant off-main-actor re-evaluation triggered whenever any strategy toggle or Order Flow changes in Settings.
+    /// Re-scores cached candles immediately (fetching fresh Crypto REST order flow if Order Flow was just turned ON)
+    /// so Signals, Chart HUD, Calibration, and Psychology Reports reflect the new profile right away.
+    public func reevaluateCachedSignalsForActiveStrategyProfile() {
+        liveOrderFlowService.setEnabled(settings.payload.isOrderFlowEnabled)
+        recomputeCalibration()
+
+        reevaluationTask?.cancel()
+        reevaluationTask = Task { [weak self] in
+            // Tiny debounce so rapid multi-toggle taps coalesce cleanly
+            try? await Task.sleep(for: .milliseconds(120))
+            guard let self, !Task.isCancelled else { return }
+
+            let activeAssets = self.settings.activeWatchlistAssets
+            let entryTF = self.settings.payload.entryTimeframe
+            let htfTF = self.settings.payload.htfTimeframe
+            let orderFlowOn = self.settings.payload.isOrderFlowEnabled
+
+            var weights: [String: Double] = [:]
+            for stat in self.calibrationSummary.strategyRankings where stat.totalResolved >= 5 {
+                weights[stat.strategyId] = max(0.65, min(1.40, 0.5 + stat.winRate))
+            }
+            let engineConfig = self.settings.buildEngineConfig(reliabilityWeights: weights)
+            let calEvents = self.calendarEvents
+            let newsItems = self.breakingNews
+            let fgSnap = self.fearGreed
+            let nowEpoch = Date().timeIntervalSince1970
+
+            // Build candidate symbol -> cached candle map (from scan cache or existing signal snapshots)
+            var entryBySym = self.cachedClosedCandlesBySymbol
+            var htfBySym = self.cachedHTFCandlesBySymbol
+            var providerBySym = self.cachedProviderBySymbol
+            for sig in self.signals {
+                if entryBySym[sig.symbol] == nil && !sig.recentCandles.isEmpty {
+                    entryBySym[sig.symbol] = sig.recentCandles
+                }
+                if providerBySym[sig.symbol] == nil {
+                    providerBySym[sig.symbol] = sig.dataProvider
+                }
+            }
+
+            // If Order Flow was just enabled, fetch fresh Crypto REST snapshots for cached crypto pairs
+            var ofBySym = self.cachedOrderFlowBySymbol
+            if orderFlowOn {
+                for asset in activeAssets where asset.marketClass == .crypto && entryBySym[asset.symbol] != nil {
+                    if Task.isCancelled { return }
+                    let existingAge = ofBySym[asset.symbol].map { nowEpoch - $0.timestampEpochSeconds } ?? 999
+                    if existingAge > 15.0 {
+                        if let fresh = await self.orderFlowAdapter.fetchSnapshot(symbol: asset.symbol, assetClass: .crypto) {
+                            ofBySym[asset.symbol] = fresh
+                        }
+                    }
+                }
+                self.cachedOrderFlowBySymbol = ofBySym
+            }
+
+            let entrySnap = entryBySym
+            let htfSnap = htfBySym
+            let provSnap = providerBySym
+            let ofSnap = ofBySym
+
+            let reevaluated: [TradeSignal] = await Task.detached(priority: .userInitiated) {
+                var out: [TradeSignal] = []
+                for asset in activeAssets {
+                    if Task.isCancelled { break }
+                    guard let entryBars = entrySnap[asset.symbol], entryBars.count >= CandleHygieneEngine.minimumRequiredBars else {
+                        continue
+                    }
+                    let htfBars = htfSnap[asset.symbol] ?? []
+                    let provider = provSnap[asset.symbol] ?? "Cached Feed"
+                    let cryptoOF = (orderFlowOn && asset.marketClass == .crypto) ? ofSnap[asset.symbol] : nil
+                    let fg = (asset.marketClass == .crypto) ? fgSnap : nil
+                    if let sig = SignalEngine.evaluateSanitized(
+                        asset: asset,
+                        entryCandles: entryBars,
+                        htfCandles: htfBars,
+                        timeframe: entryTF,
+                        htfTimeframe: htfTF,
+                        positioning: nil,
+                        calendarEvents: calEvents,
+                        breakingNews: newsItems,
+                        fearGreed: fg,
+                        config: engineConfig,
+                        dataProvider: provider,
+                        isMarketClosed: !SessionCalendar.sessionStatus(asset: asset, at: nowEpoch).isOpen,
+                        nowEpochSeconds: nowEpoch,
+                        orderFlowSnapshot: cryptoOF,
+                        isLiveEvaluation: true
+                    ) {
+                        out.append(sig)
+                    }
+                }
+                return out
+            }.value
+
+            guard !Task.isCancelled else { return }
+            if !reevaluated.isEmpty {
+                var bySymbol: [String: TradeSignal] = [:]
+                for sig in reevaluated {
+                    let calibratedSig: TradeSignal
+                    if self.confidenceCalibrator.isActive,
+                       let p = self.confidenceCalibrator.calibratedProbability(forRawScore: sig.confidencePercent) {
+                        calibratedSig = sig.withCalibratedProbability(p, sampleCount: self.confidenceCalibrator.sampleCount)
+                    } else {
+                        calibratedSig = sig
+                    }
+                    bySymbol[sig.symbol] = calibratedSig
+                    self.store.upsertSignal(calibratedSig)
+                }
+                // Replace signals for re-evaluated symbols cleanly
+                var merged = self.signals.filter { bySymbol[$0.symbol] == nil }
+                merged.insert(contentsOf: bySymbol.values, at: 0)
+                self.signals = merged.sorted { $0.generatedAtEpochSeconds > $1.generatedAtEpochSeconds }
+                self.recomputeCorrelations()
+                self.diagnosticLog.log(
+                    .info,
+                    category: .engine,
+                    message: "Re-evaluated \(bySymbol.count) cached pair(s) for strategy profile \(self.settings.activeStrategyProfile.profileKey)."
+                )
+            }
+        }
     }
 
     // MARK: - Notification Bell Inbox
@@ -853,6 +1020,15 @@ public final class MarketScannerCoordinator {
                         }
                     }
 
+                    // Crypto-Only Order Flow REST snapshot (NEVER opens WebSockets for batch scans; ZERO network on Forex/TradFi)
+                    var cryptoOrderFlowSnap: OrderFlowSnapshot? = nil
+                    if engineConfig.isOrderFlowEnabled && asset.marketClass == .crypto {
+                        cryptoOrderFlowSnap = await orderFlowAdapter.fetchSnapshot(symbol: asset.symbol, assetClass: asset.marketClass)
+                        if let snap = cryptoOrderFlowSnap {
+                            cachedOrderFlowBySymbol[asset.symbol] = snap
+                        }
+                    }
+
                     let clockSkew = await http.estimatedClockSkewSeconds()
                     let serverNow = Date().timeIntervalSince1970 + clockSkew
 
@@ -865,6 +1041,7 @@ public final class MarketScannerCoordinator {
                     let fgSnapshot = asset.marketClass == .crypto ? fearGreed : nil
                     let okxSnapSnapshot = okxSnap
                     let cotRecordsSnapshot = cotRecords
+                    let orderFlowSnapSnapshot = cryptoOrderFlowSnap
 
                     let (sanitizedEntry, output) = await Task.detached(priority: .userInitiated) {
                         let sanitized = CandleHygieneEngine.sanitize(
@@ -891,12 +1068,16 @@ public final class MarketScannerCoordinator {
                             config: engineConfig,
                             dataProvider: entryProviderSnapshot,
                             serverNowEpochSeconds: serverNow,
-                            clockSkewSeconds: clockSkew
+                            clockSkewSeconds: clockSkew,
+                            orderFlowSnapshot: orderFlowSnapSnapshot,
+                            isLiveEvaluation: true
                         )
                         return (sanitized, analyzed)
                     }.value
                     try Task.checkCancellation()
                     sanitizedClosedBySymbol[asset.symbol] = sanitizedEntry.candles
+                    cachedHTFCandlesBySymbol[asset.symbol] = htfCandlesSnapshot
+                    cachedProviderBySymbol[asset.symbol] = entryProviderSnapshot
 
                     if sanitizedEntry.report.droppedOpenBars > 0 {
                         diagnosticLog.log(
@@ -1517,9 +1698,51 @@ public final class MarketScannerCoordinator {
         let quote = livePriceService.latest(for: request.symbol)
         let now = Date().timeIntervalSince1970
         let asset = WatchlistDefaults.descriptor(for: request.symbol)
+        let activeProfile = settings.activeStrategyProfile
+        let matchedSig = request.signalId.flatMap { sid in signals.first { $0.fingerprint == sid || $0.id == sid } }
+            ?? signals.first { $0.symbol == request.symbol }
+        let resolvedOFStatus: String = {
+            if !request.orderFlowStatus.isEmpty && request.orderFlowStatus != "off" {
+                return request.orderFlowStatus
+            }
+            if request.marketClass != .crypto { return "non_crypto" }
+            if !settings.payload.isOrderFlowEnabled { return "off" }
+            if let liveSymbol = liveOrderFlowService.activeSymbol,
+               liveSymbol == request.symbol,
+               let liveEval = liveOrderFlowService.latestAssessment,
+               liveEval.alignment != .unavailable {
+                return liveEval.alignment.rawValue
+            }
+            return matchedSig?.orderFlowStatus ?? "unavailable"
+        }()
+        let stampedRequest = DemoOrderRequest(
+            id: request.id,
+            signalId: request.signalId,
+            symbol: request.symbol,
+            marketClass: request.marketClass,
+            timeframe: request.timeframe,
+            direction: request.direction,
+            orderType: request.orderType,
+            entryPrice: request.entryPrice,
+            entryLow: request.entryLow,
+            entryHigh: request.entryHigh,
+            stopLoss: request.stopLoss,
+            target1: request.target1,
+            target2: request.target2,
+            exitTarget: request.exitTarget,
+            riskPercent: request.riskPercent,
+            leverage: request.leverage,
+            contractSpec: request.contractSpec,
+            limitExpiryEpochSeconds: request.limitExpiryEpochSeconds,
+            allowStalePriceFill: request.allowStalePriceFill,
+            feesEnabled: request.feesEnabled,
+            activeStrategyProfileKey: request.activeStrategyProfileKey.isEmpty ? activeProfile.profileKey : request.activeStrategyProfileKey,
+            enabledStrategyIDsCSV: request.enabledStrategyIDsCSV.isEmpty ? activeProfile.enabledStrategyIDsCSV : request.enabledStrategyIDsCSV,
+            orderFlowStatus: resolvedOFStatus
+        )
         let result = DemoWalletEngine.placeOrder(
             wallet: demoWallet,
-            request: request,
+            request: stampedRequest,
             liveQuotePrice: quote?.price,
             liveQuoteEpochSeconds: quote?.asOfEpochSeconds,
             nowEpochSeconds: now,
@@ -1530,6 +1753,7 @@ public final class MarketScannerCoordinator {
             demoWallet = updatedWallet
             store.saveDemoWallet(updatedWallet)
             acquireActivePositionsLiveFeed()
+            recomputeCalibration()
             return .success(pos)
         case .failure(let err):
             return .failure(err)

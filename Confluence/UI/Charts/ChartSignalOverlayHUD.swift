@@ -87,8 +87,124 @@ public struct ChartCrosshairOHLCVHUD: View {
     }
 }
 
+/// SDK-safe iOS 26/27 Liquid Glass surface modifier with clean `.ultraThinMaterial` + hairline border fallback.
+public struct ConfluenceLiquidGlassSurface: ViewModifier {
+    let cornerRadius: CGFloat
+    let borderColor: Color
+
+    public init(cornerRadius: CGFloat = 12, borderColor: Color = Color.white.opacity(0.18)) {
+        self.cornerRadius = cornerRadius
+        self.borderColor = borderColor
+    }
+
+    public func body(content: Content) -> some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        } else {
+            fallbackSurface(content)
+        }
+        #else
+        fallbackSurface(content)
+        #endif
+    }
+
+    private func fallbackSurface(_ content: Content) -> some View {
+        content
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(borderColor, lineWidth: 0.75)
+            )
+    }
+}
+
+public extension View {
+    func confluenceLiquidGlass(
+        cornerRadius: CGFloat = 12,
+        borderColor: Color = Color.white.opacity(0.18)
+    ) -> some View {
+        modifier(ConfluenceLiquidGlassSurface(cornerRadius: cornerRadius, borderColor: borderColor))
+    }
+}
+
+/// Compact non-blocking Crypto-Only Order Flow Micro-HUD with Bid/Ask Pressure Bar & live venue badge.
+/// Automatically hidden on Forex/TradFi or when Order Flow is OFF (`summary == nil`).
+public struct CryptoOrderFlowMicroStrip: View {
+    let summary: ChartOrderFlowSummary
+    let palette: ConfluencePalette
+
+    public init(summary: ChartOrderFlowSummary, palette: ConfluencePalette) {
+        self.summary = summary
+        self.palette = palette
+    }
+
+    private var alignmentColor: Color {
+        switch summary.alignment {
+        case "aligned": return palette.longEmerald
+        case "conflicting": return palette.shortCrimson
+        default: return palette.champagneGold
+        }
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(alignmentColor)
+                    .frame(width: 6, height: 6)
+
+                Text("\(summary.venue) \(summary.isLiveStream ? "Live" : "REST")")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(palette.primaryInk)
+
+                Text(String(format: "OBI %+.0f%%", summary.obiWeighted * 100.0))
+                    .font(.system(size: 8.5, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(summary.obiWeighted >= 0 ? palette.longEmerald : palette.shortCrimson)
+
+                if let absTag = summary.absorptionTag {
+                    Text(absTag)
+                        .font(.system(size: 8, weight: .heavy))
+                        .foregroundStyle(palette.canvas)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(palette.champagneGold, in: Capsule())
+                }
+
+                if let divTag = summary.divergenceTag {
+                    Text(divTag)
+                        .font(.system(size: 8, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(divTag == "DIV+" ? palette.longEmerald : palette.shortCrimson, in: Capsule())
+                }
+            }
+
+            // Razor-thin 4pt horizontal Bid/Ask Pressure Bar (emerald vs crimson split driven by obiWeighted)
+            GeometryReader { geo in
+                let totalW = max(1, geo.size.width)
+                let bidW = totalW * CGFloat(summary.bidPressureFraction)
+                HStack(spacing: 1) {
+                    Rectangle()
+                        .fill(palette.longEmerald)
+                        .frame(width: max(2, bidW - 0.5))
+                    Rectangle()
+                        .fill(palette.shortCrimson)
+                        .frame(maxWidth: .infinity)
+                }
+                .clipShape(Capsule())
+            }
+            .frame(height: 4)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 /// Reusable, non-blocking SwiftUI Signal Level HUD & Price Overlay component that any chart engine
-/// can layer on top so Entry, Stop Loss, Take Profit (TP1 / TP2), R:R, and Trap prices are always visible.
+/// can layer on top so Entry, Stop Loss, Take Profit (TP1 / TP2), R:R, Trap prices, and optional
+/// Crypto-Only live Order Flow pressure bar are always visible without blocking chart gestures.
 public struct ChartSignalOverlayHUD: View {
     let overlayModel: ChartSignalOverlayModel
     let precision: ChartPricePrecision
@@ -137,18 +253,20 @@ public struct ChartSignalOverlayHUD: View {
                     }
                 }
 
-                HStack(spacing: 8) {
-                    if let entry = overlayModel.entryPrice {
-                        badgeItem(title: "ENTRY", price: precision.format(entry), color: palette.champagneGold)
-                    }
-                    if let sl = overlayModel.stopLoss {
-                        badgeItem(title: "SL", price: precision.format(sl), color: palette.shortCrimson)
-                    }
-                    if let tp1 = overlayModel.takeProfit1 {
-                        badgeItem(title: "TP1", price: precision.format(tp1), color: palette.longEmerald)
-                    }
-                    if overlayModel.isTP2Enabled, let tp2 = overlayModel.takeProfit2 {
-                        badgeItem(title: "TP2", price: precision.format(tp2), color: palette.macroIceBlue)
+                if overlayModel.entryPrice != nil || overlayModel.stopLoss != nil || overlayModel.takeProfit1 != nil {
+                    HStack(spacing: 8) {
+                        if let entry = overlayModel.entryPrice {
+                            badgeItem(title: "ENTRY", price: precision.format(entry), color: palette.champagneGold)
+                        }
+                        if let sl = overlayModel.stopLoss {
+                            badgeItem(title: "SL", price: precision.format(sl), color: palette.shortCrimson)
+                        }
+                        if let tp1 = overlayModel.takeProfit1 {
+                            badgeItem(title: "TP1", price: precision.format(tp1), color: palette.longEmerald)
+                        }
+                        if overlayModel.isTP2Enabled, let tp2 = overlayModel.takeProfit2 {
+                            badgeItem(title: "TP2", price: precision.format(tp2), color: palette.macroIceBlue)
+                        }
                     }
                 }
 
@@ -162,14 +280,15 @@ public struct ChartSignalOverlayHUD: View {
                             .foregroundStyle(palette.trapAmber)
                     }
                 }
+
+                if overlayModel.marketClass == .crypto, let of = overlayModel.orderFlowSummary {
+                    CryptoOrderFlowMicroStrip(summary: of, palette: palette)
+                        .frame(minWidth: 155, maxWidth: 225)
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(palette.border.opacity(0.75), lineWidth: 0.75)
-            )
+            .confluenceLiquidGlass(cornerRadius: 11, borderColor: palette.border.opacity(0.75))
             .allowsHitTesting(false)
         }
     }

@@ -21,6 +21,8 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
     public let tradeLedger: [TradeLedgerSnapshot]
     public let journalEntries: [JournalEntrySnapshot]
     public let demoWallet: DemoWallet?
+    /// Last opened TradingView chart URL (never includes raw auth cookies).
+    public let tvLastChartURL: String?
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -32,7 +34,8 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
         outcomes: [SignalOutcomeRecord],
         tradeLedger: [TradeLedgerSnapshot],
         journalEntries: [JournalEntrySnapshot],
-        demoWallet: DemoWallet? = nil
+        demoWallet: DemoWallet? = nil,
+        tvLastChartURL: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.exportedAtISO8601 = exportedAtISO8601
@@ -44,11 +47,12 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
         self.tradeLedger = tradeLedger
         self.journalEntries = journalEntries
         self.demoWallet = demoWallet
+        self.tvLastChartURL = tvLastChartURL
     }
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion, exportedAtISO8601, appBundleId, appVersion
-        case settings, signals, outcomes, tradeLedger, journalEntries, demoWallet
+        case settings, signals, outcomes, tradeLedger, journalEntries, demoWallet, tvLastChartURL
     }
 
     public init(from decoder: Decoder) throws {
@@ -63,6 +67,7 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
         tradeLedger = (try? c.decodeIfPresent([TradeLedgerSnapshot].self, forKey: .tradeLedger)) ?? []
         journalEntries = (try? c.decodeIfPresent([JournalEntrySnapshot].self, forKey: .journalEntries)) ?? []
         demoWallet = try? c.decodeIfPresent(DemoWallet.self, forKey: .demoWallet)
+        tvLastChartURL = try? c.decodeIfPresent(String.self, forKey: .tvLastChartURL)
     }
 }
 
@@ -109,25 +114,29 @@ public enum BackupArchiveError: Error, LocalizedError, Sendable {
 }
 
 /// Versioned JSON Backup & Restore + RFC-4180 CSV exporter.
-/// Strictly excludes all Keychain API keys and passes every exported payload through `SecretRedactor`.
+/// Strictly excludes all Keychain API keys and TradingView auth cookies, and passes every exported payload through `SecretRedactor`.
 public enum BackupArchiveService {
+    public static let tvLastChartURLDefaultsKey = "tv_last_chart_url"
+
     @MainActor
     public static func buildArchive(
         settings: PersistedSettingsPayload,
         store: ConfluenceDataStore,
         appVersion: String
     ) -> ConfluenceBackupArchive {
-        ConfluenceBackupArchive(
+        let savedTVURL = UserDefaults.standard.string(forKey: tvLastChartURLDefaultsKey)
+        return ConfluenceBackupArchive(
             schemaVersion: ConfluenceBackupArchive.currentSchemaVersion,
             exportedAtISO8601: ISO8601DateFormatter().string(from: Date()),
-            appBundleId: "com.bilal.confluence",
+            appBundleId: Bundle.main.bundleIdentifier ?? "com.bilal.confluence",
             appVersion: appVersion,
             settings: settings,
             signals: store.fetchSignals(limit: 500),
             outcomes: store.fetchOutcomeRecords(),
             tradeLedger: store.fetchTradeLedger(limit: 500),
             journalEntries: store.fetchJournalEntries(limit: 500),
-            demoWallet: store.loadDemoWallet()
+            demoWallet: store.loadDemoWallet(),
+            tvLastChartURL: savedTVURL
         )
     }
 
@@ -139,6 +148,18 @@ public enum BackupArchiveService {
         let rawString = String(data: rawData, encoding: .utf8) ?? "{}"
         let redacted = SecretRedactor.redact(rawString)
         return Data(redacted.utf8)
+    }
+
+    /// Exports redacted JSON string for 1-tap Clipboard backup fallback (LiveContainer safe).
+    @MainActor
+    public static func exportBackupJSONString(
+        settings: PersistedSettingsPayload,
+        store: ConfluenceDataStore,
+        appVersion: String
+    ) -> String? {
+        let archive = buildArchive(settings: settings, store: store, appVersion: appVersion)
+        guard let data = try? encodeRedactedArchiveData(archive) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     @MainActor
@@ -164,7 +185,11 @@ public enum BackupArchiveService {
         guard archive.schemaVersion >= 1 && archive.schemaVersion <= ConfluenceBackupArchive.currentSchemaVersion else {
             throw BackupArchiveError.unsupportedSchemaVersion(archive.schemaVersion)
         }
-        guard archive.appBundleId == "com.bilal.confluence" else {
+        let currentBundle = Bundle.main.bundleIdentifier
+        let isRecognizedBundle = archive.appBundleId == "com.bilal.confluence"
+            || archive.appBundleId.hasPrefix("com.bilal.confluence.")
+            || (currentBundle != nil && archive.appBundleId == currentBundle)
+        guard isRecognizedBundle else {
             throw BackupArchiveError.invalidBundleIdentifier(archive.appBundleId)
         }
         return archive
@@ -188,6 +213,13 @@ public enum BackupArchiveService {
         }
 
         settingsStore.payload = archive.settings
+        if let tvURLString = archive.tvLastChartURL,
+           let parsed = URL(string: tvURLString),
+           let host = parsed.host?.lowercased(),
+           host.contains("tradingview.com"),
+           parsed.path.hasPrefix("/chart") {
+            UserDefaults.standard.set(tvURLString, forKey: tvLastChartURLDefaultsKey)
+        }
 
         for sig in archive.signals {
             dataStore.upsertSignal(sig)

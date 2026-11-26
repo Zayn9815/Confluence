@@ -1,9 +1,10 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import SignalEngine
 
 /// Settings Category 5: Data, Diagnostics & About
-/// Hosts Versioned Backup & Restore, CSV exports, Diagnostics Hub, Searchable Glossary, Risk Disclosure & About.
+/// Hosts Versioned Backup & Restore (with 1-tap Clipboard JSON fallback for LiveContainer), CSV exports, Diagnostics Hub, Searchable Glossary, Risk Disclosure & About.
 public struct DataDiagnosticsAboutSettingsView: View {
     @Bindable var coordinator: MarketScannerCoordinator
     let palette: ConfluencePalette
@@ -41,6 +42,19 @@ public struct DataDiagnosticsAboutSettingsView: View {
                     }
                 }
 
+                Button {
+                    if let json = coordinator.exportBackupJSONString() {
+                        UIPasteboard.general.string = json
+                        backupStatusIsError = false
+                        backupStatusMessage = "Copied redacted backup JSON to clipboard (\(json.count) chars)."
+                    } else {
+                        backupStatusIsError = true
+                        backupStatusMessage = "Could not serialize backup JSON."
+                    }
+                } label: {
+                    Label("Copy Backup JSON to Clipboard", systemImage: "doc.on.doc")
+                }
+
                 Picker("Restore Mode", selection: $importMode) {
                     ForEach(BackupImportMode.allCases) { m in
                         Text(m.rawValue).tag(m)
@@ -51,6 +65,26 @@ public struct DataDiagnosticsAboutSettingsView: View {
                     showFileImporter = true
                 } label: {
                     Label("Restore Backup From File", systemImage: "square.and.arrow.down")
+                }
+
+                Button {
+                    guard let text = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !text.isEmpty
+                    else {
+                        backupStatusIsError = true
+                        backupStatusMessage = "Clipboard is empty — copy a Confluence backup JSON first."
+                        return
+                    }
+                    do {
+                        let summary = try coordinator.importBackupArchive(from: Data(text.utf8), mode: importMode)
+                        backupStatusIsError = false
+                        backupStatusMessage = "Restored clipboard v\(summary.schemaVersion) backup: \(summary.signalsImported) signals, \(summary.outcomesImported) outcomes, \(summary.journalImported) journal entries."
+                    } catch {
+                        backupStatusIsError = true
+                        backupStatusMessage = error.localizedDescription
+                    }
+                } label: {
+                    Label("Restore Backup From Clipboard JSON", systemImage: "doc.on.clipboard")
                 }
 
                 if let ledgerCSV = preparedLedgerCSVURL {

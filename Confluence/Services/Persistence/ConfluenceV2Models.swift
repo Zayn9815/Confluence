@@ -203,6 +203,9 @@ public struct TradeLedgerSnapshot: Codable, Sendable, Equatable, Identifiable {
     public let netRMultiple: Double
     public let createdAt: Date
     public let exitedAt: Date?
+    public let activeStrategyProfileKey: String
+    public let enabledStrategyIDsCSV: String
+    public let orderFlowStatus: String
 
     public init(
         fingerprint: String,
@@ -224,7 +227,10 @@ public struct TradeLedgerSnapshot: Codable, Sendable, Equatable, Identifiable {
         status: TradeLedgerStatus,
         netRMultiple: Double,
         createdAt: Date,
-        exitedAt: Date?
+        exitedAt: Date?,
+        activeStrategyProfileKey: String = "",
+        enabledStrategyIDsCSV: String = "",
+        orderFlowStatus: String = "off"
     ) {
         self.fingerprint = fingerprint
         self.symbol = symbol
@@ -246,6 +252,44 @@ public struct TradeLedgerSnapshot: Codable, Sendable, Equatable, Identifiable {
         self.netRMultiple = netRMultiple
         self.createdAt = createdAt
         self.exitedAt = exitedAt
+        self.activeStrategyProfileKey = activeStrategyProfileKey
+        self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
+        self.orderFlowStatus = orderFlowStatus
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case fingerprint, symbol, marketClass, timeframe, direction
+        case entryLow, entryHigh, entryMid, stopLoss, tp1, tp2
+        case confidencePercent, regime, killzone, dataProvider, alignedStrategyIDs
+        case status, netRMultiple, createdAt, exitedAt
+        case activeStrategyProfileKey, enabledStrategyIDsCSV, orderFlowStatus
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fingerprint = try c.decode(String.self, forKey: .fingerprint)
+        symbol = try c.decode(String.self, forKey: .symbol)
+        marketClass = try c.decode(MarketClass.self, forKey: .marketClass)
+        timeframe = try c.decode(Timeframe.self, forKey: .timeframe)
+        direction = try c.decode(TradeDirection.self, forKey: .direction)
+        entryLow = try c.decode(Double.self, forKey: .entryLow)
+        entryHigh = try c.decode(Double.self, forKey: .entryHigh)
+        entryMid = try c.decode(Double.self, forKey: .entryMid)
+        stopLoss = try c.decode(Double.self, forKey: .stopLoss)
+        tp1 = try c.decode(Double.self, forKey: .tp1)
+        tp2 = try c.decode(Double.self, forKey: .tp2)
+        confidencePercent = try c.decode(Double.self, forKey: .confidencePercent)
+        regime = try c.decode(MarketRegime.self, forKey: .regime)
+        killzone = try c.decode(KillzoneSession.self, forKey: .killzone)
+        dataProvider = try c.decode(String.self, forKey: .dataProvider)
+        alignedStrategyIDs = (try? c.decodeIfPresent([String].self, forKey: .alignedStrategyIDs)) ?? []
+        status = try c.decode(TradeLedgerStatus.self, forKey: .status)
+        netRMultiple = try c.decode(Double.self, forKey: .netRMultiple)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        exitedAt = try c.decodeIfPresent(Date.self, forKey: .exitedAt)
+        activeStrategyProfileKey = (try? c.decodeIfPresent(String.self, forKey: .activeStrategyProfileKey)) ?? ""
+        enabledStrategyIDsCSV = (try? c.decodeIfPresent(String.self, forKey: .enabledStrategyIDsCSV)) ?? ""
+        orderFlowStatus = (try? c.decodeIfPresent(String.self, forKey: .orderFlowStatus)) ?? "off"
     }
 }
 
@@ -440,6 +484,9 @@ public final class TradeLedgerEntry {
     public var netRMultiple: Double
     public var createdAt: Date
     public var exitedAt: Date?
+    public var activeStrategyProfileKey: String = ""
+    public var enabledStrategyIDsCSV: String = ""
+    public var orderFlowStatus: String = "off"
 
     public init(
         fingerprint: String,
@@ -461,7 +508,10 @@ public final class TradeLedgerEntry {
         statusRaw: String,
         netRMultiple: Double,
         createdAt: Date,
-        exitedAt: Date? = nil
+        exitedAt: Date? = nil,
+        activeStrategyProfileKey: String = "",
+        enabledStrategyIDsCSV: String = "",
+        orderFlowStatus: String = "off"
     ) {
         self.fingerprint = fingerprint
         self.symbol = symbol
@@ -483,6 +533,9 @@ public final class TradeLedgerEntry {
         self.netRMultiple = netRMultiple
         self.createdAt = createdAt
         self.exitedAt = exitedAt
+        self.activeStrategyProfileKey = activeStrategyProfileKey
+        self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
+        self.orderFlowStatus = orderFlowStatus
     }
 
     public func toSnapshot() -> TradeLedgerSnapshot {
@@ -507,7 +560,10 @@ public final class TradeLedgerEntry {
             status: TradeLedgerStatus(rawValue: statusRaw) ?? .open,
             netRMultiple: netRMultiple,
             createdAt: createdAt,
-            exitedAt: exitedAt
+            exitedAt: exitedAt,
+            activeStrategyProfileKey: activeStrategyProfileKey,
+            enabledStrategyIDsCSV: enabledStrategyIDsCSV,
+            orderFlowStatus: orderFlowStatus
         )
     }
 }
@@ -1013,6 +1069,9 @@ public final class DemoPositionRecord {
     public var positionJSON: Data
     public var createdAt: Date
     public var closedAt: Date?
+    public var activeStrategyProfileKey: String = ""
+    public var enabledStrategyIDsCSV: String = ""
+    public var orderFlowStatus: String = "off"
 
     public init(
         id: String,
@@ -1020,7 +1079,10 @@ public final class DemoPositionRecord {
         statusRaw: String,
         positionJSON: Data,
         createdAt: Date,
-        closedAt: Date? = nil
+        closedAt: Date? = nil,
+        activeStrategyProfileKey: String = "",
+        enabledStrategyIDsCSV: String = "",
+        orderFlowStatus: String = "off"
     ) {
         self.id = id
         self.symbol = symbol
@@ -1028,6 +1090,9 @@ public final class DemoPositionRecord {
         self.positionJSON = positionJSON
         self.createdAt = createdAt
         self.closedAt = closedAt
+        self.activeStrategyProfileKey = activeStrategyProfileKey
+        self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
+        self.orderFlowStatus = orderFlowStatus
     }
 
     public func toPosition() -> DemoPosition? {

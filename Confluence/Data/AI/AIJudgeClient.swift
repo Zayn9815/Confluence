@@ -286,7 +286,8 @@ public actor OpenAICompatibleJudgeClient: AIJudgeClient {
         let compactSnapshot = SignalEngine.buildCompactReflexPrompt(for: signal)
         let prompt = """
         You are an institutional risk reviewer evaluating a deterministic trade setup snapshot.
-        Never invent prices. Return ONLY a strict json object matching this exact example format:
+        Never invent prices. Never penalize a setup for strategies the user disabled in strategy_profile or for absent Order Flow on Forex/Metals/Indices/Stocks markets.
+        Return ONLY a strict json object matching this exact example format:
         {"regime":"trending","direction":"long","setup_quality":2,"confidence":0.82,"risk_state":"safe","agree":true,"catalyst_bias":"neutral","invalidation_check":"One crisp invalidation sentence."}
         Allowed enums: regime in [trending, mean_reverting, high_vol, crisis]; direction in [long, short, neutral]; risk_state in [safe, near_limit, reduce]; catalyst_bias in [bullish, bearish, neutral, none].
         Snapshot: \(compactSnapshot)

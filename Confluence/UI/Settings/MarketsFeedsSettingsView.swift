@@ -10,6 +10,8 @@ public struct MarketsFeedsSettingsView: View {
     @State private var finnhubKeyInput = ""
     @State private var hasTwelveDataKey = false
     @State private var hasFinnhubKey = false
+    @State private var showClearTradingViewAlert = false
+    @State private var tradingViewCacheFeedback: String? = nil
 
     public init(coordinator: MarketScannerCoordinator, palette: ConfluencePalette) {
         self.coordinator = coordinator
@@ -201,10 +203,22 @@ public struct MarketsFeedsSettingsView: View {
                         ConfluenceInfoButton(.showTradingViewOption)
                     }
                 }
+
+                Button(role: .destructive) {
+                    showClearTradingViewAlert = true
+                } label: {
+                    Label("Sign Out / Clear TradingView Cache", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+
+                if let msg = tradingViewCacheFeedback {
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundStyle(palette.longEmerald)
+                }
             } header: {
                 Text("Live Price Feeds & Chart View")
             } footer: {
-                Text("Live feeds run only while the app is open (up to 8 symbols). Twelve Data is never used for live streaming or polling.")
+                Text("Live feeds run only while the app is open (up to 8 symbols). Twelve Data is never used for live streaming or polling. Clearing the TradingView cache signs out your embedded TradingView Web session and deletes local web cookies.")
             }
 
             Section {
@@ -292,6 +306,17 @@ public struct MarketsFeedsSettingsView: View {
         }
         .navigationTitle("Markets & Data")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Sign Out & Clear TradingView Cache?", isPresented: $showClearTradingViewAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Sign Out & Clear", role: .destructive) {
+                Task { @MainActor in
+                    await TradingViewWebSessionManager.shared.clearSessionAndCache()
+                    tradingViewCacheFeedback = "TradingView session signed out and local web cache cleared."
+                }
+            }
+        } message: {
+            Text("This signs out of TradingView inside Confluence, clears saved TradingView cookies and local layout URL, and resets the embedded TradingView browser.")
+        }
         .task {
             hasTwelveDataKey = await KeychainStore.shared.hasValue(for: .twelveDataAPIKey)
             hasFinnhubKey = await KeychainStore.shared.hasValue(for: .finnhubAPIKey)

@@ -228,7 +228,7 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
             return SettingCopy(
                 label: "Chart rendering engine",
                 subtitle: "Choose the interactive candlestick engine used for full-screen charts.",
-                helpText: "Defaults to TradingView LightweightCharts with native live candle updates, horizontal Entry/Stop loss/Target/Trap price lines, and crosshair readout. Additional native engines (DGCharts, Swift Trading View, CandleKit) are wired for Step 2 and use Confluence's native SwiftUI Canvas fallback with the Signal Level HUD today."
+                helpText: "Switch seamlessly between TradingView LightweightCharts (default), DGCharts (native UIKit candlesticks), Swift Trading View (SwiftUI Canvas + MA/Volume), CandleKit (120Hz SwiftUI Canvas with native order lines), and TradingView Web (persistent logged-in tradingview.com with Clean Mode & 1-tap Sync Pair)."
             )
         case .defaultChartView:
             return SettingCopy(

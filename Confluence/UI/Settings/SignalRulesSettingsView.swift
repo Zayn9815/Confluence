@@ -10,6 +10,7 @@ public struct SignalRulesSettingsView: View {
 
     @State private var geminiKeyInput = ""
     @State private var hasGeminiKey = false
+    @State private var coreFloorNotice: String? = nil
 
     private let confidencePresets: [Double] = [65, 70, 80, 90]
     private let calibrationConfidencePresets: [Double] = [0, 70, 80, 90]
@@ -264,12 +265,18 @@ public struct SignalRulesSettingsView: View {
                 HStack(spacing: 8) {
                     strategyPresetButton("Proven Winners") {
                         coordinator.settings.payload.enabledStrategies = StrategyID.provenWinners
+                        coreFloorNotice = nil
+                        coordinator.reevaluateCachedSignalsForActiveStrategyProfile()
                     }
                     strategyPresetButton("Select All") {
                         coordinator.settings.payload.enabledStrategies = StrategyID.allSet
+                        coreFloorNotice = nil
+                        coordinator.reevaluateCachedSignalsForActiveStrategyProfile()
                     }
-                    strategyPresetButton("Clear All") {
-                        coordinator.settings.payload.enabledStrategies = []
+                    strategyPresetButton("1 Core Only") {
+                        coordinator.settings.payload.enabledStrategies = [.ictBos]
+                        coreFloorNotice = "At least 1 core candle strategy stays enabled so scans remain active."
+                        coordinator.reevaluateCachedSignalsForActiveStrategyProfile()
                     }
                 }
                 if isAdvanced {
@@ -277,22 +284,55 @@ public struct SignalRulesSettingsView: View {
                         "Minimum aligned strategies: \(max(3, coordinator.settings.payload.minimumAlignedStrategies))",
                         value: Binding(
                             get: { max(3, coordinator.settings.payload.minimumAlignedStrategies) },
-                            set: { coordinator.settings.payload.minimumAlignedStrategies = $0 }
+                            set: {
+                                coordinator.settings.payload.minimumAlignedStrategies = $0
+                                coordinator.reevaluateCachedSignalsForActiveStrategyProfile()
+                            }
                         ),
                         in: 3...6,
                         step: 1
                     )
                     .font(.caption)
                 }
-                if enabledStrategyCount == 0 {
+                if let notice = coreFloorNotice {
+                    Label(notice, systemImage: "info.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(palette.champagneGold)
+                } else if enabledStrategyCount == 0 {
                     Label(MarketScannerCoordinator.noStrategiesEnabledMessage, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(palette.trapAmber)
                 }
+
+                // Crypto-Only Live Order Flow & Institutional Absorption Module
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle(isOn: Binding(
+                        get: { coordinator.settings.payload.isOrderFlowEnabled },
+                        set: { newValue in
+                            coordinator.settings.payload.isOrderFlowEnabled = newValue
+                            coordinator.reevaluateCachedSignalsForActiveStrategyProfile()
+                        }
+                    )) {
+                        HStack(spacing: 6) {
+                            Text("Order Flow (Crypto Only)")
+                                .font(.subheadline.weight(.semibold))
+                            Text("CRYPTO ONLY")
+                                .font(.system(size: 9, weight: .heavy))
+                                .foregroundStyle(palette.canvas)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(palette.champagneGold, in: Capsule())
+                        }
+                    }
+                    Text("Live Order Book Imbalance, CVD divergence, passive absorption, resting walls & liquidations from free public crypto feeds. Automatically skipped on Forex & TradFi with zero score penalty.")
+                        .font(.caption2)
+                        .foregroundStyle(palette.secondaryInk)
+                }
+                .padding(.vertical, 4)
             } header: {
                 SettingsSectionHeader(SettingHelpKey.strategySelection.copy.label, helpKey: .strategySelection)
             } footer: {
-                Text("Only selected strategies are scanned. If you pick fewer strategies than the minimum, the required count drops to match your selection (never below 1).")
+                Text("Only selected strategies are scanned, with 100% dynamic weight re-normalization across active modules (zero dead weight). Keep at least 1 core price-action strategy enabled.")
             }
 
             ForEach(StrategyCategory.allCases) { category in
@@ -301,10 +341,12 @@ public struct SignalRulesSettingsView: View {
                         Toggle(sid.displayName, isOn: Binding(
                             get: { coordinator.settings.payload.enabledStrategies.contains(sid) },
                             set: { isOn in
-                                if isOn {
-                                    coordinator.settings.payload.enabledStrategies.insert(sid)
+                                let ok = coordinator.settings.setStrategyEnforcingCoreFloor(sid, enabled: isOn)
+                                if ok {
+                                    coreFloorNotice = nil
+                                    coordinator.reevaluateCachedSignalsForActiveStrategyProfile()
                                 } else {
-                                    coordinator.settings.payload.enabledStrategies.remove(sid)
+                                    coreFloorNotice = "Keep at least 1 core candle strategy enabled."
                                 }
                             }
                         ))

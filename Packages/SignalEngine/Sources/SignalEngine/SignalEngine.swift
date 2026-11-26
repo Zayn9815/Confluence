@@ -44,7 +44,9 @@ public enum SignalEngine {
         config: EngineConfig = EngineConfig(),
         dataProvider: String,
         serverNowEpochSeconds: TimeInterval,
-        clockSkewSeconds: TimeInterval = 0.0
+        clockSkewSeconds: TimeInterval = 0.0,
+        orderFlowSnapshot: OrderFlowSnapshot? = nil,
+        isLiveEvaluation: Bool = true
     ) -> EngineAnalysisOutput {
         let entrySeries = CandleHygieneEngine.sanitize(
             rawCandles: rawEntryCandles,
@@ -98,6 +100,11 @@ public enum SignalEngine {
             positioning = PositioningAnalyzer.analyzeCFTCCOT(records: cftcCOTRecords, asOfEpochSeconds: serverNowEpochSeconds)
         }
 
+        // Anti-repainting hard guard: historical evaluations MUST never consume live order flow
+        let effectiveOrderFlow: OrderFlowSnapshot? = (isLiveEvaluation && asset.marketClass == .crypto && config.isOrderFlowEnabled)
+            ? orderFlowSnapshot
+            : nil
+
         // Single unified evaluation pass (zero duplicate ICT / Macro / Trap computation)
         let eval = evaluateSanitizedDetailed(
             asset: asset,
@@ -113,7 +120,9 @@ public enum SignalEngine {
             dataProvider: dataProvider,
             isMarketClosed: entrySeries.report.isMarketClosed,
             marketClosedReason: entrySeries.report.marketClosedReason,
-            nowEpochSeconds: serverNowEpochSeconds
+            nowEpochSeconds: serverNowEpochSeconds,
+            orderFlowSnapshot: effectiveOrderFlow,
+            isLiveEvaluation: isLiveEvaluation
         )
 
         return EngineAnalysisOutput(
@@ -141,9 +150,14 @@ public enum SignalEngine {
         dataProvider: String,
         isMarketClosed: Bool,
         marketClosedReason: String? = nil,
-        nowEpochSeconds: TimeInterval
+        nowEpochSeconds: TimeInterval,
+        orderFlowSnapshot: OrderFlowSnapshot? = nil,
+        isLiveEvaluation: Bool = true
     ) -> TradeSignal? {
         guard entryCandles.count >= CandleHygieneEngine.minimumRequiredBars else { return nil }
+        let effectiveOrderFlow: OrderFlowSnapshot? = (isLiveEvaluation && asset.marketClass == .crypto && config.isOrderFlowEnabled)
+            ? orderFlowSnapshot
+            : nil
         return evaluateSanitizedDetailed(
             asset: asset,
             entryCandles: entryCandles,
@@ -158,7 +172,9 @@ public enum SignalEngine {
             dataProvider: dataProvider,
             isMarketClosed: isMarketClosed,
             marketClosedReason: marketClosedReason,
-            nowEpochSeconds: nowEpochSeconds
+            nowEpochSeconds: nowEpochSeconds,
+            orderFlowSnapshot: effectiveOrderFlow,
+            isLiveEvaluation: isLiveEvaluation
         ).signal
     }
 
@@ -184,7 +200,9 @@ public enum SignalEngine {
         dataProvider: String,
         isMarketClosed: Bool,
         marketClosedReason: String? = nil,
-        nowEpochSeconds: TimeInterval
+        nowEpochSeconds: TimeInterval,
+        orderFlowSnapshot: OrderFlowSnapshot? = nil,
+        isLiveEvaluation: Bool = true
     ) -> DetailedSanitizedEvaluation {
         let regime = MarketRegimeClassifier.classify(candles: entryCandles, marketClass: asset.marketClass)
         let enabled = config.enabledStrategies
@@ -260,7 +278,9 @@ public enum SignalEngine {
             isMarketClosed: isMarketClosed,
             nowEpochSeconds: nowEpochSeconds,
             newsCatalyst: newsCatalyst,
-            marketClosedReason: marketClosedReason
+            marketClosedReason: marketClosedReason,
+            orderFlowSnapshot: orderFlowSnapshot,
+            isLiveEvaluation: isLiveEvaluation
         )
 
         return DetailedSanitizedEvaluation(
@@ -270,6 +290,27 @@ public enum SignalEngine {
             preShield: preShield,
             latestMacro: latestMacro
         )
+    }
+
+    private struct CompactStrategyProfilePayload: Encodable, Sendable {
+        let profile_key: String
+        let enabled_modules: [String]
+        let disabled_count: Int
+        let breadth: String?
+        let order_flow_enabled: Bool
+        let judge_rule: String
+    }
+
+    private struct CompactOrderFlowPayload: Encodable, Sendable {
+        let venue: String
+        let live_ws: Bool
+        let obi_weighted: Double
+        let cvd_ratio: Double
+        let divergence: String?
+        let absorption: String?
+        let alignment: String
+        let bid_wall_confirmed: Bool
+        let ask_wall_confirmed: Bool
     }
 
     private struct CompactReflexSnapshot: Encodable, Sendable {
@@ -291,10 +332,17 @@ public enum SignalEngine {
         let sl_pct: Double?
         let pre_news: String?
         let post_news: String?
+        let strategy_profile: CompactStrategyProfilePayload
+        let order_flow: CompactOrderFlowPayload?
     }
 
-    /// Builds a compact (<400 token) causal JSON snapshot for the optional Gemini 4 Hydrogen judge.
-    public static func buildCompactReflexPrompt(for signal: TradeSignal) -> String {
+    /// Builds a compact causal JSON snapshot for optional AI second-opinion judges.
+    /// Includes the active strategy profile (explicitly instructing AI never to penalize user-disabled
+    /// strategies or absent Order Flow on Forex/TradFi) and compact Crypto-Only Order Flow metrics when fresh.
+    public static func buildCompactReflexPrompt(
+        for signal: TradeSignal,
+        activeProfile: ActiveStrategyProfile? = nil
+    ) -> String {
         let safeConf = signal.confidencePercent.isFinite ? Int(min(100.0, max(0.0, signal.confidencePercent)).rounded()) : 0
         let rrRounded: Double? = signal.levels.flatMap { lv in
             guard lv.riskRewardRatio.isFinite else { return nil }
@@ -304,6 +352,50 @@ public enum SignalEngine {
             guard lv.riskPercent.isFinite else { return nil }
             return (lv.riskPercent * 100.0).rounded() / 100.0
         }
+
+        let enabledList: [String]
+        let disabledCount: Int
+        let orderFlowOn: Bool
+        if let profile = activeProfile {
+            enabledList = profile.applicableStrategies(for: signal.marketClass).map(\.rawValue).sorted()
+            disabledCount = profile.disabledStrategies.count
+            orderFlowOn = profile.isOrderFlowApplicable(for: signal.marketClass)
+        } else if let entries = signal.strengthBreakdown?.moduleContributions, !entries.isEmpty {
+            enabledList = entries.filter(\.isActive).map(\.id).sorted()
+            disabledCount = entries.filter { !$0.isActive }.count
+            orderFlowOn = (signal.marketClass == .crypto && signal.orderFlowSummary != nil)
+        } else {
+            enabledList = signal.matchedStrategyIDs.map(\.rawValue).sorted()
+            disabledCount = max(0, StrategyID.allCases.count - enabledList.count)
+            orderFlowOn = (signal.marketClass == .crypto && signal.orderFlowSummary != nil)
+        }
+
+        let profilePayload = CompactStrategyProfilePayload(
+            profile_key: ActiveStrategyProfile.normalizedKey(activeProfile?.profileKey ?? signal.activeStrategyProfileKey),
+            enabled_modules: enabledList,
+            disabled_count: disabledCount,
+            breadth: signal.strengthBreakdown?.confluenceBreadthLabel,
+            order_flow_enabled: orderFlowOn,
+            judge_rule: "Never penalize user-disabled strategies or absent Order Flow on non-crypto markets."
+        )
+
+        let orderFlowPayload: CompactOrderFlowPayload?
+        if signal.marketClass == .crypto, let of = signal.orderFlowSummary {
+            orderFlowPayload = CompactOrderFlowPayload(
+                venue: of.venue,
+                live_ws: of.isLiveStream,
+                obi_weighted: (of.obiWeighted * 100.0).rounded() / 100.0,
+                cvd_ratio: (of.cvdRatio * 100.0).rounded() / 100.0,
+                divergence: of.divergenceTag,
+                absorption: of.absorptionTag,
+                alignment: of.alignment,
+                bid_wall_confirmed: of.bidWallConfirmed,
+                ask_wall_confirmed: of.askWallConfirmed
+            )
+        } else {
+            orderFlowPayload = nil
+        }
+
         let snapshot = CompactReflexSnapshot(
             symbol: signal.symbol,
             market: signal.marketClass.rawValue,
@@ -322,7 +414,9 @@ public enum SignalEngine {
             rr: rrRounded,
             sl_pct: slRounded,
             pre_news: signal.preNewsBadge,
-            post_news: signal.postNewsCatalystBadge
+            post_news: signal.postNewsCatalystBadge,
+            strategy_profile: profilePayload,
+            order_flow: orderFlowPayload
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

@@ -279,7 +279,21 @@ public struct LightweightChartsAdapterView: UIViewRepresentable {
         let trapSig = overlayModel.traps.filter(\.isActionable).map { "\($0.id):\($0.price)" }.joined(separator: ",")
         let structSig = overlayModel.structureEvents.map { "\($0.id):\($0.timestampEpochSeconds)" }.joined(separator: ",")
         let beSig = overlayModel.breakevenPrice.map { String(format: "%.8f", $0) } ?? "n"
-        return "\(e)|\(sl)|\(tp1)|\(tp2)|\(trapSig)|\(structSig)|\(beSig)|\(replayMarkers.count)|\(closedCandles.count)"
+        let bidWallSig: String = {
+            guard overlayModel.marketClass == .crypto,
+                  let of = overlayModel.orderFlowSummary,
+                  of.bidWallConfirmed,
+                  let p = of.bidWallPrice else { return "n" }
+            return String(format: "%.8f", p)
+        }()
+        let askWallSig: String = {
+            guard overlayModel.marketClass == .crypto,
+                  let of = overlayModel.orderFlowSummary,
+                  of.askWallConfirmed,
+                  let p = of.askWallPrice else { return "n" }
+            return String(format: "%.8f", p)
+        }()
+        return "\(e)|\(sl)|\(tp1)|\(tp2)|\(trapSig)|\(structSig)|\(beSig)|\(bidWallSig)|\(askWallSig)|\(replayMarkers.count)|\(closedCandles.count)"
     }
 
     private func applyFullData(to chartView: LightweightCharts, coordinator: Coordinator, shouldFit: Bool) {
@@ -400,6 +414,28 @@ public struct LightweightChartsAdapterView: UIViewRepresentable {
                 axisLabelVisible: true,
                 title: trap.label
             )))
+        }
+        if overlayModel.marketClass == .crypto, let orderFlow = overlayModel.orderFlowSummary {
+            if orderFlow.bidWallConfirmed, let bidWall = orderFlow.bidWallPrice {
+                coordinator.priceLines.append(series.createPriceLine(options: PriceLineOptions(
+                    price: bidWall,
+                    color: ChartColor(hex: 0x10B981),
+                    lineWidth: .one,
+                    lineStyle: .dotted,
+                    axisLabelVisible: true,
+                    title: "BID WALL"
+                )))
+            }
+            if orderFlow.askWallConfirmed, let askWall = orderFlow.askWallPrice {
+                coordinator.priceLines.append(series.createPriceLine(options: PriceLineOptions(
+                    price: askWall,
+                    color: ChartColor(hex: 0xEF4444),
+                    lineWidth: .one,
+                    lineStyle: .dotted,
+                    axisLabelVisible: true,
+                    title: "ASK WALL"
+                )))
+            }
         }
 
         // Combined candle markers: Trade Replay pins + Buy/Sell Entry + Traps + ICT BOS/CHoCH/Liquidity Sweeps

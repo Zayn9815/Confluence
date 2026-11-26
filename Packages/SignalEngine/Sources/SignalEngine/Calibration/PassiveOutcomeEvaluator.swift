@@ -187,6 +187,9 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
     public let fillWindowBars: Int?
     public let isLegacyImmediateFill: Bool?
     public let origin: SignalOrigin
+    public let activeStrategyProfileKey: String
+    public let enabledStrategyIDsCSV: String
+    public let orderFlowStatus: String
 
     public init(
         signalId: String,
@@ -211,7 +214,10 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
         filledAtEpochSeconds: TimeInterval? = nil,
         fillWindowBars: Int? = nil,
         isLegacyImmediateFill: Bool? = nil,
-        origin: SignalOrigin = .scanner
+        origin: SignalOrigin = .scanner,
+        activeStrategyProfileKey: String = "",
+        enabledStrategyIDsCSV: String = "",
+        orderFlowStatus: String = "off"
     ) {
         self.signalId = signalId
         self.symbol = symbol
@@ -236,6 +242,9 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
         self.fillWindowBars = fillWindowBars
         self.isLegacyImmediateFill = isLegacyImmediateFill
         self.origin = origin
+        self.activeStrategyProfileKey = activeStrategyProfileKey
+        self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
+        self.orderFlowStatus = orderFlowStatus
     }
 
     enum CodingKeys: String, CodingKey {
@@ -244,7 +253,7 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
         case resolvedAtEpochSeconds, regime, killzone, timeframe, dataProvider
         case riskRewardRatio, entryBarCloseEpochSeconds
         case lifecycleStatus, filledAtEpochSeconds, fillWindowBars, isLegacyImmediateFill
-        case origin
+        case origin, activeStrategyProfileKey, enabledStrategyIDsCSV, orderFlowStatus
     }
 
     public init(from decoder: Decoder) throws {
@@ -272,6 +281,14 @@ public struct SignalOutcomeRecord: Codable, Sendable, Equatable, Identifiable {
         fillWindowBars = try c.decodeIfPresent(Int.self, forKey: .fillWindowBars)
         isLegacyImmediateFill = try c.decodeIfPresent(Bool.self, forKey: .isLegacyImmediateFill)
         origin = (try? c.decodeIfPresent(SignalOrigin.self, forKey: .origin)) ?? .scanner
+        activeStrategyProfileKey = (try? c.decodeIfPresent(String.self, forKey: .activeStrategyProfileKey)) ?? ""
+        enabledStrategyIDsCSV = (try? c.decodeIfPresent(String.self, forKey: .enabledStrategyIDsCSV)) ?? ""
+        orderFlowStatus = (try? c.decodeIfPresent(String.self, forKey: .orderFlowStatus)) ?? "off"
+    }
+
+    /// Treats pre-upgrade records with empty `activeStrategyProfileKey` as `"legacy_baseline"`.
+    public var effectiveStrategyProfileKey: String {
+        ActiveStrategyProfile.normalizedKey(activeStrategyProfileKey)
     }
 
     public var isWin: Bool {
@@ -604,7 +621,10 @@ public enum PassiveOutcomeEvaluator {
                 filledAtEpochSeconds: filledAt,
                 fillWindowBars: effectiveFillWindow,
                 isLegacyImmediateFill: false,
-                origin: signal.origin
+                origin: signal.origin,
+                activeStrategyProfileKey: signal.activeStrategyProfileKey,
+                enabledStrategyIDsCSV: signal.matchedStrategyIDs.map(\.rawValue).sorted().joined(separator: ","),
+                orderFlowStatus: signal.orderFlowStatus
             )
         }
 

@@ -226,6 +226,37 @@ public struct ReflexJudgment: Codable, Sendable, Equatable, Hashable {
     }
 }
 
+/// Per-module dynamic weight re-normalization record captured on every scored signal.
+public struct StrategyModuleWeightEntry: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public let id: String
+    public let displayName: String
+    public let baseWeight: Double
+    /// Re-normalized weight summing strictly to `1.0` across all active modules (0 when skipped).
+    public let effectiveWeight: Double
+    /// Directional score in `[-1.0, +1.0]` (`+` aligns with setup, `-` opposes, `0` neutral/inactive).
+    public let rawScore: Double
+    public let isActive: Bool
+    public let skippedReason: String?
+
+    public init(
+        id: String,
+        displayName: String,
+        baseWeight: Double,
+        effectiveWeight: Double,
+        rawScore: Double,
+        isActive: Bool,
+        skippedReason: String? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.baseWeight = baseWeight
+        self.effectiveWeight = effectiveWeight
+        self.rawScore = rawScore
+        self.isActive = isActive
+        self.skippedReason = skippedReason
+    }
+}
+
 public struct SignalStrengthBreakdown: Codable, Sendable, Equatable, Hashable {
     public let technicalScore: Double
     public let psychologyScore: Double
@@ -234,6 +265,11 @@ public struct SignalStrengthBreakdown: Codable, Sendable, Equatable, Hashable {
     public let finalConfidencePercent: Double
     public let strengthLabel: String
     public let notes: [String]
+    public let moduleContributions: [StrategyModuleWeightEntry]
+    public let activeModuleCount: Int
+    public let totalApplicableModuleCount: Int
+    public let orderFlowScore: Double?
+    public let orderFlowStatus: String?
 
     public init(
         technicalScore: Double,
@@ -242,7 +278,12 @@ public struct SignalStrengthBreakdown: Codable, Sendable, Equatable, Hashable {
         regimeRiskAdjustment: Double,
         finalConfidencePercent: Double,
         strengthLabel: String,
-        notes: [String] = []
+        notes: [String] = [],
+        moduleContributions: [StrategyModuleWeightEntry] = [],
+        activeModuleCount: Int = 0,
+        totalApplicableModuleCount: Int = 0,
+        orderFlowScore: Double? = nil,
+        orderFlowStatus: String? = nil
     ) {
         self.technicalScore = technicalScore
         self.psychologyScore = psychologyScore
@@ -251,6 +292,39 @@ public struct SignalStrengthBreakdown: Codable, Sendable, Equatable, Hashable {
         self.finalConfidencePercent = finalConfidencePercent
         self.strengthLabel = strengthLabel
         self.notes = notes
+        self.moduleContributions = moduleContributions
+        self.activeModuleCount = activeModuleCount
+        self.totalApplicableModuleCount = totalApplicableModuleCount
+        self.orderFlowScore = orderFlowScore
+        self.orderFlowStatus = orderFlowStatus
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case technicalScore, psychologyScore, newsMacroScore, regimeRiskAdjustment
+        case finalConfidencePercent, strengthLabel, notes
+        case moduleContributions, activeModuleCount, totalApplicableModuleCount
+        case orderFlowScore, orderFlowStatus
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        technicalScore = try c.decode(Double.self, forKey: .technicalScore)
+        psychologyScore = try c.decode(Double.self, forKey: .psychologyScore)
+        newsMacroScore = try c.decode(Double.self, forKey: .newsMacroScore)
+        regimeRiskAdjustment = try c.decode(Double.self, forKey: .regimeRiskAdjustment)
+        finalConfidencePercent = try c.decode(Double.self, forKey: .finalConfidencePercent)
+        strengthLabel = try c.decode(String.self, forKey: .strengthLabel)
+        notes = (try? c.decodeIfPresent([String].self, forKey: .notes)) ?? []
+        moduleContributions = (try? c.decodeIfPresent([StrategyModuleWeightEntry].self, forKey: .moduleContributions)) ?? []
+        activeModuleCount = (try? c.decodeIfPresent(Int.self, forKey: .activeModuleCount)) ?? 0
+        totalApplicableModuleCount = (try? c.decodeIfPresent(Int.self, forKey: .totalApplicableModuleCount)) ?? 0
+        orderFlowScore = try c.decodeIfPresent(Double.self, forKey: .orderFlowScore)
+        orderFlowStatus = try c.decodeIfPresent(String.self, forKey: .orderFlowStatus)
+    }
+
+    public var confluenceBreadthLabel: String? {
+        guard totalApplicableModuleCount > 0 else { return nil }
+        return "\(activeModuleCount)/\(totalApplicableModuleCount) active"
     }
 }
 
@@ -299,6 +373,12 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
     public let origin: SignalOrigin
     /// Exact `StrategyID` list that fired for this signal/trap card (provenance tagging).
     public let matchedStrategyIDs: [StrategyID]
+    /// Canonical `ActiveStrategyProfile.profileKey` active when this signal was scored (empty for pre-upgrade legacy records).
+    public let activeStrategyProfileKey: String
+    /// Crypto-only Order Flow status (`"aligned"`, `"neutral"`, `"conflicting"`, `"off"`, `"non_crypto"`, `"unavailable"`).
+    public let orderFlowStatus: String
+    /// Optional compact Crypto-Only Order Flow summary for Chart HUD and AI Reflex Judge.
+    public let orderFlowSummary: ChartOrderFlowSummary?
 
     public init(
         id: String,
@@ -336,7 +416,10 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         calibratedProbability: Double? = nil,
         calibrationSampleCount: Int? = nil,
         origin: SignalOrigin = .scanner,
-        matchedStrategyIDs: [StrategyID]? = nil
+        matchedStrategyIDs: [StrategyID]? = nil,
+        activeStrategyProfileKey: String = "",
+        orderFlowStatus: String = "off",
+        orderFlowSummary: ChartOrderFlowSummary? = nil
     ) {
         self.id = id
         self.fingerprint = fingerprint
@@ -374,6 +457,9 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         self.calibrationSampleCount = calibrationSampleCount
         self.origin = origin
         self.matchedStrategyIDs = matchedStrategyIDs ?? StrategyID.resolveMatched(alignedStrategies: alignedStrategies, category: category, trapDirection: trapDirection, traps: overlays.traps)
+        self.activeStrategyProfileKey = activeStrategyProfileKey
+        self.orderFlowStatus = orderFlowStatus
+        self.orderFlowSummary = (marketClass == .crypto) ? orderFlowSummary : nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -384,6 +470,7 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         case postNewsCatalystBadge, overlays, recentCandles, aiJudgment, aiConfirmed
         case dataProvider, isMarketClosedSnapshot, marketClosedReason, strengthBreakdown
         case calibratedProbability, calibrationSampleCount, origin, matchedStrategyIDs
+        case activeStrategyProfileKey, orderFlowStatus, orderFlowSummary
     }
 
     public init(from decoder: Decoder) throws {
@@ -428,6 +515,9 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         } else {
             matchedStrategyIDs = StrategyID.resolveMatched(alignedStrategies: alignedStrategies, category: category, trapDirection: trapDirection, traps: overlays.traps)
         }
+        activeStrategyProfileKey = (try? c.decodeIfPresent(String.self, forKey: .activeStrategyProfileKey)) ?? ""
+        orderFlowStatus = (try? c.decodeIfPresent(String.self, forKey: .orderFlowStatus)) ?? "off"
+        orderFlowSummary = try c.decodeIfPresent(ChartOrderFlowSummary.self, forKey: .orderFlowSummary)
     }
 
     public func withAIJudgment(_ judgment: ReflexJudgment, threshold: Double) -> TradeSignal {
@@ -467,7 +557,10 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             calibratedProbability: calibratedProbability,
             calibrationSampleCount: calibrationSampleCount,
             origin: origin,
-            matchedStrategyIDs: matchedStrategyIDs
+            matchedStrategyIDs: matchedStrategyIDs,
+            activeStrategyProfileKey: activeStrategyProfileKey,
+            orderFlowStatus: orderFlowStatus,
+            orderFlowSummary: orderFlowSummary
         )
     }
 
@@ -509,7 +602,10 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             calibratedProbability: probability,
             calibrationSampleCount: sampleCount,
             origin: origin,
-            matchedStrategyIDs: matchedStrategyIDs
+            matchedStrategyIDs: matchedStrategyIDs,
+            activeStrategyProfileKey: activeStrategyProfileKey,
+            orderFlowStatus: orderFlowStatus,
+            orderFlowSummary: orderFlowSummary
         )
     }
 
@@ -550,7 +646,10 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             calibratedProbability: calibratedProbability,
             calibrationSampleCount: calibrationSampleCount,
             origin: newOrigin,
-            matchedStrategyIDs: matchedStrategyIDs
+            matchedStrategyIDs: matchedStrategyIDs,
+            activeStrategyProfileKey: activeStrategyProfileKey,
+            orderFlowStatus: orderFlowStatus,
+            orderFlowSummary: orderFlowSummary
         )
     }
 
@@ -721,6 +820,8 @@ public struct EngineConfig: Codable, Sendable, Equatable {
     public var historicalReliabilityWeights: [String: Double]
     /// Individually enabled detectors. Disabled strategies emit zero contributions/traps and add 0 to the score.
     public var enabledStrategies: Set<StrategyID>
+    /// Crypto-only live Order Flow & Absorption module (automatically skipped on Forex/TradFi & historical replays).
+    public var isOrderFlowEnabled: Bool
 
     public init(
         htfTimeframe: Timeframe = .h4,
@@ -746,7 +847,8 @@ public struct EngineConfig: Codable, Sendable, Equatable {
         aiConfirmationThreshold: Double = 0.80,
         signalCooldownSeconds: TimeInterval = 3_600,
         historicalReliabilityWeights: [String: Double] = [:],
-        enabledStrategies: Set<StrategyID> = StrategyID.allSet
+        enabledStrategies: Set<StrategyID> = StrategyID.allSet,
+        isOrderFlowEnabled: Bool = false
     ) {
         self.htfTimeframe = htfTimeframe
         self.entryTimeframe = entryTimeframe
@@ -772,6 +874,15 @@ public struct EngineConfig: Codable, Sendable, Equatable {
         self.signalCooldownSeconds = signalCooldownSeconds
         self.historicalReliabilityWeights = historicalReliabilityWeights
         self.enabledStrategies = enabledStrategies
+        self.isOrderFlowEnabled = isOrderFlowEnabled
+    }
+
+    /// Canonical active strategy profile threaded across scoring, AI Judge, calibration & psychology.
+    public var activeStrategyProfile: ActiveStrategyProfile {
+        ActiveStrategyProfile(
+            enabledStrategies: enabledStrategies,
+            isOrderFlowEnabled: isOrderFlowEnabled
+        )
     }
 
     /// `min(configured, max(1, enabled count))` so 1–2 strategy selections can still fire.

@@ -13,6 +13,9 @@ public final class PersistedSignalRecord {
     public var createdAt: Date
     public var signalJSON: Data
     public var outcomeJSON: Data?
+    public var activeStrategyProfileKey: String = ""
+    public var enabledStrategyIDsCSV: String = ""
+    public var orderFlowStatus: String = "off"
 
     public init(
         fingerprint: String,
@@ -21,7 +24,10 @@ public final class PersistedSignalRecord {
         categoryRaw: String,
         createdAt: Date,
         signalJSON: Data,
-        outcomeJSON: Data? = nil
+        outcomeJSON: Data? = nil,
+        activeStrategyProfileKey: String = "",
+        enabledStrategyIDsCSV: String = "",
+        orderFlowStatus: String = "off"
     ) {
         self.fingerprint = fingerprint
         self.symbol = symbol
@@ -30,6 +36,9 @@ public final class PersistedSignalRecord {
         self.createdAt = createdAt
         self.signalJSON = signalJSON
         self.outcomeJSON = outcomeJSON
+        self.activeStrategyProfileKey = activeStrategyProfileKey
+        self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
+        self.orderFlowStatus = orderFlowStatus
     }
 }
 
@@ -152,8 +161,12 @@ public final class ConfluenceDataStore {
         let descriptor = FetchDescriptor<PersistedSignalRecord>(
             predicate: #Predicate { $0.fingerprint == fp }
         )
+        let stratCSV = signal.matchedStrategyIDs.map(\.rawValue).sorted().joined(separator: ",")
         if let existing = try? context.fetch(descriptor).first {
             existing.signalJSON = encoded
+            existing.activeStrategyProfileKey = signal.activeStrategyProfileKey
+            existing.enabledStrategyIDsCSV = stratCSV
+            existing.orderFlowStatus = signal.orderFlowStatus
         } else {
             let record = PersistedSignalRecord(
                 fingerprint: fp,
@@ -161,7 +174,10 @@ public final class ConfluenceDataStore {
                 directionRaw: signal.direction.rawValue,
                 categoryRaw: signal.category.rawValue,
                 createdAt: Date(timeIntervalSince1970: signal.generatedAtEpochSeconds),
-                signalJSON: encoded
+                signalJSON: encoded,
+                activeStrategyProfileKey: signal.activeStrategyProfileKey,
+                enabledStrategyIDsCSV: stratCSV,
+                orderFlowStatus: signal.orderFlowStatus
             )
             context.insert(record)
         }
@@ -289,7 +305,10 @@ public final class ConfluenceDataStore {
             alignedStrategyIDsJSON: stratData,
             statusRaw: TradeLedgerStatus.pending.rawValue,
             netRMultiple: 0.0,
-            createdAt: Date(timeIntervalSince1970: signal.generatedAtEpochSeconds)
+            createdAt: Date(timeIntervalSince1970: signal.generatedAtEpochSeconds),
+            activeStrategyProfileKey: signal.activeStrategyProfileKey,
+            enabledStrategyIDsCSV: signal.matchedStrategyIDs.map(\.rawValue).sorted().joined(separator: ","),
+            orderFlowStatus: signal.orderFlowStatus
         )
         context.insert(entry)
     }
@@ -304,6 +323,13 @@ public final class ConfluenceDataStore {
             existing.statusRaw = snapshot.status.rawValue
             existing.netRMultiple = snapshot.netRMultiple
             existing.exitedAt = snapshot.exitedAt
+            if !snapshot.activeStrategyProfileKey.isEmpty {
+                existing.activeStrategyProfileKey = snapshot.activeStrategyProfileKey
+            }
+            if !snapshot.enabledStrategyIDsCSV.isEmpty {
+                existing.enabledStrategyIDsCSV = snapshot.enabledStrategyIDsCSV
+            }
+            existing.orderFlowStatus = snapshot.orderFlowStatus
             try? context.save()
             return
         }
@@ -326,7 +352,10 @@ public final class ConfluenceDataStore {
             alignedStrategyIDsJSON: stratData,
             statusRaw: snapshot.status.rawValue,
             netRMultiple: snapshot.netRMultiple,
-            createdAt: snapshot.createdAt
+            createdAt: snapshot.createdAt,
+            activeStrategyProfileKey: snapshot.activeStrategyProfileKey,
+            enabledStrategyIDsCSV: snapshot.enabledStrategyIDsCSV,
+            orderFlowStatus: snapshot.orderFlowStatus
         )
         entry.exitedAt = snapshot.exitedAt
         context.insert(entry)
@@ -907,6 +936,9 @@ public final class ConfluenceDataStore {
                 existing.statusRaw = pos.status.rawValue
                 existing.positionJSON = data
                 existing.closedAt = pos.closedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) }
+                existing.activeStrategyProfileKey = pos.activeStrategyProfileKey
+                existing.enabledStrategyIDsCSV = pos.enabledStrategyIDsCSV
+                existing.orderFlowStatus = pos.orderFlowStatus
             } else {
                 let row = DemoPositionRecord(
                     id: pos.id,
@@ -914,7 +946,10 @@ public final class ConfluenceDataStore {
                     statusRaw: pos.status.rawValue,
                     positionJSON: data,
                     createdAt: Date(timeIntervalSince1970: pos.createdAtEpochSeconds),
-                    closedAt: pos.closedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) }
+                    closedAt: pos.closedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) },
+                    activeStrategyProfileKey: pos.activeStrategyProfileKey,
+                    enabledStrategyIDsCSV: pos.enabledStrategyIDsCSV,
+                    orderFlowStatus: pos.orderFlowStatus
                 )
                 context.insert(row)
                 existingPosById[pos.id] = row

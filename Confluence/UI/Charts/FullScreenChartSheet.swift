@@ -231,7 +231,9 @@ public struct FullScreenChartSheet: View {
     private var isReplayMode: Bool { replayContext != nil }
     private var shouldShowSignalLevels: Bool { proxySymbolUsed == nil }
     private var showTradingViewControls: Bool {
-        !isReplayMode && (coordinator?.settings.payload.showTradingViewOption ?? false)
+        !isReplayMode
+            && activeChartEngine != .tradingViewWeb
+            && (coordinator?.settings.payload.showTradingViewOption ?? false)
     }
     private var effectiveChartViewMode: DefaultChartViewMode {
         showTradingViewControls ? chartViewMode : .confluence
@@ -241,6 +243,20 @@ public struct FullScreenChartSheet: View {
         coordinator?.settings.payload.chartEngine
             ?? ChartEngineOption(rawValue: storedChartEngineRaw)
             ?? .lightweightCharts
+    }
+
+    private var activeOrderFlowSummary: ChartOrderFlowSummary? {
+        guard !isReplayMode,
+              marketClass == .crypto,
+              coordinator?.settings.payload.isOrderFlowEnabled == true
+        else { return nil }
+        if let live = coordinator?.liveOrderFlowService,
+           live.activeSymbol == symbol,
+           let assessment = live.latestAssessment,
+           let summary = assessment.chartSummary {
+            return summary
+        }
+        return sourceSignal?.orderFlowSummary
     }
 
     private var activeOverlayModel: ChartSignalOverlayModel {
@@ -263,7 +279,8 @@ public struct FullScreenChartSheet: View {
             overlays: shouldShowSignalLevels ? overlays : ChartOverlayData(),
             entryTimestamp: entryTS,
             breakevenPrice: bePrice,
-            livePrice: activeQuote?.price
+            livePrice: activeQuote?.price,
+            orderFlowSummary: activeOrderFlowSummary
         )
     }
 
@@ -491,6 +508,8 @@ public struct FullScreenChartSheet: View {
                     } else {
                         ConfluenceChartContainerView(
                             selectedEngine: activeChartEngine,
+                            symbol: symbol,
+                            assetClass: marketClass,
                             closedCandles: session.closedCandles,
                             formingCandle: session.formingCandle,
                             lastRolledOverCandle: session.lastRolledOverCandle,
@@ -505,13 +524,19 @@ public struct FullScreenChartSheet: View {
                             providerTag: activeProviderName,
                             palette: palette,
                             isDark: colorScheme == .dark,
+                            tradingViewPreferDesktop: Binding(
+                                get: { coordinator?.settings.payload.tradingViewPreferDesktop ?? false },
+                                set: { newVal in
+                                    coordinator?.settings.payload.tradingViewPreferDesktop = newVal
+                                }
+                            ),
                             onNeedOlderHistory: {
                                 Task { await loadOlderHistoryPage() }
                             }
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                        if session.isLoadingInitial || session.isLoadingOlder {
+                        if activeChartEngine != .tradingViewWeb && (session.isLoadingInitial || session.isLoadingOlder) {
                             VStack {
                                 HStack(spacing: 8) {
                                     ProgressView()
@@ -537,7 +562,7 @@ public struct FullScreenChartSheet: View {
                         .foregroundStyle(palette.tertiaryInk)
                         .lineLimit(1)
                     Spacer()
-                    if effectiveChartViewMode == .tradingView {
+                    if effectiveChartViewMode == .tradingView || activeChartEngine == .tradingViewWeb {
                         Text(TradingViewSymbolMapper.tradingViewSymbol(for: symbol))
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(palette.secondaryInk)
@@ -591,6 +616,18 @@ public struct FullScreenChartSheet: View {
             .task {
                 if !isReplayMode {
                     coordinator?.livePriceService.acquire(owner: "chart_\(symbol)_\(sheetInstanceId)", symbols: [symbol])
+                    if marketClass == .crypto, coordinator?.settings.payload.isOrderFlowEnabled == true {
+                        let focusDir: TradeDirection = sourceSignal?.direction
+                            ?? effectiveLevels.map { $0.tp1 >= $0.entryMid ? .long : .short }
+                            ?? .neutral
+                        coordinator?.liveOrderFlowService.focus(
+                            symbol: symbol,
+                            assetClass: marketClass,
+                            direction: focusDir,
+                            entryPrice: effectiveLevels?.entryMid,
+                            takeProfit1: effectiveLevels?.tp1
+                        )
+                    }
                     if session.closedCandles.count < 120 {
                         await reloadChartData()
                     }
@@ -599,6 +636,7 @@ public struct FullScreenChartSheet: View {
             .onDisappear {
                 if !isReplayMode {
                     coordinator?.livePriceService.release(owner: "chart_\(symbol)_\(sheetInstanceId)")
+                    coordinator?.liveOrderFlowService.unfocus(symbol: symbol)
                 }
             }
             .onChange(of: activeQuote) { _, newQuote in

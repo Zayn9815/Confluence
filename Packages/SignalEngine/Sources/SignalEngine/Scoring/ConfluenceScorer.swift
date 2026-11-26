@@ -32,7 +32,158 @@ public enum ConfluenceScorer {
         }
     }
 
+    /// Default base weight per strategy module before dynamic re-normalization.
+    public static func defaultBaseWeight(for strategyID: StrategyID) -> Double {
+        switch strategyID {
+        case .ictBos, .ictMss, .ictOrderBlock, .ictFvg, .ictLiquiditySweep:
+            return 1.20
+        case .ictPremiumEq, .ictDiscountEq:
+            return 0.90
+        case .trapOslerRoundNumber, .trapLiquiditySwingSweep, .trapNewsWhipsaw, .trapAttentionFomo:
+            return 1.25
+        case .candleBullishEngulfing, .candleBearishEngulfing, .candleDisplacement:
+            return 1.05
+        case .candleShootingStar, .candleHammerPinbar, .candleInsideBreakout:
+            return 0.95
+        case .momentumEmaPullback, .momentumRsiDivergence, .momentumRvol, .momentumAtrSqueeze:
+            return 1.00
+        case .positioningOkx:
+            return 1.10
+        case .positioningCot:
+            return 0.90
+        case .macroSurpriseCatalyst:
+            return 1.20
+        }
+    }
+
+    /// Computes 100% dynamically re-normalized module weights (`effectiveWeight[i] = baseWeight[i] / sum(activeBaseWeights)`).
+    /// - Active modules' `effectiveWeight` values sum strictly to `1.0` (zero dead weight from disabled/non-applicable modules).
+    /// - Safely returns all-zero `effectiveWeight` entries with zero NaN/Inf when all modules are disabled.
+    public static func computeNormalizedModuleWeights(
+        profile: ActiveStrategyProfile,
+        marketClass: MarketClass,
+        timeframe: Timeframe,
+        isLiveEvaluation: Bool,
+        orderFlowAssessment: OrderFlowAssessment?,
+        alignedIDs: Set<String> = [],
+        opposingIDs: Set<String> = [],
+        reliabilityWeights: [String: Double] = [:]
+    ) -> [StrategyModuleWeightEntry] {
+        struct Draft {
+            let id: String
+            let displayName: String
+            let baseWeight: Double
+            let rawScore: Double
+            let isActive: Bool
+            let skippedReason: String?
+        }
+
+        var drafts: [Draft] = []
+        drafts.reserveCapacity(StrategyID.allCases.count + 1)
+
+        for sid in StrategyID.allCases {
+            let customW = reliabilityWeights[sid.rawValue]
+            let baseW = (customW != nil && customW!.isFinite && customW! > 0)
+                ? customW!
+                : defaultBaseWeight(for: sid)
+
+            let isEnabled = profile.enabledStrategies.contains(sid)
+            let isApplicable = sid.isApplicable(to: marketClass)
+            let isActive = isEnabled && isApplicable
+            let reason: String?
+            if !isEnabled {
+                reason = "Disabled in Settings"
+            } else if !isApplicable {
+                reason = "Not applicable on \(marketClass.displayName)"
+            } else {
+                reason = nil
+            }
+
+            let rawScore: Double
+            if !isActive {
+                rawScore = 0.0
+            } else if alignedIDs.contains(sid.rawValue) {
+                rawScore = 1.0
+            } else if opposingIDs.contains(sid.rawValue) {
+                rawScore = -1.0
+            } else {
+                rawScore = 0.0
+            }
+
+            drafts.append(Draft(
+                id: sid.rawValue,
+                displayName: sid.displayName,
+                baseWeight: baseW,
+                rawScore: rawScore,
+                isActive: isActive,
+                skippedReason: reason
+            ))
+        }
+
+        // Optional Crypto-Only Live Order Flow module with timeframe-aware base weight
+        let ofBaseWeight = OrderFlowAnalyzer.timeframeBaseWeight(for: timeframe)
+        let ofActive = profile.isOrderFlowEnabled
+            && marketClass == .crypto
+            && isLiveEvaluation
+            && (orderFlowAssessment?.alignment ?? .unavailable) != .unavailable
+        let ofSkippedReason: String?
+        if !profile.isOrderFlowEnabled {
+            ofSkippedReason = "Disabled in Settings"
+        } else if marketClass != .crypto {
+            ofSkippedReason = "Crypto-only module skipped on \(marketClass.displayName)"
+        } else if !isLiveEvaluation {
+            ofSkippedReason = "Excluded from historical replay (anti-repainting)"
+        } else if !ofActive {
+            ofSkippedReason = orderFlowAssessment?.unavailableReason ?? "Live snapshot unavailable"
+        } else {
+            ofSkippedReason = nil
+        }
+
+        let ofRawScore: Double
+        if ofActive, let of = orderFlowAssessment {
+            switch of.alignment {
+            case .aligned: ofRawScore = max(0.25, abs(of.compositeScore))
+            case .conflicting: ofRawScore = -max(0.25, abs(of.compositeScore))
+            case .neutral, .unavailable: ofRawScore = 0.0
+            }
+        } else {
+            ofRawScore = 0.0
+        }
+
+        drafts.append(Draft(
+            id: "crypto_order_flow",
+            displayName: "Order Flow (Crypto Only)",
+            baseWeight: ofBaseWeight,
+            rawScore: ofRawScore,
+            isActive: ofActive,
+            skippedReason: ofSkippedReason
+        ))
+
+        let activeBaseSum = drafts
+            .filter(\.isActive)
+            .reduce(0.0) { $0 + $1.baseWeight }
+
+        return drafts.map { d in
+            let effW: Double
+            if d.isActive && activeBaseSum.isFinite && activeBaseSum > 0 {
+                effW = d.baseWeight / activeBaseSum
+            } else {
+                effW = 0.0
+            }
+            return StrategyModuleWeightEntry(
+                id: d.id,
+                displayName: d.displayName,
+                baseWeight: d.baseWeight,
+                effectiveWeight: effW.isFinite ? effW : 0.0,
+                rawScore: d.rawScore.isFinite ? d.rawScore : 0.0,
+                isActive: d.isActive,
+                skippedReason: d.skippedReason
+            )
+        }
+    }
+
     /// Evaluates full multi-strategy confluence, calibrated Confidence %, Trap warnings,
+    /// Crypto-Only live Order Flow & Absorption, dynamic weight re-normalization,
     /// and weak-setup rejection diagnostics strictly in deterministic Swift code.
     public static func score(
         asset: AssetDescriptor,
@@ -54,9 +205,18 @@ public enum ConfluenceScorer {
         isMarketClosed: Bool,
         nowEpochSeconds: TimeInterval,
         newsCatalyst: NewsCatalystAssessment? = nil,
-        marketClosedReason: String? = nil
+        marketClosedReason: String? = nil,
+        orderFlowSnapshot: OrderFlowSnapshot? = nil,
+        isLiveEvaluation: Bool = true
     ) -> TradeSignal? {
         guard let lastBar = candles.last else { return nil }
+        let profile = config.activeStrategyProfile
+
+        // Safe all-disabled guard: zero NaN/Inf, neutral/no-signal when user disables every module
+        if profile.enabledStrategies.isEmpty && !profile.isOrderFlowApplicable(for: asset.marketClass) {
+            return nil
+        }
+
         let killzone = SessionCalendar.killzone(at: lastBar.closeTimeEpochSeconds)
 
         // Hard per-strategy gate: disabled detectors contribute zero contributions, zero traps and 0 score.
@@ -198,7 +358,7 @@ public enum ConfluenceScorer {
             opposing = []
         }
 
-        // Calculate numeric levels purely in code (with timeframe-aware R:R & ATR ceilings)
+        // Calculate numeric levels purely in code (with timeframe-aware R:R & ATR ceilings and ATR fallback when ICT disabled)
         let levels = TradeLevelCalculator.calculate(
             direction: dominantDirection,
             candles: candles,
@@ -215,7 +375,25 @@ public enum ConfluenceScorer {
             timeframe: timeframe
         )
 
-        // Calibrated 4-Pillar Signal Strength & Logistic Confidence (capped <= 92%, closed-market <= 72%)
+        // Crypto-Only Live Order Flow & Institutional Absorption evaluation (strictly nil/skipped on non-crypto or historical replays)
+        let orderFlowEval = OrderFlowAnalyzer.evaluate(
+            snapshot: isLiveEvaluation ? orderFlowSnapshot : nil,
+            marketClass: asset.marketClass,
+            isOrderFlowEnabled: config.isOrderFlowEnabled,
+            isLiveEvaluation: isLiveEvaluation,
+            candidateDirection: dominantDirection,
+            entryPrice: levels?.entryMid,
+            takeProfit1: levels?.tp1,
+            nowEpochSeconds: nowEpochSeconds
+        )
+        let orderFlowStatusString: String = {
+            if !config.isOrderFlowEnabled { return "off" }
+            if asset.marketClass != .crypto { return "non_crypto" }
+            if !isLiveEvaluation || orderFlowEval.alignment == .unavailable { return "unavailable" }
+            return orderFlowEval.alignment.rawValue
+        }()
+
+        // Calibrated 4-Pillar + Dynamic Re-Normalized Signal Strength & Logistic Confidence (capped <= 92%, closed-market <= 72%)
         let breakdown = computeStrengthBreakdown(
             aligned: aligned,
             opposing: opposing,
@@ -229,7 +407,14 @@ public enum ConfluenceScorer {
             newsCatalyst: newsCatalyst,
             preNewsShield: preNewsShield,
             freshTrap: freshTrap,
-            isMarketClosed: isMarketClosed
+            isMarketClosed: isMarketClosed,
+            profile: profile,
+            marketClass: asset.marketClass,
+            timeframe: timeframe,
+            isLiveEvaluation: isLiveEvaluation,
+            orderFlowAssessment: orderFlowEval,
+            orderFlowStatus: orderFlowStatusString,
+            reliabilityWeights: config.historicalReliabilityWeights
         )
         let confidence = breakdown.finalConfidencePercent
 
@@ -322,6 +507,9 @@ public enum ConfluenceScorer {
         let finalAligned: [StrategyContribution]
         let finalBreakdown: SignalStrengthBreakdown
         let finalConfidence: Double
+        let finalOrderFlowEval: OrderFlowAssessment
+        let finalOrderFlowStatus: String
+
         if category == .trapAlert, let td = trapDir, td.institutionalDirection != dominantDirection {
             finalDirection = td.institutionalDirection
             finalAligned = opposing
@@ -340,6 +528,22 @@ public enum ConfluenceScorer {
                 enableTP2Target: config.enableTP2Target,
                 timeframe: timeframe
             )
+            finalOrderFlowEval = OrderFlowAnalyzer.evaluate(
+                snapshot: isLiveEvaluation ? orderFlowSnapshot : nil,
+                marketClass: asset.marketClass,
+                isOrderFlowEnabled: config.isOrderFlowEnabled,
+                isLiveEvaluation: isLiveEvaluation,
+                candidateDirection: finalDirection,
+                entryPrice: finalLevels?.entryMid,
+                takeProfit1: finalLevels?.tp1,
+                nowEpochSeconds: nowEpochSeconds
+            )
+            finalOrderFlowStatus = {
+                if !config.isOrderFlowEnabled { return "off" }
+                if asset.marketClass != .crypto { return "non_crypto" }
+                if !isLiveEvaluation || finalOrderFlowEval.alignment == .unavailable { return "unavailable" }
+                return finalOrderFlowEval.alignment.rawValue
+            }()
             finalBreakdown = computeStrengthBreakdown(
                 aligned: opposing,
                 opposing: aligned,
@@ -353,7 +557,14 @@ public enum ConfluenceScorer {
                 newsCatalyst: newsCatalyst,
                 preNewsShield: preNewsShield,
                 freshTrap: freshTrap,
-                isMarketClosed: isMarketClosed
+                isMarketClosed: isMarketClosed,
+                profile: profile,
+                marketClass: asset.marketClass,
+                timeframe: timeframe,
+                isLiveEvaluation: isLiveEvaluation,
+                orderFlowAssessment: finalOrderFlowEval,
+                orderFlowStatus: finalOrderFlowStatus,
+                reliabilityWeights: config.historicalReliabilityWeights
             )
             finalConfidence = finalBreakdown.finalConfidencePercent
         } else {
@@ -362,6 +573,8 @@ public enum ConfluenceScorer {
             finalAligned = aligned
             finalBreakdown = breakdown
             finalConfidence = confidence
+            finalOrderFlowEval = orderFlowEval
+            finalOrderFlowStatus = orderFlowStatusString
         }
 
         let psychReport = PsychologyReportBuilder.build(
@@ -375,7 +588,9 @@ public enum ConfluenceScorer {
             rvol: momentum.rvol,
             regime: regimeAssessment.regime,
             newsCatalyst: newsCatalyst,
-            asset: asset
+            asset: asset,
+            activeProfile: profile,
+            orderFlow: finalOrderFlowEval
         )
 
         // Chart overlay data (unmitigated FVGs, OBs, active traps, EQ, EMAs)
@@ -491,7 +706,10 @@ public enum ConfluenceScorer {
                 category: category,
                 trapDirection: trapDir,
                 traps: effectiveTraps
-            )
+            ),
+            activeStrategyProfileKey: profile.profileKey,
+            orderFlowStatus: finalOrderFlowStatus,
+            orderFlowSummary: finalOrderFlowEval.chartSummary
         )
     }
 
@@ -508,8 +726,31 @@ public enum ConfluenceScorer {
         newsCatalyst: NewsCatalystAssessment?,
         preNewsShield: PreNewsShieldStatus?,
         freshTrap: BehavioralTrap?,
-        isMarketClosed: Bool
+        isMarketClosed: Bool,
+        profile: ActiveStrategyProfile,
+        marketClass: MarketClass,
+        timeframe: Timeframe,
+        isLiveEvaluation: Bool,
+        orderFlowAssessment: OrderFlowAssessment,
+        orderFlowStatus: String,
+        reliabilityWeights: [String: Double]
     ) -> SignalStrengthBreakdown {
+        let alignedIDSet = Set(aligned.map { $0.id.lowercased() })
+        let opposingIDSet = Set(opposing.map { $0.id.lowercased() })
+        let moduleWeights = computeNormalizedModuleWeights(
+            profile: profile,
+            marketClass: marketClass,
+            timeframe: timeframe,
+            isLiveEvaluation: isLiveEvaluation,
+            orderFlowAssessment: orderFlowAssessment,
+            alignedIDs: alignedIDSet,
+            opposingIDs: opposingIDSet,
+            reliabilityWeights: reliabilityWeights
+        )
+        let activeEntries = moduleWeights.filter(\.isActive)
+        let alignedActiveCount = activeEntries.filter { $0.rawScore > 0 }.count
+        let totalApplicableActive = activeEntries.count
+
         guard dominantDirection != .neutral, !aligned.isEmpty else {
             return SignalStrengthBreakdown(
                 technicalScore: 0,
@@ -518,18 +759,30 @@ public enum ConfluenceScorer {
                 regimeRiskAdjustment: 0,
                 finalConfidencePercent: 25.0,
                 strengthLabel: "Weak",
-                notes: ["No directional multi-strategy consensus"]
+                notes: ["No directional multi-strategy consensus"],
+                moduleContributions: moduleWeights,
+                activeModuleCount: 0,
+                totalApplicableModuleCount: totalApplicableActive,
+                orderFlowScore: orderFlowAssessment.alignment != .unavailable ? orderFlowAssessment.compositeScore : nil,
+                orderFlowStatus: orderFlowStatus
             )
         }
 
         var notes: [String] = []
 
         // Pillar 1: Technical Math (ICT/SMC + Candlesticks + Trend/Momentum + HTF + Killzone)
+        // Incorporates 100% dynamically re-normalized active-profile share (zero dead weight from disabled strategies).
         let weightedSum = aligned.reduce(0.0) { $0 + ($1.weight * $1.historicalWinRate) }
         let opposingPenalty = opposing.reduce(0.0) { $0 + ($1.weight * 4.5) }
         let distinctGroups = Set(aligned.map(\.group)).count
 
-        var techScore = min(28.0, weightedSum * 11.5)
+        let normalizedAlignedShare = activeEntries
+            .filter { $0.rawScore > 0 }
+            .reduce(0.0) { $0 + $1.effectiveWeight }
+        let rawTech = weightedSum * 11.5
+        // When user narrows enabled profile (e.g. 1–4 strategies), re-normalized weight prevents dead-weight drag
+        let normalizedTechFloor = min(22.0, normalizedAlignedShare * 24.0)
+        var techScore = min(28.0, max(rawTech, (rawTech * 0.65) + (normalizedTechFloor * 0.55)))
         techScore += Double(max(0, distinctGroups - 1)) * 4.0
         techScore -= opposingPenalty
         if htfBias == dominantDirection {
@@ -543,8 +796,11 @@ public enum ConfluenceScorer {
             techScore += 3.0
             notes.append("\(killzone.displayName) liquidity (+3)")
         }
+        if totalApplicableActive > 0 {
+            notes.append("Active breadth: \(alignedActiveCount)/\(totalApplicableActive) enabled")
+        }
 
-        // Pillar 2: Psychology & Positioning (Intraday Traps + OKX/CFTC positioning)
+        // Pillar 2: Psychology, Positioning & Live Crypto-Only Order Flow
         var psychScore = 0.0
         if let trap = freshTrap {
             if trap.direction.institutionalDirection == dominantDirection {
@@ -581,7 +837,34 @@ public enum ConfluenceScorer {
                 }
             }
         }
-        psychScore = max(-14.0, min(14.0, psychScore))
+
+        // Crypto-Only Live Order Flow & Absorption contribution (timeframe-aware base weight, bounded damper on conflict)
+        var orderFlowScoreOut: Double? = nil
+        if orderFlowAssessment.alignment != .unavailable && marketClass == .crypto && isLiveEvaluation && profile.isOrderFlowEnabled {
+            orderFlowScoreOut = orderFlowAssessment.compositeScore
+            let tfWeight = OrderFlowAnalyzer.timeframeBaseWeight(for: timeframe)
+            switch orderFlowAssessment.alignment {
+            case .aligned:
+                let boost = min(9.0, max(2.0, abs(orderFlowAssessment.compositeScore) * 7.5) * tfWeight)
+                psychScore += boost
+                if orderFlowAssessment.absorptionState != .none {
+                    notes.append("Crypto \(orderFlowAssessment.venue) passive absorption aligned (+\(String(format: "%.1f", boost)))")
+                } else {
+                    notes.append("Crypto \(orderFlowAssessment.venue) Order Flow aligned (+\(String(format: "%.1f", boost)))")
+                }
+            case .conflicting:
+                let baseDamper = max(3.5, abs(orderFlowAssessment.compositeScore) * 8.5) * tfWeight
+                let wallExtra = orderFlowAssessment.confirmedWallBlocksTP1 ? (3.5 * tfWeight) : 0.0
+                let damper = min(13.0, baseDamper + wallExtra)
+                psychScore -= damper
+                let warn = orderFlowAssessment.warningNote ?? "Order Flow opposes setup"
+                notes.append("⚠︎ \(warn) (-\(String(format: "%.1f", damper)))")
+            case .neutral, .unavailable:
+                break
+            }
+        }
+
+        psychScore = max(-18.0, min(18.0, psychScore))
 
         // Pillar 3: News & Macro Calendar Impact (Macro ±8 pts capped; Breaking News ±4 pts capped)
         var newsMacroScore = 0.0
@@ -636,12 +919,13 @@ public enum ConfluenceScorer {
 
         // Smooth calibrated logistic probability mapping (prevents overconfident 85-95% saturation)
         let totalRaw = techScore + psychScore + newsMacroScore + regimeAdj
-        let logistic = 1.0 / (1.0 + exp(-0.042 * (totalRaw - 10.0)))
+        let safeTotalRaw = totalRaw.isFinite ? totalRaw : 0.0
+        let logistic = 1.0 / (1.0 + exp(-0.042 * (safeTotalRaw - 10.0)))
         var calibrated = 15.0 + 77.0 * logistic
         if isMarketClosed {
             calibrated = min(calibrated, 72.0)
         }
-        calibrated = min(92.0, max(15.0, calibrated))
+        calibrated = min(92.0, max(15.0, calibrated.isFinite ? calibrated : 25.0))
 
         let strengthLabel: String
         if calibrated >= 80.0 {
@@ -661,7 +945,12 @@ public enum ConfluenceScorer {
             regimeRiskAdjustment: regimeAdj,
             finalConfidencePercent: calibrated,
             strengthLabel: strengthLabel,
-            notes: notes
+            notes: notes,
+            moduleContributions: moduleWeights,
+            activeModuleCount: alignedActiveCount,
+            totalApplicableModuleCount: totalApplicableActive,
+            orderFlowScore: orderFlowScoreOut,
+            orderFlowStatus: orderFlowStatus
         )
     }
 

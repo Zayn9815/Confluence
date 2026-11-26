@@ -1,8 +1,63 @@
 import Foundation
 
+public struct TraderPsychologyInsight: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public enum Severity: String, Codable, Sendable, Equatable, Hashable {
+        case positive
+        case neutral
+        case caution
+    }
+
+    public let id: String
+    public let title: String
+    public let detail: String
+    public let severity: Severity
+
+    public init(id: String, title: String, detail: String, severity: Severity) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.severity = severity
+    }
+}
+
+public struct TraderPsychologyCoachReport: Codable, Sendable, Equatable, Hashable {
+    public let disciplineScorePercent: Double
+    public let activeProfileKey: String
+    public let enabledCoreCount: Int
+    public let filterHoppingDetected: Bool
+    public let filterHopSwitchCount: Int
+    public let conflictingOrderFlowTrades: Int
+    public let conflictingOrderFlowAvgR: Double?
+    public let alignedOrderFlowAvgR: Double?
+    public let insights: [TraderPsychologyInsight]
+
+    public init(
+        disciplineScorePercent: Double,
+        activeProfileKey: String,
+        enabledCoreCount: Int,
+        filterHoppingDetected: Bool,
+        filterHopSwitchCount: Int,
+        conflictingOrderFlowTrades: Int,
+        conflictingOrderFlowAvgR: Double?,
+        alignedOrderFlowAvgR: Double?,
+        insights: [TraderPsychologyInsight]
+    ) {
+        self.disciplineScorePercent = disciplineScorePercent
+        self.activeProfileKey = activeProfileKey
+        self.enabledCoreCount = enabledCoreCount
+        self.filterHoppingDetected = filterHoppingDetected
+        self.filterHopSwitchCount = filterHopSwitchCount
+        self.conflictingOrderFlowTrades = conflictingOrderFlowTrades
+        self.conflictingOrderFlowAvgR = conflictingOrderFlowAvgR
+        self.alignedOrderFlowAvgR = alignedOrderFlowAvgR
+        self.insights = insights
+    }
+}
+
 public enum PsychologyReportBuilder {
     /// Synthesizes a strictly rule-triggered `PsychologyReport` from concrete structural, trap,
-    /// positioning, and macro evidence — zero generic filler text.
+    /// positioning, crypto order flow, and macro evidence — zero generic filler text, and never
+    /// lectures about strategies disabled in `activeProfile` or absent Order Flow on non-crypto markets.
     public static func build(
         category: SignalCategory,
         signalDirection: TradeDirection,
@@ -14,10 +69,18 @@ public enum PsychologyReportBuilder {
         rvol: Double?,
         regime: MarketRegime,
         newsCatalyst: NewsCatalystAssessment? = nil,
-        asset: AssetDescriptor? = nil
+        asset: AssetDescriptor? = nil,
+        activeProfile: ActiveStrategyProfile? = nil,
+        orderFlow: OrderFlowAssessment? = nil
     ) -> PsychologyReport {
         var evidence: [BehavioralEvidence] = []
         var badges: [String] = []
+
+        let isCryptoAsset = (asset?.marketClass == .crypto)
+        let activeOrderFlow: OrderFlowAssessment? = {
+            guard isCryptoAsset, let of = orderFlow, of.alignment != .unavailable else { return nil }
+            return of
+        }()
 
         // 1. Active Behavioral Traps
         let actionableTraps = traps.filter(\.isActionable)
@@ -47,6 +110,35 @@ public enum PsychologyReportBuilder {
                     fact: pos.summary,
                     proBias: pos.proDirection,
                     retailBias: pos.retailCrowdDirection
+                )
+            )
+        }
+
+        // 2b. Live Crypto Order Flow & Institutional Absorption evidence (Crypto Only when ON & fresh)
+        if let of = activeOrderFlow {
+            if let absTag = of.absorptionState.shortTag {
+                badges.append(of.absorptionState == .bullishAbsorption ? "Bullish Absorption" : "Bearish Absorption")
+                _ = absTag
+            }
+            if of.divergence == .bullish {
+                badges.append("Bullish CVD Div")
+            } else if of.divergence == .bearish {
+                badges.append("Bearish CVD Div")
+            }
+            if of.confirmedWallBlocksTP1 {
+                badges.append("Wall Blocks TP1")
+            } else if of.alignment == .conflicting {
+                badges.append("Order Flow Conflict")
+            } else if of.alignment == .aligned {
+                badges.append("Order Flow Aligned")
+            }
+            let retailAggressor: TradeDirection = of.cvdRatio >= 0.20 ? .long : (of.cvdRatio <= -0.20 ? .short : .neutral)
+            evidence.append(
+                BehavioralEvidence(
+                    badge: "\(of.venue) Order Flow",
+                    fact: of.warningNote ?? of.summary,
+                    proBias: of.directionalBias,
+                    retailBias: (of.absorptionState != .none) ? retailAggressor : .neutral
                 )
             )
         }
@@ -115,10 +207,11 @@ public enum PsychologyReportBuilder {
             macroAligns = nil
         }
 
-        // Intraday Pro Flow prioritizes intraday structure/traps/OKX flow — never overwritten by opposing weekly COT
         var proDir: TradeDirection = .neutral
         if let trap = latestTrap {
             proDir = trap.direction.institutionalDirection
+        } else if let of = activeOrderFlow, of.absorptionState != .none {
+            proDir = of.absorptionState == .bullishAbsorption ? .long : .short
         } else if signalDirection != .neutral {
             proDir = signalDirection
         } else if let pos = positioning, pos.provenance == .okxFundingOI, pos.proDirection != .neutral {
@@ -134,6 +227,8 @@ public enum PsychologyReportBuilder {
             retailDir = trap.direction.trappedRetailDirection
         } else if let pos = positioning, pos.retailCrowdDirection != .neutral {
             retailDir = pos.retailCrowdDirection
+        } else if let of = activeOrderFlow, of.absorptionState != .none {
+            retailDir = of.absorptionState == .bullishAbsorption ? .short : .long
         } else if let sweep = ict.liquiditySweeps.last {
             retailDir = sweep.reversalDirection.opposite
         } else if let dz = ict.dealingZone {
@@ -144,10 +239,11 @@ public enum PsychologyReportBuilder {
             badges.append(positioning?.provenance == .cftcCOT ? "Counter-Trend vs Macro COT" : "Counter-Trend vs OKX Flow")
         }
 
-        // 6. Compose concrete 3-part narrative grounded purely in triggered facts
+        // 6. Compose concrete 3-part narrative grounded purely in triggered & enabled facts
         let whatHappened: String
         let beginnerPsych: String
         let proPsych: String
+        let minActiveCount = activeProfile.map { max(1, min(3, $0.enabledCoreCount)) } ?? 3
 
         switch category {
         case .trapAlert:
@@ -182,6 +278,9 @@ public enum PsychologyReportBuilder {
             if let trap = latestTrap, trap.direction.institutionalDirection == signalDirection {
                 facts.append("\(trap.direction.rawValue) (\(trap.triggerKind.rawValue))")
             }
+            if let of = activeOrderFlow {
+                facts.append(of.summary)
+            }
             if let pos = positioning {
                 facts.append(pos.summary)
             }
@@ -192,34 +291,39 @@ public enum PsychologyReportBuilder {
                 facts.append(news.summary)
             }
             whatHappened = facts.isEmpty
-                ? "Closed-bar multi-strategy confluence aligned \(signalDirection.rawValue.uppercased()) in \(regime.badgeLabel) regime."
+                ? "Closed-bar active strategy confluence aligned \(signalDirection.rawValue.uppercased()) in \(regime.badgeLabel) regime."
                 : facts.joined(separator: " · ")
 
-            if retailDir != .neutral && retailDir != signalDirection {
+            if let of = activeOrderFlow, of.absorptionState != .none {
+                let aggDir = of.absorptionState == .bullishAbsorption ? "SELL" : "BUY"
+                beginnerPsych = "Aggressive market \(aggDir) orders hammered the tape (\(String(format: "CVD %+.0f%%", of.cvdRatio * 100))) without breaking price through, trapping impatient breakout chasers."
+            } else if retailDir != .neutral && retailDir != signalDirection {
                 beginnerPsych = "Retail crowd is leaning \(retailDir.rawValue.uppercased()) (chasing swept stops or opposing liquidity), supplying counterparty liquidity for the \(signalDirection.rawValue.uppercased()) move."
             } else if let dz = ict.dealingZone {
                 beginnerPsych = "Beginners typically hesitate in \(dz.rawValue) after a pullback or wait until price is already extended away from value."
             } else {
-                beginnerPsych = "Retail participants react to single-indicator noise instead of waiting for closed-bar structural confirmation."
+                beginnerPsych = "Retail participants react to impulsive ticks instead of waiting for closed-bar confirmation from your enabled strategy rules."
             }
 
-            if let pos = positioning, let mDir = macroDir, let aligns = macroAligns {
+            if let of = activeOrderFlow, let warn = of.warningNote {
+                proPsych = "Closed structure supports \(signalDirection.rawValue.uppercased()), but live crypto tape flags caution: \(warn). Manage risk conservatively."
+            } else if let pos = positioning, let mDir = macroDir, let aligns = macroAligns {
                 if aligns {
-                    proPsych = "Intraday institutional flow AND \(macroLabel ?? pos.provenance.rawValue) align \(signalDirection.rawValue.uppercased()) with defined structural invalidation and \(signalDirection == .long ? "discount demand" : "premium supply") backing."
+                    proPsych = "Intraday institutional flow AND \(macroLabel ?? pos.provenance.rawValue) align \(signalDirection.rawValue.uppercased()) with defined invalidation and \(signalDirection == .long ? "demand" : "supply") backing."
                 } else {
-                    proPsych = "Intraday institutional order flow confirms \(signalDirection.rawValue.uppercased()) on closed structure (\(signalDirection == .long ? "discount demand" : "premium supply")); note \(macroLabel ?? pos.provenance.rawValue) sits \(mDir.rawValue.uppercased()) (counter-trend — respect disciplined targets)."
+                    proPsych = "Intraday institutional flow confirms \(signalDirection.rawValue.uppercased()) on closed structure; note \(macroLabel ?? pos.provenance.rawValue) sits \(mDir.rawValue.uppercased()) (counter-trend — respect disciplined targets)."
                 }
             } else {
-                proPsych = "Intraday institutional order flow confirmed \(signalDirection.rawValue.uppercased()) on closed structure with asymmetric R:R beyond invalidation liquidity."
+                proPsych = "Institutional execution confirmed \(signalDirection.rawValue.uppercased()) on closed bars with asymmetric R:R beyond invalidation liquidity."
             }
 
         case .weakSignal:
             let reasonsText = rejectionReasons.isEmpty
-                ? "Insufficient multi-strategy alignment."
+                ? "Insufficient alignment among your enabled strategies."
                 : rejectionReasons.joined(separator: "; ")
             whatHappened = "Filtered setup (\(signalDirection.rawValue.uppercased())): \(reasonsText)"
-            beginnerPsych = "Beginners force entries on partial setups without waiting for >=3 independent confirmations, R:R floor, or clean regime/news clearance."
-            proPsych = "Institutional desks stand aside when edge is diluted (\(reasonsText)) and preserve capital for clean asymmetric liquidity sweeps."
+            beginnerPsych = "Beginners force entries on partial setups without waiting for \(minActiveCount)+ enabled confirmations, R:R floor, or clean regime/news clearance."
+            proPsych = "Institutional desks stand aside when edge is diluted (\(reasonsText)) and preserve capital for clean asymmetric setups."
         }
 
         var seenBadges = Set<String>()
@@ -238,6 +342,173 @@ public enum PsychologyReportBuilder {
             macroPositioningDirection: macroDir,
             macroPositioningLabel: macroLabel,
             macroAlignsWithSetup: macroAligns
+        )
+    }
+
+    /// Adaptive trader-level behavioral audit driven strictly by the user's active `ActiveStrategyProfile`,
+    /// historical outcome stream, and Demo Wallet positions.
+    ///
+    /// - **Rule-Consistent Discipline:** Scores adherence strictly against currently enabled strategies.
+    /// - **Filter-Hopping Detection:** Detects repeated switches of non-empty `activeStrategyProfileKey`
+    ///   immediately following losing trades (explicitly ignoring the one-time upgrade transition from
+    ///   `"legacy_baseline"` to a real profile key).
+    /// - **Order Flow Conflict Coaching (Crypto Only, when ON):** Flags crypto trades taken against
+    ///   strong opposing Order Flow (`orderFlowStatus == "conflicting"`) and quantifies their R:R impact.
+    /// - **Confluence Breadth Insight:** Surfaces calm guidance when narrowed down to 1 core strategy.
+    public static func buildBehavioralAudit(
+        outcomes: [SignalOutcomeRecord],
+        demoPositions: [DemoPosition] = [],
+        activeProfile: ActiveStrategyProfile,
+        marketClass: MarketClass? = nil
+    ) -> TraderPsychologyCoachReport {
+        var insights: [TraderPsychologyInsight] = []
+
+        // 1. Filter-Hopping Detection (chronological resolved records)
+        struct ChronologicalTrade {
+            let timestamp: TimeInterval
+            let profileKey: String
+            let isLoss: Bool
+            let isCrypto: Bool
+            let orderFlowStatus: String
+            let rMultiple: Double
+        }
+
+        var timeline: [ChronologicalTrade] = []
+        for rec in outcomes where rec.isResolved {
+            timeline.append(ChronologicalTrade(
+                timestamp: rec.resolvedAtEpochSeconds ?? rec.entryBarCloseEpochSeconds ?? 0,
+                profileKey: ActiveStrategyProfile.normalizedKey(rec.activeStrategyProfileKey),
+                isLoss: rec.status == .hitSL,
+                isCrypto: rec.marketClass == .crypto,
+                orderFlowStatus: rec.orderFlowStatus,
+                rMultiple: rec.rMultiple
+            ))
+        }
+        for pos in demoPositions where pos.status.isClosed {
+            timeline.append(ChronologicalTrade(
+                timestamp: pos.closedAtEpochSeconds ?? pos.createdAtEpochSeconds,
+                profileKey: ActiveStrategyProfile.normalizedKey(pos.activeStrategyProfileKey),
+                isLoss: pos.status == .closedStopLoss || pos.rMultiple < 0,
+                isCrypto: pos.marketClass == .crypto,
+                orderFlowStatus: pos.orderFlowStatus,
+                rMultiple: pos.rMultiple
+            ))
+        }
+        timeline.sort { $0.timestamp < $1.timestamp }
+
+        var postLossSwitches = 0
+        if timeline.count >= 2 {
+            for idx in 1..<timeline.count {
+                let prev = timeline[idx - 1]
+                let curr = timeline[idx]
+                // Explicitly ignore the one-time migration transition from "legacy_baseline" to a real profile key
+                guard prev.profileKey != ActiveStrategyProfile.legacyBaselineKey,
+                      curr.profileKey != ActiveStrategyProfile.legacyBaselineKey
+                else { continue }
+                if prev.isLoss && curr.profileKey != prev.profileKey {
+                    postLossSwitches += 1
+                }
+            }
+        }
+        let filterHoppingDetected = postLossSwitches >= 2
+        if filterHoppingDetected {
+            insights.append(TraderPsychologyInsight(
+                id: "filter_hopping",
+                title: "Strategy Filter-Hopping Detected",
+                detail: "You switched active strategy combinations immediately after \(postLossSwitches) losing trades. Let a strategy profile accumulate at least 15–20 resolved setups before judging edge.",
+                severity: .caution
+            ))
+        } else if timeline.count >= 5 {
+            insights.append(TraderPsychologyInsight(
+                id: "profile_consistency",
+                title: "Consistent Rule Execution",
+                detail: "You are sticking cleanly to your chosen strategy profile without reactive post-loss rule switching.",
+                severity: .positive
+            ))
+        }
+
+        // 2. Order Flow Conflict Coaching (Crypto Only, when Order Flow is ON — never lecture on Forex/TradFi)
+        let cryptoTrades = timeline.filter(\.isCrypto)
+        let conflictingOF = cryptoTrades.filter { $0.orderFlowStatus == OrderFlowAlignment.conflicting.rawValue }
+        let alignedOF = cryptoTrades.filter { $0.orderFlowStatus == OrderFlowAlignment.aligned.rawValue }
+
+        let conflictingAvgR: Double? = conflictingOF.isEmpty
+            ? nil
+            : conflictingOF.reduce(0.0) { $0 + $1.rMultiple } / Double(conflictingOF.count)
+        let alignedAvgR: Double? = alignedOF.isEmpty
+            ? nil
+            : alignedOF.reduce(0.0) { $0 + $1.rMultiple } / Double(alignedOF.count)
+
+        let shouldCoachOrderFlow = activeProfile.isOrderFlowEnabled && (marketClass == nil || marketClass == .crypto)
+        if shouldCoachOrderFlow && !conflictingOF.isEmpty {
+            let confStr = conflictingAvgR.map { String(format: "%+.2fR", $0) } ?? "N/A"
+            let alignNote = alignedAvgR.map { " vs \(String(format: "%+.2fR", $0)) when aligned" } ?? ""
+            insights.append(TraderPsychologyInsight(
+                id: "orderflow_conflict_coaching",
+                title: "Crypto Entries Against Order Flow",
+                detail: "\(conflictingOF.count) tracked crypto setup(s) were taken against conflicting live Order Flow (avg \(confStr)\(alignNote)). Waiting for passive absorption or wall clearance can protect R:R.",
+                severity: .caution
+            ))
+        } else if shouldCoachOrderFlow && alignedOF.count >= 3, let avg = alignedAvgR {
+            insights.append(TraderPsychologyInsight(
+                id: "orderflow_aligned_edge",
+                title: "Crypto Order Flow Alignment",
+                detail: "\(alignedOF.count) crypto setup(s) aligned with live Order Flow averaged \(String(format: "%+.2fR", avg)).",
+                severity: avg >= 0 ? .positive : .neutral
+            ))
+        }
+
+        // 3. Confluence Breadth Insight (calm feedback strictly on currently enabled core strategies)
+        let coreCount = activeProfile.enabledCoreCount
+        if coreCount == 1 {
+            insights.append(TraderPsychologyInsight(
+                id: "breadth_single_core",
+                title: "Single-Strategy Mode (Higher Noise Risk)",
+                detail: "Only 1 core price-action strategy is enabled. Single-module setups fire more often but carry higher whipsaw noise — consider pairing at least 2 independent modules.",
+                severity: .caution
+            ))
+        } else if coreCount >= 4 {
+            insights.append(TraderPsychologyInsight(
+                id: "breadth_multi_module",
+                title: "High-Confluence Selectivity",
+                detail: "\(coreCount) core modules are active, filtering out low-conviction noise in favor of multi-factor alignment.",
+                severity: .positive
+            ))
+        } else if coreCount >= 2 {
+            insights.append(TraderPsychologyInsight(
+                id: "breadth_balanced",
+                title: "Focused Strategy Profile",
+                detail: "\(coreCount) core modules active — balanced selectivity aligned with your current rules.",
+                severity: .neutral
+            ))
+        }
+
+        // 4. Rule-Consistent Discipline Score (0...100) evaluated strictly against active rules
+        var discipline = 90.0
+        if filterHoppingDetected {
+            discipline -= min(30.0, Double(postLossSwitches) * 9.0)
+        }
+        if shouldCoachOrderFlow && !conflictingOF.isEmpty {
+            let ratio = Double(conflictingOF.count) / Double(max(1, cryptoTrades.count))
+            discipline -= min(25.0, ratio * 35.0)
+        }
+        if coreCount == 1 {
+            discipline -= 6.0
+        } else if coreCount >= 3 && !filterHoppingDetected {
+            discipline += 5.0
+        }
+        let clampedDiscipline = min(100.0, max(10.0, discipline))
+
+        return TraderPsychologyCoachReport(
+            disciplineScorePercent: clampedDiscipline,
+            activeProfileKey: activeProfile.profileKey,
+            enabledCoreCount: coreCount,
+            filterHoppingDetected: filterHoppingDetected,
+            filterHopSwitchCount: postLossSwitches,
+            conflictingOrderFlowTrades: conflictingOF.count,
+            conflictingOrderFlowAvgR: conflictingAvgR,
+            alignedOrderFlowAvgR: alignedAvgR,
+            insights: insights
         )
     }
 

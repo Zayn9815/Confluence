@@ -167,6 +167,55 @@ public struct ConfidenceCalibrator: Codable, Sendable, Equatable {
         )
     }
 
+    /// Slice-aware Platt calibrator prioritizing outcomes matching `activeProfileKey`,
+    /// applying smooth Bayesian shrinkage toward the overall baseline whenever matching
+    /// sample count `< 10` so switching to a fresh strategy combination never collapses calibration.
+    public static func fit(
+        records: [SignalOutcomeRecord],
+        filter: CalibrationFilterConfig = .headlineFixed,
+        activeProfileKey: String?
+    ) -> ConfidenceCalibrator {
+        let baseline = fit(records: records, filter: filter)
+        guard let rawKey = activeProfileKey, !rawKey.isEmpty else {
+            return baseline
+        }
+        let targetKey = ActiveStrategyProfile.normalizedKey(rawKey)
+        let eligible = records.filter {
+            filter.matchesRecord($0) && filter.isCountedInWinRateDenominator($0.status)
+        }
+        let matching = eligible.filter { $0.effectiveStrategyProfileKey == targetKey }
+        guard !matching.isEmpty else {
+            return baseline
+        }
+
+        // Full profile-specific Platt fit once matching slice reaches minimumSamples
+        if matching.count >= minimumSamples {
+            return fit(records: matching, filter: filter)
+        }
+
+        // Smooth Bayesian shrinkage toward baseline when profile slice is small (< 10 or < minimumSamples)
+        guard baseline.isActive else {
+            return baseline
+        }
+        let matchWins = matching.filter { filter.isCountedWin($0.status) }.count
+        let matchEmpiricalRate = (Double(matchWins) + 1.0) / (Double(matching.count) + 2.0)
+        let baseWins = eligible.filter { filter.isCountedWin($0.status) }.count
+        let baseRate = (Double(baseWins) + 1.0) / (Double(eligible.count) + 2.0)
+
+        let shrinkWeight = min(1.0, Double(matching.count) / 10.0) * 0.5
+        let safeMatch = min(0.98, max(0.02, matchEmpiricalRate))
+        let safeBase = min(0.98, max(0.02, baseRate))
+        let logitDelta = log(safeMatch / (1.0 - safeMatch)) - log(safeBase / (1.0 - safeBase))
+        let shrunkIntercept = max(-8.0, min(8.0, baseline.interceptB + shrinkWeight * logitDelta))
+
+        return ConfidenceCalibrator(
+            isActive: true,
+            sampleCount: baseline.sampleCount,
+            slopeA: baseline.slopeA,
+            interceptB: shrunkIntercept
+        )
+    }
+
     /// Maps a raw confluence score (`0...100`) to a calibrated win probability (`0.01...0.99`),
     /// or `nil` if fewer than `minimumSamples` (100) resolved filled trades have been observed.
     public func calibratedProbability(forRawScore rawScorePercent: Double) -> Double? {
