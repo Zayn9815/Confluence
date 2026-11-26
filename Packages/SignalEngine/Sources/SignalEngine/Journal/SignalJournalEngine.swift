@@ -214,7 +214,11 @@ public enum SignalJournalEngine {
 
     /// Creates a tracked automatic journal entry from a `TradeSignal`.
     /// - Rejects `.neutral` direction and signals lacking valid finite `TradeLevels` (never logs neutral scans).
-    /// - **Immediate In-Zone Fill:** When `currentPrice` sits inside `[entryLow, entryHigh]`, initializes directly as `.live`.
+    /// - **Standard Limit-Order Fill:** When `currentPrice` is at or behind the entry zone on the stop-loss side
+    ///   (`stopLoss < currentPrice <= entryZoneHigh` for LONG; `entryZoneLow <= currentPrice < stopLoss` for SHORT),
+    ///   fills immediately at the actual live price (`fillPrice = currentPrice`) and initializes directly as `.live`.
+    ///   If `currentPrice` is already at/beyond `stopLoss`, fills at `entryMid` and resolves conservatively as `.loss`.
+    ///   If `currentPrice` is ahead of entry toward TP1, initializes as `.pending` waiting for a pullback.
     public static func createEntry(
         from signal: TradeSignal,
         section: JournalSection,
@@ -247,10 +251,21 @@ public enum SignalJournalEngine {
             return max(0, signal.barCloseEpochSeconds - signal.timeframe.seconds)
         }()
 
-        let inZone = (safeCurrent >= orderedLow && safeCurrent <= orderedHigh)
-        let initialStatus: JournalTradeStatus = inZone ? .live : .pending
-        let fillPrice: Double? = inZone ? safeCurrent : nil
-        let filledAt: TimeInterval? = inZone ? now : nil
+        let immediateFill = isPriceEligibleForImmediateLimitFill(
+            price: safeCurrent,
+            direction: signal.direction,
+            entryZoneLow: orderedLow,
+            entryZoneHigh: orderedHigh,
+            stopLoss: lv.stopLoss
+        )
+        let alreadyStoppedOut = isStopLossHit(
+            price: safeCurrent,
+            stopLoss: lv.stopLoss,
+            direction: signal.direction
+        )
+        let initialStatus: JournalTradeStatus = immediateFill ? .live : .pending
+        let fillPrice: Double? = immediateFill ? safeCurrent : (alreadyStoppedOut ? lv.entryMid : nil)
+        let filledAt: TimeInterval? = (immediateFill || alreadyStoppedOut) ? now : nil
 
         let entryID = "\(signal.symbol)|\(signal.timeframe.rawValue)|\(section.rawValue)|\(Int(signalBarTs))"
         let ofCaptured: TimeInterval? = (signal.marketClass == .crypto && signal.orderFlowSummary != nil)
@@ -265,7 +280,7 @@ public enum SignalJournalEngine {
             return nil
         }()
 
-        return TrackedJournalTrade(
+        var trade = TrackedJournalTrade(
             id: entryID,
             symbol: signal.symbol,
             assetClass: signal.marketClass,
@@ -300,6 +315,10 @@ public enum SignalJournalEngine {
             filterReason: resolvedFilterReason,
             matchedStrategyIDs: signal.matchedStrategyIDs.map(\.rawValue)
         )
+        if alreadyStoppedOut {
+            applyLoss(&trade, closedAt: now)
+        }
+        return trade
     }
 
     /// Creates a tracked automatic `.trapAlerts` journal entry from an actionable `BehavioralTrap`,
@@ -345,27 +364,38 @@ public enum SignalJournalEngine {
             return max(0, trap.triggerEpochSeconds - timeframe.seconds)
         }()
 
-        let inZone = (safeCurrent >= orderedLow && safeCurrent <= orderedHigh)
+        let immediateFill = isPriceEligibleForImmediateLimitFill(
+            price: safeCurrent,
+            direction: dir,
+            entryZoneLow: orderedLow,
+            entryZoneHigh: orderedHigh,
+            stopLoss: lv.stopLoss
+        )
+        let alreadyStoppedOut = isStopLossHit(
+            price: safeCurrent,
+            stopLoss: lv.stopLoss,
+            direction: dir
+        )
         let entryID = "\(asset.symbol)|\(timeframe.rawValue)|\(JournalSection.trapAlerts.rawValue)|\(Int(signalBarTs))"
         let strategyTag = StrategyID.forTrapKind(trap.triggerKind)?.rawValue
         let ofCaptured: TimeInterval? = (asset.marketClass == .crypto && orderFlowSummary != nil)
             ? (orderFlowSummary?.capturedAtEpochSeconds ?? now)
             : nil
 
-        return TrackedJournalTrade(
+        var trade = TrackedJournalTrade(
             id: entryID,
             symbol: asset.symbol,
             assetClass: asset.marketClass,
             timeframe: timeframe,
             direction: dir,
             section: .trapAlerts,
-            status: inZone ? .live : .pending,
+            status: immediateFill ? .live : .pending,
             score: score,
             signalBarTimestamp: signalBarTs,
             entryZoneLow: orderedLow,
             entryZoneHigh: orderedHigh,
             entryPrice: lv.entryMid,
-            fillPrice: inZone ? safeCurrent : nil,
+            fillPrice: immediateFill ? safeCurrent : (alreadyStoppedOut ? lv.entryMid : nil),
             stopLoss: lv.stopLoss,
             target1: lv.tp1,
             target2: lv.tp2,
@@ -380,13 +410,17 @@ public enum SignalJournalEngine {
             orderFlowSummary: orderFlowSummary,
             orderFlowCapturedAt: ofCaptured,
             createdAt: now,
-            filledAt: inZone ? now : nil,
+            filledAt: (immediateFill || alreadyStoppedOut) ? now : nil,
             tp1HitAt: nil,
             closedAt: nil,
             lastEvaluatedAt: now,
             filterReason: "\(trap.direction.rawValue) · \(trap.triggerKind.rawValue)",
             matchedStrategyIDs: strategyTag.map { [$0] } ?? []
         )
+        if alreadyStoppedOut {
+            applyLoss(&trade, closedAt: now)
+        }
+        return trade
     }
 
     /// Evaluates a single live price tick against an open journal trade.
@@ -416,7 +450,12 @@ public enum SignalJournalEngine {
                 return updated
             }
 
-            let inZone = (livePrice >= updated.entryZoneLow && livePrice <= updated.entryZoneHigh)
+            let limitTriggered = isLimitFillTriggered(
+                price: livePrice,
+                direction: updated.direction,
+                entryZoneLow: updated.entryZoneLow,
+                entryZoneHigh: updated.entryZoneHigh
+            )
             let crossedZone: Bool = {
                 guard previousPrice.isFinite, previousPrice > 0 else { return false }
                 let lo = min(previousPrice, livePrice)
@@ -424,23 +463,46 @@ public enum SignalJournalEngine {
                 return lo <= updated.entryZoneHigh && hi >= updated.entryZoneLow
             }()
 
-            if inZone || crossedZone {
-                let fill = inZone ? livePrice : updated.entryPrice
-                updated.status = .live
-                updated.fillPrice = fill
-                updated.filledAt = now
-                // If tick simultaneously crossed entry and hit stop loss, resolve conservatively as loss
+            if limitTriggered || crossedZone {
+                // If tick reached/crossed entry and simultaneously hit stop loss, fill and count as .loss
                 if isStopLossHit(price: livePrice, stopLoss: updated.stopLoss, direction: updated.direction) {
+                    let prevEligible = isPriceEligibleForImmediateLimitFill(
+                        price: previousPrice,
+                        direction: updated.direction,
+                        entryZoneLow: updated.entryZoneLow,
+                        entryZoneHigh: updated.entryZoneHigh,
+                        stopLoss: updated.stopLoss
+                    )
+                    updated.fillPrice = prevEligible ? previousPrice : updated.entryPrice
+                    updated.filledAt = now
                     applyLoss(&updated, closedAt: now)
                     return updated
                 }
+
+                let fill: Double
+                if limitTriggered {
+                    // Price is at or behind entry (between entry and SL): fill at actual live price
+                    fill = livePrice
+                } else {
+                    // Price crossed the entry zone onto the TP side between ticks
+                    let prevEligible = isPriceEligibleForImmediateLimitFill(
+                        price: previousPrice,
+                        direction: updated.direction,
+                        entryZoneLow: updated.entryZoneLow,
+                        entryZoneHigh: updated.entryZoneHigh,
+                        stopLoss: updated.stopLoss
+                    )
+                    fill = prevEligible ? previousPrice : updated.entryPrice
+                }
+                updated.status = .live
+                updated.fillPrice = fill
+                updated.filledAt = now
                 applyLiveMetrics(&updated, markPrice: livePrice)
                 return updated
             }
 
-            // Pre-fill miss: TP1 reached before fill OR SL reached before fill -> .expired
-            if isTargetHit(price: livePrice, target: updated.target1, direction: updated.direction)
-                || isStopLossHit(price: livePrice, stopLoss: updated.stopLoss, direction: updated.direction) {
+            // Pre-fill miss on TP side: price hit TP1 without ever pulling back to entry -> .expired
+            if isTargetHit(price: livePrice, target: updated.target1, direction: updated.direction) {
                 updated.status = .expired
                 updated.closedAt = now
                 updated.realizedR = nil
@@ -562,10 +624,31 @@ public enum SignalJournalEngine {
                     continue
                 }
 
-                let touchedEntry = (bar.low <= current.entryZoneHigh && bar.high >= current.entryZoneLow)
-                if touchedEntry {
-                    let clampedFill = min(bar.high, max(bar.low, current.entryPrice))
-                    current.fillPrice = clampedFill
+                let limitFilled = isBarLimitFillTriggered(
+                    bar: bar,
+                    direction: current.direction,
+                    entryZoneLow: current.entryZoneLow,
+                    entryZoneHigh: current.entryZoneHigh
+                )
+                if limitFilled {
+                    let barFillPrice: Double
+                    if isPriceEligibleForImmediateLimitFill(
+                        price: bar.open,
+                        direction: current.direction,
+                        entryZoneLow: current.entryZoneLow,
+                        entryZoneHigh: current.entryZoneHigh,
+                        stopLoss: current.stopLoss
+                    ) {
+                        barFillPrice = bar.open
+                    } else if current.direction == .long {
+                        barFillPrice = min(current.entryZoneHigh, max(bar.low, current.entryPrice))
+                    } else {
+                        barFillPrice = max(current.entryZoneLow, min(bar.high, current.entryPrice))
+                    }
+                    let slSafeFill = isStopLossHit(price: barFillPrice, stopLoss: current.stopLoss, direction: current.direction)
+                        ? current.entryPrice
+                        : barFillPrice
+                    current.fillPrice = slSafeFill
                     current.filledAt = barClose
                     current.status = .live
 
@@ -581,16 +664,13 @@ public enum SignalJournalEngine {
                     continue
                 }
 
-                // Pre-fill miss on bar: SL hit before fill, TP1 hit before fill, or timeout elapsed
-                let slBeforeFill = (current.direction == .long)
-                    ? (bar.low <= current.stopLoss)
-                    : (bar.high >= current.stopLoss)
+                // Pre-fill miss on TP side: TP1 hit without pulling back to entry, or timeout elapsed
                 let tp1BeforeFill = (current.direction == .long)
                     ? (bar.high >= current.target1)
                     : (bar.low <= current.target1)
                 let timedOut = (barClose >= expiryCutoff)
 
-                if slBeforeFill || tp1BeforeFill || timedOut {
+                if tp1BeforeFill || timedOut {
                     current.status = .expired
                     current.closedAt = barClose
                     current.realizedR = nil
@@ -699,6 +779,15 @@ public enum SignalJournalEngine {
         // Finally apply live price tick if trade is still open
         if let lp = livePrice, lp.isFinite, lp > 0, current.status.isOpen {
             current = evaluateLiveTick(entry: current, livePrice: lp, now: now)
+        } else if current.status == .pending,
+                  isLimitFillTriggered(
+                      price: current.currentPrice,
+                      direction: current.direction,
+                      entryZoneLow: current.entryZoneLow,
+                      entryZoneHigh: current.entryZoneHigh
+                  ) {
+            // Upgrade any pre-existing persisted .pending entry whose stored price is already at/behind entry
+            current = evaluateLiveTick(entry: current, livePrice: current.currentPrice, now: now)
         } else if current.status.isOpen && current.status != .pending {
             applyLiveMetrics(&current, markPrice: current.currentPrice)
         }
@@ -706,13 +795,84 @@ public enum SignalJournalEngine {
         return current
     }
 
-    // MARK: - Private Math Helpers
+    // MARK: - Private Math & Limit-Fill Helpers
+
+    /// True when `price` is at or behind the entry zone on the stop-loss side, strictly before stop loss,
+    /// meaning a resting limit order fills immediately at the actual live price.
+    /// - LONG (Buy Limit): `stopLoss < price <= entryZoneHigh`
+    /// - SHORT (Sell Limit): `entryZoneLow <= price < stopLoss`
+    private static func isPriceEligibleForImmediateLimitFill(
+        price: Double,
+        direction: TradeDirection,
+        entryZoneLow: Double,
+        entryZoneHigh: Double,
+        stopLoss: Double
+    ) -> Bool {
+        guard price.isFinite, price > 0 else { return false }
+        let orderedLow = min(entryZoneLow, entryZoneHigh)
+        let orderedHigh = max(entryZoneLow, entryZoneHigh)
+        switch direction {
+        case .long:
+            return price <= orderedHigh && price > stopLoss
+        case .short:
+            return price >= orderedLow && price < stopLoss
+        case .neutral:
+            return false
+        }
+    }
+
+    /// True when a live tick has reached or passed the entry limit price (including through to stop loss).
+    /// - LONG (Buy Limit): `price <= entryZoneHigh`
+    /// - SHORT (Sell Limit): `price >= entryZoneLow`
+    private static func isLimitFillTriggered(
+        price: Double,
+        direction: TradeDirection,
+        entryZoneLow: Double,
+        entryZoneHigh: Double
+    ) -> Bool {
+        guard price.isFinite, price > 0 else { return false }
+        let orderedLow = min(entryZoneLow, entryZoneHigh)
+        let orderedHigh = max(entryZoneLow, entryZoneHigh)
+        switch direction {
+        case .long:
+            return price <= orderedHigh
+        case .short:
+            return price >= orderedLow
+        case .neutral:
+            return false
+        }
+    }
+
+    /// True when a closed candle traded at or behind the entry limit price.
+    /// - LONG (Buy Limit): `bar.low <= entryZoneHigh`
+    /// - SHORT (Sell Limit): `bar.high >= entryZoneLow`
+    private static func isBarLimitFillTriggered(
+        bar: Candle,
+        direction: TradeDirection,
+        entryZoneLow: Double,
+        entryZoneHigh: Double
+    ) -> Bool {
+        let orderedLow = min(entryZoneLow, entryZoneHigh)
+        let orderedHigh = max(entryZoneLow, entryZoneHigh)
+        switch direction {
+        case .long:
+            return bar.low <= orderedHigh
+        case .short:
+            return bar.high >= orderedLow
+        case .neutral:
+            return false
+        }
+    }
 
     private static func riskDistance(for entry: TrackedJournalTrade) -> Double {
         let anchor = entry.anchorEntryPrice
+        let minEps = max(anchor * 1e-9, Double.leastNormalMagnitude)
         let dist = abs(anchor - entry.stopLoss)
+        if dist.isFinite && dist > minEps {
+            return dist
+        }
         let fallback = abs(entry.entryPrice - entry.stopLoss)
-        return max(dist, fallback, anchor * 1e-9, Double.leastNormalMagnitude)
+        return max(fallback, minEps)
     }
 
     private static func computeR(price: Double, entry: TrackedJournalTrade) -> Double {
@@ -775,10 +935,10 @@ public enum SignalJournalEngine {
         let beFloor: Double
         switch entry.direction {
         case .long:
-            beFloor = max(entry.anchorEntryPrice, entry.entryPrice, entry.stopLoss)
+            beFloor = max(entry.anchorEntryPrice, entry.stopLoss)
             return price <= beFloor
         case .short:
-            beFloor = min(entry.anchorEntryPrice, entry.entryPrice, entry.stopLoss)
+            beFloor = min(entry.anchorEntryPrice, entry.stopLoss)
             return price >= beFloor
         case .neutral:
             return false
@@ -788,10 +948,10 @@ public enum SignalJournalEngine {
     private static func isBarPullbackToBreakevenOrSL(bar: Candle, entry: TrackedJournalTrade) -> Bool {
         switch entry.direction {
         case .long:
-            let beLevel = max(entry.anchorEntryPrice, entry.entryPrice, entry.stopLoss)
+            let beLevel = max(entry.anchorEntryPrice, entry.stopLoss)
             return bar.low <= beLevel
         case .short:
-            let beLevel = min(entry.anchorEntryPrice, entry.entryPrice, entry.stopLoss)
+            let beLevel = min(entry.anchorEntryPrice, entry.stopLoss)
             return bar.high >= beLevel
         case .neutral:
             return false
