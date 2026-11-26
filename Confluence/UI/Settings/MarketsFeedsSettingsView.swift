@@ -178,6 +178,15 @@ public struct MarketsFeedsSettingsView: View {
                 }
 
                 HStack(spacing: 6) {
+                    Picker(SettingHelpKey.chartEngine.copy.label, selection: $coordinator.settings.payload.chartEngine) {
+                        ForEach(ChartEngineOption.allCases) { engine in
+                            Text(engine.displayLabel).tag(engine)
+                        }
+                    }
+                    ConfluenceInfoButton(.chartEngine)
+                }
+
+                HStack(spacing: 6) {
                     Picker(SettingHelpKey.defaultChartView.copy.label, selection: $coordinator.settings.payload.defaultChartViewMode) {
                         ForEach(DefaultChartViewMode.allCases) { mode in
                             Text(mode.displayLabel).tag(mode)

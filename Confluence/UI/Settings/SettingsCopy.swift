@@ -49,6 +49,7 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
     case macroNewsPositioningFeeds
     case tradFiLiveFeed
     case cryptoLiveFeed
+    case chartEngine
     case defaultChartView
     case showTradingViewOption
     case scanOnOpen
@@ -222,6 +223,12 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
                 label: "Crypto live prices",
                 subtitle: "Choose real-time streaming or battery-saving updates for crypto.",
                 helpText: "Live stream connects directly to Binance Vision WebSocket while the app is in the foreground (up to 8 symbols at once) and disconnects automatically when backgrounded."
+            )
+        case .chartEngine:
+            return SettingCopy(
+                label: "Chart rendering engine",
+                subtitle: "Choose the interactive candlestick engine used for full-screen charts.",
+                helpText: "Defaults to TradingView LightweightCharts with native live candle updates, horizontal Entry/Stop loss/Target/Trap price lines, and crosshair readout. Additional native engines (DGCharts, Swift Trading View, CandleKit) are wired for Step 2 and use Confluence's native SwiftUI Canvas fallback with the Signal Level HUD today."
             )
         case .defaultChartView:
             return SettingCopy(

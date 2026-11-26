@@ -12,6 +12,10 @@ public struct DataDiagnosticsAboutSettingsView: View {
     @State private var showFileImporter = false
     @State private var backupStatusMessage: String?
     @State private var backupStatusIsError = false
+    @State private var preparedBackupURL: URL?
+    @State private var preparedLedgerCSVURL: URL?
+    @State private var preparedJournalCSVURL: URL?
+    @State private var preparedDemoWalletCSVURL: URL?
 
     public init(coordinator: MarketScannerCoordinator, palette: ConfluencePalette) {
         self.coordinator = coordinator
@@ -25,9 +29,15 @@ public struct DataDiagnosticsAboutSettingsView: View {
     public var body: some View {
         Form {
             Section {
-                if let backupURL = coordinator.exportBackupArchiveURL() {
+                if let backupURL = preparedBackupURL {
                     ShareLink(item: backupURL) {
-                        Label("Export Backup File", systemImage: "externaldrive.badge.plus")
+                        Label("Share Backup File", systemImage: "square.and.arrow.up")
+                    }
+                } else {
+                    Button {
+                        preparedBackupURL = coordinator.exportBackupArchiveURL()
+                    } label: {
+                        Label("Prepare Backup File", systemImage: "externaldrive.badge.plus")
                     }
                 }
 
@@ -43,20 +53,38 @@ public struct DataDiagnosticsAboutSettingsView: View {
                     Label("Restore Backup From File", systemImage: "square.and.arrow.down")
                 }
 
-                if let ledgerCSV = coordinator.exportTradeLedgerCSVURL() {
+                if let ledgerCSV = preparedLedgerCSVURL {
                     ShareLink(item: ledgerCSV) {
+                        Label("Share Trade Ledger (Spreadsheet)", systemImage: "square.and.arrow.up")
+                    }
+                } else {
+                    Button {
+                        preparedLedgerCSVURL = coordinator.exportTradeLedgerCSVURL()
+                    } label: {
                         Label("Export Trade Ledger (Spreadsheet)", systemImage: "tablecells")
                     }
                 }
 
-                if let journalCSV = coordinator.exportJournalCSVURL() {
+                if let journalCSV = preparedJournalCSVURL {
                     ShareLink(item: journalCSV) {
+                        Label("Share Trade Journal (Spreadsheet)", systemImage: "square.and.arrow.up")
+                    }
+                } else {
+                    Button {
+                        preparedJournalCSVURL = coordinator.exportJournalCSVURL()
+                    } label: {
                         Label("Export Trade Journal (Spreadsheet)", systemImage: "book.pages")
                     }
                 }
 
-                if let demoWalletCSV = coordinator.exportDemoWalletTransactionsCSV() {
+                if let demoWalletCSV = preparedDemoWalletCSVURL {
                     ShareLink(item: demoWalletCSV) {
+                        Label("Share Demo Wallet History (Spreadsheet)", systemImage: "square.and.arrow.up")
+                    }
+                } else {
+                    Button {
+                        preparedDemoWalletCSVURL = coordinator.exportDemoWalletTransactionsCSV()
+                    } label: {
                         Label("Export Demo Wallet History (Spreadsheet)", systemImage: "wallet.pass")
                     }
                 }
