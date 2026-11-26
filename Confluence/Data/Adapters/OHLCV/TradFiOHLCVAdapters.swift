@@ -155,6 +155,10 @@ public struct TradFiOHLCVRouter: Sendable {
                     }
                     return res
                 }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let urlErr as URLError where urlErr.code == .cancelled {
+                throw urlErr
             } catch {
                 if firstFailedProvider == nil {
                     firstFailedProvider = provider.shortLabel
@@ -225,7 +229,14 @@ public struct TradFiOHLCVRouter: Sendable {
                 let finalBars = needs4HResample
                     ? CandleHygieneEngine.resample1HTo4H(hourlyCandles: candles, serverNowEpochSeconds: serverNow)
                     : candles
+                guard !finalBars.isEmpty else {
+                    throw NetworkAdapterError.decodingFailed("Yahoo Finance returned 0 valid candles")
+                }
                 return OHLCVFetchResult(candles: finalBars, providerName: "Yahoo Finance", latencyMs: res.latencyMs)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let urlErr as URLError where urlErr.code == .cancelled {
+                throw urlErr
             } catch {
                 lastErr = error
             }
@@ -278,13 +289,18 @@ public struct TradFiOHLCVRouter: Sendable {
         out.reserveCapacity(count)
 
         for i in 0..<count {
-            guard let o = opens[i], let h = highs[i], let l = lows[i], let c = closes[i] else {
+            guard let o = opens[i], let h = highs[i], let l = lows[i], let c = closes[i],
+                  o.isFinite, h.isFinite, l.isFinite, c.isFinite,
+                  o > 0, h > 0, l > 0, c > 0, h >= l
+            else {
                 continue
             }
             let openSec = timestamps[i]
+            guard openSec.isFinite, openSec > 0 else { continue }
             let closeSec = openSec + timeframe.seconds
             let rawVol: Double? = (volumes != nil && i < volumes!.count) ? volumes![i] : nil
-            let cleanVol: Double? = (marketClass.isOTCVolumeUnavailable && (rawVol ?? 0) <= 0) ? nil : rawVol
+            let validVol: Double? = rawVol.flatMap { ($0.isFinite && $0 >= 0) ? $0 : nil }
+            let cleanVol: Double? = (marketClass.isOTCVolumeUnavailable && (validVol ?? 0) <= 0) ? nil : validVol
             out.append(Candle(
                 openTimeEpochSeconds: openSec,
                 closeTimeEpochSeconds: closeSec,
@@ -293,6 +309,7 @@ public struct TradFiOHLCVRouter: Sendable {
                 isClosed: closeSec <= serverNowEpochSeconds
             ))
         }
+        out.sort { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
         return out
     }
 
