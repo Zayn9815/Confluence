@@ -14,7 +14,7 @@ final class StrategyToggleAndPopoverTests: XCTestCase {
     func testLegacyCustomConceptsMigrateOnceToIndividualStrategyIDs() throws {
         let legacyJSON = Data("""
         {
-          "strategySelectionMode": "Custom",
+          "strategySelectionMode": "Custom (Select Strategies)",
           "selectedStrategyConcepts": ["ict_fvg", "ict_order_block", "macro_surprise_catalyst"]
         }
         """.utf8)
