@@ -37,7 +37,7 @@ public enum MarketRegimeClassifier {
         marketClass: MarketClass = .crypto
     ) -> RegimeAssessment {
         let lastIdx = min(endIndex ?? (candles.count - 1), candles.count - 1)
-        guard lastIdx >= 20 else {
+        guard lastIdx >= 20, candles[lastIdx].close.isFinite, candles[lastIdx].close > 0 else {
             return RegimeAssessment(
                 regime: .meanReverting,
                 riskState: .safe,
@@ -55,30 +55,29 @@ public enum MarketRegimeClassifier {
         for i in 0...lastIdx {
             let c = candles[i]
             if i == 0 {
-                trs.append(c.rangeSize)
+                trs.append(max(0.0, c.rangeSize.isFinite ? c.rangeSize : 0.0))
             } else {
                 let prevClose = candles[i - 1].close
                 let tr = max(c.high - c.low, max(abs(c.high - prevClose), abs(c.low - prevClose)))
-                trs.append(tr)
+                trs.append(max(0.0, tr.isFinite ? tr : 0.0))
             }
         }
 
-        // 14-bar ATR and strictly out-of-sample rolling baseline ATR stats (up to 60 prior bars)
+        // 14-bar ATR computed directly per window (avoids floating-point cancellation drift)
         let atrWindow = 14
         var atrSeries: [Double] = []
-        var runningSum = 0.0
-        for i in 0...lastIdx {
-            runningSum += trs[i]
-            if i >= atrWindow {
-                runningSum -= trs[i - atrWindow]
+        atrSeries.reserveCapacity(max(0, lastIdx - atrWindow + 2))
+        for i in (atrWindow - 1)...lastIdx {
+            var sliceSum = 0.0
+            for j in (i - atrWindow + 1)...i {
+                sliceSum += trs[j]
             }
-            if i >= atrWindow - 1 {
-                atrSeries.append(runningSum / Double(atrWindow))
-            }
+            atrSeries.append(max(0.0, sliceSum / Double(atrWindow)))
         }
 
         let currentATR = atrSeries.last ?? 0.0
         let lastClose = candles[lastIdx].close
+        let relEps = max(Double.leastNormalMagnitude, lastClose * 1e-12)
         let atrPercent = lastClose > 0 ? (currentATR / lastClose) * 100.0 : 0.0
 
         // Out-of-sample baseline excludes currentATR so sudden volatility spikes aren't dampened
@@ -89,7 +88,7 @@ public enum MarketRegimeClassifier {
             return acc + d * d
         } / Double(max(priorATRSlice.count, 1))
         let stdATR = sqrt(max(variance, 0.0))
-        let rawZ = stdATR > 1e-12 ? (currentATR - meanATR) / stdATR : 0.0
+        let rawZ = stdATR > relEps ? (currentATR - meanATR) / stdATR : 0.0
         let atrZScore = rawZ.isFinite ? rawZ : 0.0
 
         // Kaufman Efficiency Ratio over 20 bars (0 = noisy mean-reverting, 1 = clean trend)
@@ -99,16 +98,18 @@ public enum MarketRegimeClassifier {
         for i in (lastIdx - erLookback + 1)...lastIdx {
             pathLength += abs(candles[i].close - candles[i - 1].close)
         }
-        let efficiencyRatio = pathLength > 1e-12 ? netMove / pathLength : 0.0
+        let efficiencyRatio = pathLength > relEps ? min(1.0, max(0.0, netMove / pathLength)) : 0.0
 
         // Shock / drawdown check over last 24 bars + single-bar shock (asset-class calibrated)
         let shockStart = max(0, lastIdx - 24)
         var peakHigh = candles[shockStart].high
         for i in shockStart...lastIdx {
-            peakHigh = max(peakHigh, candles[i].high)
+            if candles[i].high.isFinite {
+                peakHigh = max(peakHigh, candles[i].high)
+            }
         }
-        let drawdownPct = peakHigh > 0 ? ((peakHigh - lastClose) / peakHigh) * 100.0 : 0.0
-        let lastBarTRMultiple = meanATR > 1e-12 ? trs[lastIdx] / meanATR : 1.0
+        let drawdownPct = peakHigh > 0 ? max(0.0, ((peakHigh - lastClose) / peakHigh) * 100.0) : 0.0
+        let lastBarTRMultiple = meanATR > relEps ? trs[lastIdx] / meanATR : 1.0
 
         let crisisDrawdownThreshold: Double
         switch marketClass {

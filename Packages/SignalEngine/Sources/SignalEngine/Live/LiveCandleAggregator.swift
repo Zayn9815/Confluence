@@ -28,6 +28,8 @@ public struct LiveCandleAggregator: Sendable, Equatable {
     public let isOTCVolumeUnavailable: Bool
     public private(set) var formingCandle: Candle?
     public private(set) var lastValidPrice: Double?
+    public private(set) var lastTickEpochSeconds: TimeInterval?
+    public private(set) var minAllowedOpenEpochSeconds: TimeInterval?
 
     public static func defaultMaxTickDeviation(for marketClass: MarketClass) -> Double {
         switch marketClass {
@@ -48,11 +50,16 @@ public struct LiveCandleAggregator: Sendable, Equatable {
     ) {
         self.timeframe = timeframe
         self.isOTCVolumeUnavailable = marketClass.isOTCVolumeUnavailable
-        self.maxTickDeviationFraction = maxTickDeviationFraction ?? Self.defaultMaxTickDeviation(for: marketClass)
+        let dev = maxTickDeviationFraction ?? Self.defaultMaxTickDeviation(for: marketClass)
+        self.maxTickDeviationFraction = (dev.isFinite && dev > 0) ? dev : Self.defaultMaxTickDeviation(for: marketClass)
         if let seed, seed.close.isFinite, seed.close > 0 {
             self.lastValidPrice = seed.close
             if !seed.isClosed {
                 self.formingCandle = seed
+                self.minAllowedOpenEpochSeconds = seed.openTimeEpochSeconds
+            } else if seed.closeTimeEpochSeconds.isFinite, seed.closeTimeEpochSeconds > 0 {
+                // Prevent delayed ticks from spawning a duplicate forming bar for an already-closed seed bucket
+                self.minAllowedOpenEpochSeconds = seed.closeTimeEpochSeconds
             }
         }
     }
@@ -71,6 +78,10 @@ public struct LiveCandleAggregator: Sendable, Equatable {
             return .rejected(reason: "Invalid tick timestamp")
         }
 
+        if let lastEpoch = lastTickEpochSeconds, tick.epochSeconds < lastEpoch {
+            return .rejected(reason: "Out-of-order tick timestamp")
+        }
+
         if let ref = lastValidPrice, ref > 0 {
             let deviation = abs(tick.price - ref) / ref
             if deviation > maxTickDeviationFraction {
@@ -81,6 +92,9 @@ public struct LiveCandleAggregator: Sendable, Equatable {
         }
 
         let bucketOpen = Self.bucketOpenEpoch(for: tick.epochSeconds, timeframe: timeframe)
+        if let minOpen = minAllowedOpenEpochSeconds, bucketOpen < minOpen {
+            return .rejected(reason: "Delayed tick falls inside an already-closed candle bucket")
+        }
         let bucketClose = bucketOpen + timeframe.seconds
         let sanitizedVol: Double? = {
             if isOTCVolumeUnavailable { return nil }
@@ -115,6 +129,7 @@ public struct LiveCandleAggregator: Sendable, Equatable {
                 )
                 formingCandle = updated
                 lastValidPrice = tick.price
+                lastTickEpochSeconds = tick.epochSeconds
                 return .formingUpdated(updated)
             } else {
                 // Rollover: seal previous forming bar as closed and start new forming bar
@@ -140,6 +155,8 @@ public struct LiveCandleAggregator: Sendable, Equatable {
                 )
                 formingCandle = nextForming
                 lastValidPrice = tick.price
+                lastTickEpochSeconds = tick.epochSeconds
+                minAllowedOpenEpochSeconds = bucketOpen
                 return .rolledOver(closed: closed, forming: nextForming)
             }
         } else {
@@ -155,6 +172,8 @@ public struct LiveCandleAggregator: Sendable, Equatable {
             )
             formingCandle = started
             lastValidPrice = tick.price
+            lastTickEpochSeconds = tick.epochSeconds
+            minAllowedOpenEpochSeconds = bucketOpen
             return .formingUpdated(started)
         }
     }

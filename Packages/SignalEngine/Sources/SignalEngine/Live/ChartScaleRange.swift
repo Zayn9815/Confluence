@@ -41,18 +41,20 @@ public enum ChartScaleRange {
         let validCandles = candles.filter {
             $0.low.isFinite && $0.high.isFinite && $0.close.isFinite && $0.low > 0 && $0.high >= $0.low
         }
-        guard let lastClose = validCandles.last?.close, lastClose > 0 else { return nil }
+        guard let lastClose = validCandles.last?.close, lastClose.isFinite, lastClose > 0 else { return nil }
 
         var minY = validCandles.map(\.low).min() ?? lastClose
         var maxY = validCandles.map(\.high).max() ?? lastClose
         var offScale: [OffScaleOverlayNotice] = []
+        let safeDeviation = maxOverlayDeviationFraction.isFinite ? max(0.05, min(maxOverlayDeviationFraction, 1.0)) : 0.20
+        let safeMargin = marginFraction.isFinite ? max(0.02, min(marginFraction, 0.30)) : 0.11
 
         func considerOverlay(id: String, label: String, price: Double, alwaysIncludeCore: Bool) {
             guard price.isFinite, price > 0 else { return }
             let deviation = abs(price - lastClose) / lastClose
             let effectiveLimit = alwaysIncludeCore
-                ? maxOverlayDeviationFraction * 1.5
-                : maxOverlayDeviationFraction
+                ? safeDeviation * 1.5
+                : safeDeviation
             if deviation <= effectiveLimit {
                 minY = min(minY, price)
                 maxY = max(maxY, price)
@@ -87,9 +89,11 @@ public enum ChartScaleRange {
         }
 
         let span = max(maxY - minY, lastClose * 0.002)
-        let pad = span * max(0.02, min(marginFraction, 0.30))
-        let paddedMin = max(1e-8, minY - pad)
-        let paddedMax = maxY + pad
+        let pad = span * safeMargin
+        // Relative floor prevents minPrice > maxPrice inversion on sub-penny assets (< 1e-8)
+        let relativeFloor = max(Double.leastNormalMagnitude, minY * 0.01)
+        let paddedMin = max(relativeFloor, minY - pad)
+        let paddedMax = max(paddedMin + Double.leastNormalMagnitude, maxY + pad)
 
         return ChartScaleResult(
             minPrice: paddedMin,
