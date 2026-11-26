@@ -25,16 +25,23 @@ public enum TrapLifecycleEngine {
 
         let atrSeries = TrendMomentumDetector.computeATR(candles: Array(candles[0...lastIdx]), period: 14)
         let ema20Series = TrendMomentumDetector.computeEMA(values: candles[0...lastIdx].map(\.close), period: 20)
-        let lifetimeSeconds = lifetimeHours * 3_600.0
+        let safeLifetimeHours = (lifetimeHours.isFinite && lifetimeHours > 0) ? lifetimeHours : 48.0
+        let lifetimeSeconds = safeLifetimeHours * 3_600.0
 
         var traps: [BehavioralTrap] = []
 
-        // Scan causally bar-by-bar so every trap transitions strictly on subsequent closed bars
-        let scanStart = max(14, lastIdx - 60)
+        // Scan causally from bar 14 (prefix-invariant: traps only retire via close-through invalidation or expiry,
+        // never retroactively vanishing when `lastIdx` advances beyond an arbitrary fixed lookback window).
+        let scanStart = 14
         for i in scanStart...lastIdx {
             let bar = candles[i]
+            guard bar.open.isFinite, bar.high.isFinite, bar.low.isFinite, bar.close.isFinite, bar.close > 0 else {
+                continue
+            }
             let atrIdx = max(0, i - 13)
-            let atr = atrIdx < atrSeries.count ? max(atrSeries[atrIdx], 1e-12) : max(bar.rangeSize, 1e-12)
+            let rawATR = atrIdx < atrSeries.count ? atrSeries[atrIdx] : bar.rangeSize
+            let atrFloor = max(bar.close * 0.0005, Double.leastNormalMagnitude)
+            let atr = max(rawATR.isFinite ? rawATR : 0.0, atrFloor)
             let rvol = TrendMomentumDetector.computeRVOL(candles: candles, lastIdx: i, lookback: 20)
             let emaIdx = i - 19
             let ema20 = (emaIdx >= 0 && emaIdx < ema20Series.count) ? ema20Series[emaIdx] : nil
@@ -101,9 +108,10 @@ public enum TrapLifecycleEngine {
                 )
             }
 
-            // 2. Detect new traps forming on bar `i`
-            let wickRatioUpper = bar.rangeSize > 0 ? bar.upperWick / bar.rangeSize : 0
-            let wickRatioLower = bar.rangeSize > 0 ? bar.lowerWick / bar.rangeSize : 0
+            // 2. Detect new traps forming on bar `i` (skip flat zero-range bars to prevent division/EMA noise spikes)
+            guard bar.rangeSize > 0 else { continue }
+            let wickRatioUpper = bar.upperWick / bar.rangeSize
+            let wickRatioLower = bar.lowerWick / bar.rangeSize
 
             // 2a. Post-News Whipsaw Trap (bar spans within 15m of a macro release and reverses sharply)
             let matchingMacro = recentNewsImpulses.first { imp in
@@ -155,9 +163,9 @@ public enum TrapLifecycleEngine {
             }
 
             // 2b. Osler Psychological Round-Number Stop-Cluster Sweep
-            if detectOsler, roundNumberStep > 0 {
+            if detectOsler, roundNumberStep.isFinite, roundNumberStep > 0 {
                 let nearestUpperRound = floor((bar.high - atr * 0.15) / roundNumberStep) * roundNumberStep
-                if nearestUpperRound > 0 &&
+                if nearestUpperRound.isFinite && nearestUpperRound > 0 &&
                     bar.high > nearestUpperRound &&
                     bar.close < nearestUpperRound &&
                     bar.open <= nearestUpperRound &&
@@ -177,14 +185,14 @@ public enum TrapLifecycleEngine {
                             expiresAtEpochSeconds: bar.closeTimeEpochSeconds + lifetimeSeconds,
                             pierceATRMultiple: (bar.high - nearestUpperRound) / atr,
                             rvolMultiple: rvol,
-                            detail: "Pierced psychological round level \(formatLevel(nearestUpperRound)) by \(String(format: "%.2f", (bar.high - nearestUpperRound) / atr))x ATR and closed back below."
+                            detail: "Pierced psychological round level \(formatLevel(nearestUpperRound, symbol: symbol)) by \(String(format: "%.2f", (bar.high - nearestUpperRound) / atr))x ATR and closed back below."
                         )
                     )
                     continue
                 }
 
                 let nearestLowerRound = ceil((bar.low + atr * 0.15) / roundNumberStep) * roundNumberStep
-                if nearestLowerRound > 0 &&
+                if nearestLowerRound.isFinite && nearestLowerRound > 0 &&
                     bar.low < nearestLowerRound &&
                     bar.close > nearestLowerRound &&
                     bar.open >= nearestLowerRound &&
@@ -204,7 +212,7 @@ public enum TrapLifecycleEngine {
                             expiresAtEpochSeconds: bar.closeTimeEpochSeconds + lifetimeSeconds,
                             pierceATRMultiple: (nearestLowerRound - bar.low) / atr,
                             rvolMultiple: rvol,
-                            detail: "Swept stop cluster below psychological round level \(formatLevel(nearestLowerRound)) by \(String(format: "%.2f", (nearestLowerRound - bar.low) / atr))x ATR and reclaimed above."
+                            detail: "Swept stop cluster below psychological round level \(formatLevel(nearestLowerRound, symbol: symbol)) by \(String(format: "%.2f", (nearestLowerRound - bar.low) / atr))x ATR and reclaimed above."
                         )
                     )
                     continue
@@ -214,7 +222,7 @@ public enum TrapLifecycleEngine {
             // 2c. Confirmed ICT Swing Liquidity Sweep Trap
             if detectSwing, let sweep = ict.liquiditySweeps.first(where: { $0.sweepBarIndex == i }) {
                 let pierceATR = sweep.pierceDepth / atr
-                if pierceATR >= 0.15 {
+                if pierceATR.isFinite && pierceATR >= 0.15 {
                     let trapDir: TrapDirection = (sweep.reversalDirection == .short) ? .bullTrap : .bearTrap
                     traps.append(
                         BehavioralTrap(
@@ -230,7 +238,7 @@ public enum TrapLifecycleEngine {
                             expiresAtEpochSeconds: bar.closeTimeEpochSeconds + lifetimeSeconds,
                             pierceATRMultiple: pierceATR,
                             rvolMultiple: rvol,
-                            detail: "Swept prior swing liquidity at \(formatLevel(sweep.sweptLevel)) (\(String(format: "%.2f", pierceATR))x ATR) and closed back inside range."
+                            detail: "Swept prior swing liquidity at \(formatLevel(sweep.sweptLevel, symbol: symbol)) (\(String(format: "%.2f", pierceATR))x ATR) and closed back inside range."
                         )
                     )
                     continue
@@ -240,11 +248,11 @@ public enum TrapLifecycleEngine {
             // 2d. Barber & Odean Attention-Driven Retail FOMO Spike (RVOL > 3.0x or extreme parabolic extension + failure close)
             let isAttentionVolumeSpike = (rvol ?? 0.0) >= 3.0
             let isParabolicRange = bar.rangeSize >= atr * 2.4
-            if detectFomo, (isAttentionVolumeSpike || isParabolicRange), let eq = ema20 {
+            if detectFomo, (isAttentionVolumeSpike || isParabolicRange), let eq = ema20, eq.isFinite {
                 let distFromEMA = (bar.high - eq) / atr
                 let distBelowEMA = (eq - bar.low) / atr
 
-                if distFromEMA >= 2.0 && wickRatioUpper >= 0.45 {
+                if distFromEMA.isFinite && distFromEMA >= 2.0 && wickRatioUpper >= 0.45 {
                     let trapLevel = max(bar.open, bar.close) + bar.upperWick * 0.25
                     traps.append(
                         BehavioralTrap(
@@ -263,7 +271,7 @@ public enum TrapLifecycleEngine {
                             detail: "Attention spike (\(rvol.map { String(format: "%.1fx RVOL", $0) } ?? String(format: "%.1fx ATR", bar.rangeSize / atr))) extended \(String(format: "%.1f", distFromEMA))x ATR above EMA-20 with exhaustion upper wick."
                         )
                     )
-                } else if distBelowEMA >= 2.0 && wickRatioLower >= 0.45 {
+                } else if distBelowEMA.isFinite && distBelowEMA >= 2.0 && wickRatioLower >= 0.45 {
                     let trapLevel = min(bar.open, bar.close) - bar.lowerWick * 0.25
                     traps.append(
                         BehavioralTrap(
@@ -290,9 +298,7 @@ public enum TrapLifecycleEngine {
         return Array(traps.suffix(6))
     }
 
-    private static func formatLevel(_ value: Double) -> String {
-        if value >= 100 { return String(format: "%.2f", value) }
-        if value >= 10 { return String(format: "%.3f", value) }
-        return String(format: "%.5f", value)
+    private static func formatLevel(_ value: Double, symbol: String) -> String {
+        ChartPricePrecision.resolve(symbol: symbol, referencePrice: value).format(value)
     }
 }

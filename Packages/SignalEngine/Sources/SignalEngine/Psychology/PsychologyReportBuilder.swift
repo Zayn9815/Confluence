@@ -222,7 +222,8 @@ public enum PsychologyReportBuilder {
             proPsych = "Institutional desks stand aside when edge is diluted (\(reasonsText)) and preserve capital for clean asymmetric liquidity sweeps."
         }
 
-        let uniqueBadges = Array(NSOrderedSet(array: badges)).compactMap { $0 as? String }
+        var seenBadges = Set<String>()
+        let uniqueBadges = badges.filter { seenBadges.insert($0).inserted }
 
         return PsychologyReport(
             signalCategory: category,
