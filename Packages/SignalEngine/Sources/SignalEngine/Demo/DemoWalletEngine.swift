@@ -397,6 +397,9 @@ public enum DemoWalletEngine {
             if upper.hasPrefix("USD/") || (upper.hasPrefix("USD") && !upper.hasSuffix("USD")) {
                 return units
             }
+            if upper.hasSuffix("/JPY") || (upper.hasSuffix("JPY") && !upper.hasPrefix("USD")) {
+                return (units * price) / 150.0
+            }
             return units * price
         case .metals:
             let ounces = quantity * max(contractSpec.contractSize, 1.0)
@@ -428,6 +431,9 @@ public enum DemoWalletEngine {
             if upper.hasPrefix("USD/") || (upper.hasPrefix("USD") && !upper.hasSuffix("USD")) {
                 return (units * signedDelta) / max(markPrice, 1e-9)
             }
+            if upper.hasSuffix("/JPY") || (upper.hasSuffix("JPY") && !upper.hasPrefix("USD")) {
+                return (units * signedDelta) / 150.0
+            }
             return units * signedDelta
         case .metals:
             let ounces = position.quantity * max(spec.contractSize, 1.0)
@@ -445,10 +451,13 @@ public enum DemoWalletEngine {
 
     public static func rMultiple(for position: DemoPosition, markPrice: Double) -> Double {
         let entry = position.filledPrice ?? position.entryPrice
+        guard entry.isFinite, entry > 0, markPrice.isFinite, markPrice > 0 else { return 0 }
         let riskDist = abs(entry - position.initialStopLoss)
-        guard riskDist > 1e-12 else { return 0 }
+        let minRisk = max(Double.leastNormalMagnitude, entry * 1e-12)
+        guard riskDist.isFinite, riskDist > minRisk else { return 0 }
         let signedDelta = (position.direction == .long) ? (markPrice - entry) : (entry - markPrice)
-        return signedDelta / riskDist
+        let r = signedDelta / riskDist
+        return r.isFinite ? r : 0
     }
 
     public static func returnPercentOnMargin(for position: DemoPosition, markPrice: Double) -> Double {
@@ -558,7 +567,14 @@ public enum DemoWalletEngine {
             return .failure(err)
         }
 
-        guard wallet.freeMarginUSD > 1e-6 else {
+        guard request.riskPercent.isFinite, request.riskPercent > 0 else {
+            return .failure(.invalidPrices("Risk percent must be a positive finite number."))
+        }
+        guard request.entryLow.isFinite, request.entryLow > 0,
+              request.entryHigh.isFinite, request.entryHigh > 0 else {
+            return .failure(.invalidPrices("Entry zone bounds must be positive finite numbers."))
+        }
+        guard wallet.freeMarginUSD.isFinite, wallet.freeMarginUSD > 1e-6 else {
             return .failure(.insufficientFreeMargin)
         }
 
@@ -566,7 +582,8 @@ public enum DemoWalletEngine {
             for: request.symbol,
             marketClass: request.marketClass
         )
-        let leverage = max(1.0, request.leverage ?? DemoMarginSpec.defaultLeverage(for: request.marketClass))
+        let rawLeverage = request.leverage ?? DemoMarginSpec.defaultLeverage(for: request.marketClass)
+        let leverage = max(1.0, rawLeverage.isFinite ? rawLeverage : DemoMarginSpec.defaultLeverage(for: request.marketClass))
 
         let sizeInput = PositionSizeInput(
             symbol: request.symbol,
@@ -574,7 +591,7 @@ public enum DemoWalletEngine {
             entryPrice: effectiveEntry,
             stopLossPrice: request.stopLoss,
             tp1Price: request.target1,
-            accountBalance: max(wallet.cashBalanceUSD, 1.0),
+            accountBalance: max(wallet.cashBalanceUSD.isFinite ? wallet.cashBalanceUSD : 0.0, 1.0),
             riskPercent: max(0.1, min(request.riskPercent, 25.0)),
             accountCurrency: .usd,
             usdToAccountRate: 1.0,
@@ -729,8 +746,12 @@ public enum DemoWalletEngine {
             return (updated, pos, true)
         }
 
-        // Open position: strictly skip target checks if still evaluating the fill bar
+        // Open position: on the partial fill bar itself, skip closed-bar wick checks for Market orders
+        // entered mid-bar (a wick prior to entry must not stop out a later fill; live ticks handle intra-bar stops).
         if let fillBarOpen = pos.fillBarOpenEpochSeconds, bar.openTimeEpochSeconds <= fillBarOpen {
+            if pos.orderType == .market {
+                return (wallet, pos, false)
+            }
             let slHit = (pos.direction == .long) ? (bar.low <= pos.stopLoss) : (bar.high >= pos.stopLoss)
             if slHit {
                 let (w2, closed) = settleClose(
@@ -801,6 +822,12 @@ public enum DemoWalletEngine {
         var updated = wallet
         var pos = updated.positions[idx]
         guard pos.status.isActive else { return (wallet, pos, false) }
+        guard tickEpochSeconds.isFinite, tickEpochSeconds >= pos.createdAtEpochSeconds else {
+            return (wallet, pos, false)
+        }
+        if pos.status == .open, let filledAt = pos.filledAtEpochSeconds, tickEpochSeconds < filledAt {
+            return (wallet, pos, false)
+        }
 
         if pos.status == .pendingLimit {
             if let expiry = pos.limitExpiryEpochSeconds, tickEpochSeconds >= expiry {
@@ -1067,9 +1094,10 @@ public enum DemoWalletEngine {
         pos.feesPaidUSD = feeUSD
         pos.rMultiple = riskUSD > 1e-9 ? (netPnL / riskUSD) : rMultiple(for: pos, markPrice: exitPrice)
 
+        let safeNetPnL = netPnL.isFinite ? netPnL : 0.0
         updated.reservedMarginUSD = max(0.0, updated.reservedMarginUSD - pos.marginReservedUSD)
-        updated.cashBalanceUSD = preCloseCash + netPnL
-        updated.realizedPnLUSD += netPnL
+        updated.cashBalanceUSD = max(0.0, preCloseCash + safeNetPnL)
+        updated.realizedPnLUSD += safeNetPnL
         updated.totalFeesPaidUSD += feeUSD
         updated.positions[positionIndex] = pos
 
