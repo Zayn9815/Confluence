@@ -51,14 +51,19 @@ public enum PositioningAnalyzer {
         }
 
         // Funding crowding percentile over causal history
-        let causalFunding = snapshot.fundingHistory
+        let causalFundingPoints = snapshot.fundingHistory
             .filter { $0.fundingTimeEpochSeconds <= cutoff }
-            .map { $0.realizedRate ?? $0.fundingRate }
-        let currentFunding = snapshot.currentFundingRate
+            .sorted { $0.fundingTimeEpochSeconds < $1.fundingTimeEpochSeconds }
+        let causalFunding = causalFundingPoints.map { $0.realizedRate ?? $0.fundingRate }
+        let isHistoricalEval = (endIndex != nil && lastIdx < candles.count - 1) || cutoff < snapshot.fetchedAtEpochSeconds
+        let currentFunding: Double = if isHistoricalEval, let latestCausal = causalFundingPoints.last {
+            latestCausal.realizedRate ?? latestCausal.fundingRate
+        } else {
+            snapshot.currentFundingRate
+        }
         let fundingPercentile: Double?
         if causalFunding.count >= 10 {
-            let belowOrEqual = causalFunding.filter { $0 <= currentFunding }.count
-            fundingPercentile = (Double(belowOrEqual) / Double(causalFunding.count)) * 100.0
+            fundingPercentile = percentileRank(value: currentFunding, history: causalFunding)
         } else {
             fundingPercentile = nil
         }
@@ -89,8 +94,8 @@ public enum PositioningAnalyzer {
         }
 
         // Overcrowded funding override (extreme positive funding = overcrowded retail longs -> contrarian risk)
-        let extremePositiveFunding = currentFunding >= 0.0005 || (fundingPercentile ?? 50.0) >= 90.0
-        let extremeNegativeFunding = currentFunding <= -0.0003 || (fundingPercentile ?? 50.0) <= 10.0
+        let extremePositiveFunding = currentFunding >= 0.0005 || (currentFunding > 0 && (fundingPercentile ?? 50.0) >= 90.0)
+        let extremeNegativeFunding = currentFunding <= -0.0003 || (currentFunding < 0 && (fundingPercentile ?? 50.0) <= 10.0)
 
         if extremePositiveFunding {
             badges.append("Overcrowded Retail Longs")
@@ -137,13 +142,24 @@ public enum PositioningAnalyzer {
         let instPct = percentileRank(value: latest.institutionalNetPercentOI, history: instValues)
         let retailPct = percentileRank(value: latest.nonReportableNetPercentOI, history: retailValues)
 
+        let hasEnoughHistory = window.count >= 4
         let proDir: TradeDirection
-        if instPct >= 62.0 || (latest.institutionalNet > 0 && instPct >= 52.0) {
-            proDir = .long
-        } else if instPct <= 38.0 || (latest.institutionalNet < 0 && instPct <= 48.0) {
-            proDir = .short
+        if hasEnoughHistory {
+            if instPct >= 62.0 || (latest.institutionalNet > 0 && instPct >= 52.0) {
+                proDir = .long
+            } else if instPct <= 38.0 || (latest.institutionalNet < 0 && instPct <= 48.0) {
+                proDir = .short
+            } else {
+                proDir = .neutral
+            }
         } else {
-            proDir = .neutral
+            if latest.institutionalNet > 0 {
+                proDir = .long
+            } else if latest.institutionalNet < 0 {
+                proDir = .short
+            } else {
+                proDir = .neutral
+            }
         }
 
         let retailDir: TradeDirection
@@ -181,7 +197,8 @@ public enum PositioningAnalyzer {
 
     private static func percentileRank(value: Double, history: [Double]) -> Double {
         guard !history.isEmpty else { return 50.0 }
-        let count = history.filter { $0 <= value }.count
-        return (Double(count) / Double(history.count)) * 100.0
+        let below = history.filter { $0 < value }.count
+        let equal = history.filter { $0 == value }.count
+        return ((Double(below) + 0.5 * Double(equal)) / Double(history.count)) * 100.0
     }
 }

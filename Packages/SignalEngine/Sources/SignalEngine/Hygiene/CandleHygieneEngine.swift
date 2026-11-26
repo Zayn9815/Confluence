@@ -148,7 +148,14 @@ public enum CandleHygieneEngine {
         let lastClose = sorted.last?.closeTimeEpochSeconds
         let staleThreshold = max(timeframe.seconds * 2.5, 3_600)
         let age = lastClose.map { serverNowEpochSeconds - $0 } ?? .infinity
-        let isStale = isOpenNow && age > staleThreshold
+        let wasOpenAtThresholdStart: Bool = {
+            let probeEpoch = serverNowEpochSeconds - staleThreshold
+            if let resolvedAsset {
+                return SessionCalendar.isMarketOpen(asset: resolvedAsset, at: probeEpoch)
+            }
+            return SessionCalendar.isMarketOpen(marketClass: marketClass, at: probeEpoch)
+        }()
+        let isStale = isOpenNow && wasOpenAtThresholdStart && age > staleThreshold
 
         var rejection: HygieneRejectionReason? = nil
         if abs(clockSkewSeconds) > maxAllowedClockSkewSeconds {
@@ -191,9 +198,12 @@ public enum CandleHygieneEngine {
         serverNowEpochSeconds: TimeInterval
     ) -> [Candle] {
         let bucketSeconds: TimeInterval = Timeframe.h4.seconds
-        var buckets: [TimeInterval: [Candle]] = [:]
-
+        var dedupedByOpen: [TimeInterval: Candle] = [:]
         for bar in hourlyCandles where bar.isClosed && bar.closeTimeEpochSeconds <= serverNowEpochSeconds {
+            dedupedByOpen[bar.openTimeEpochSeconds] = bar
+        }
+        var buckets: [TimeInterval: [Candle]] = [:]
+        for bar in dedupedByOpen.values {
             let bucketStart = floor(bar.openTimeEpochSeconds / bucketSeconds) * bucketSeconds
             buckets[bucketStart, default: []].append(bar)
         }

@@ -111,13 +111,15 @@ public enum HeadlineSentimentClassifier {
         var score = 0.0
         var matched: [String] = []
 
-        for (term, weight) in bullishTerms where containsWholeTerm(normalized, term: term) {
-            score += weight
-            matched.append(term)
-        }
-        for (term, weight) in bearishTerms where containsWholeTerm(normalized, term: term) {
-            score += weight
-            matched.append(term)
+        let combinedTerms = (bullishTerms + bearishTerms).sorted { $0.0.count > $1.0.count }
+        var working = normalized
+        for (term, weight) in combinedTerms {
+            let needle = " \(term) "
+            if working.contains(needle) {
+                score += weight
+                matched.append(term)
+                working = working.replacingOccurrences(of: needle, with: " ")
+            }
         }
 
         let hasVolatile = volatileTerms.contains { containsWholeTerm(normalized, term: $0) }
@@ -178,7 +180,7 @@ public enum HeadlineSentimentClassifier {
     ) -> NewsCatalystAssessment? {
         let relevant = breakingNews.filter { item in
             let age = nowEpochSeconds - item.publishedEpochSeconds
-            guard age >= -300 && age <= maxAgeSeconds else { return false }
+            guard age >= 0 && age <= maxAgeSeconds else { return false }
             return item.affectedAssets.contains { $0.caseInsensitiveCompare(asset.symbol) == .orderedSame }
         }
 
@@ -195,7 +197,7 @@ public enum HeadlineSentimentClassifier {
 
         // Optional contrarian sentiment nudge for Crypto extremes only
         var fearGreedNote: String? = nil
-        if asset.marketClass == .crypto, let fg = fearGreed {
+        if asset.marketClass == .crypto, let fg = fearGreed, fg.updatedEpochSeconds <= nowEpochSeconds {
             if fg.value <= 20 {
                 weightedScore += 0.35
                 fearGreedNote = "Fear & Greed \(fg.value) (\(fg.classification))"

@@ -9,8 +9,9 @@ public enum MacroSurpriseEngine {
         whipsawWindowMinutes: Int = 5
     ) -> MacroSurpriseResult? {
         guard event.supportsActualRelease,
-              let actual = event.actual,
-              let forecast = event.forecast
+              event.scheduledEpochSeconds <= nowEpochSeconds,
+              let actual = event.actual, actual.isFinite,
+              let forecast = event.forecast, forecast.isFinite
         else {
             return nil
         }
@@ -124,8 +125,9 @@ public enum MacroSurpriseEngine {
                     return "\(imp.assetLabel) \(arrow)"
                 }
                 let leadName = group.max(by: {
-                    MacroPolarityTable.clusterWeight(for: $0.event.canonicalIndicator) <
-                    MacroPolarityTable.clusterWeight(for: $1.event.canonicalIndicator)
+                    let lhs = $0.event.canonicalIndicator ?? MacroPolarityTable.canonicalIndicator(for: $0.event.name)
+                    let rhs = $1.event.canonicalIndicator ?? MacroPolarityTable.canonicalIndicator(for: $1.event.name)
+                    return MacroPolarityTable.clusterWeight(for: lhs) < MacroPolarityTable.clusterWeight(for: rhs)
                 })?.event.name ?? first.event.name
                 let adj = netStance == .hawkish ? "Hawkish" : (netStance == .dovish ? "Dovish" : "In-Line")
                 strip = "\(adj) \(leadName) -> \(arrowParts.joined(separator: " · "))"

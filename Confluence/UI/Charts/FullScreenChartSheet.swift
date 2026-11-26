@@ -745,8 +745,8 @@ public struct FullScreenChartSheet: View {
 
     private func activePositionActionBar(pos: DemoPosition, precision prec: ChartPricePrecision) -> some View {
         let mark = activeQuote?.price ?? session.closedCandles.last?.close ?? pos.entryPrice
-        let pnl = DemoWalletEngine.pnlUSD(for: pos, markPrice: mark)
-        let rMult = DemoWalletEngine.rMultiple(for: pos, markPrice: mark)
+        let pnl = pos.status == .open ? DemoWalletEngine.pnlUSD(for: pos, markPrice: mark) : 0.0
+        let rMult = pos.status == .open ? DemoWalletEngine.rMultiple(for: pos, markPrice: mark) : 0.0
         let pnlColor = pnl >= 0 ? palette.longEmerald : palette.shortCrimson
 
         return HStack(spacing: 8) {
@@ -754,7 +754,7 @@ public struct FullScreenChartSheet: View {
                 Text("Demo \(pos.direction.rawValue.uppercased()) · \(pos.status == .open ? "OPEN" : "LIMIT")")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(palette.champagneGold)
-                Text("\(pnl >= 0 ? "+" : "")$\(String(format: "%.2f", pnl)) (\(String(format: "%+.2fR", rMult)))")
+                Text("\(pnl >= 0 ? "+" : "-")$\(String(format: "%.2f", abs(pnl))) (\(String(format: "%+.2fR", rMult)))")
                     .font(.caption.weight(.bold).monospacedDigit())
                     .foregroundStyle(pnlColor)
             }
@@ -1065,7 +1065,7 @@ private struct QuickChartTradeSheet: View {
                             HStack {
                                 Text("Live price")
                                 Spacer()
-                                Text("\(String(format: "%.5g", q.price)) · \(q.statusBadgeText())")
+                                Text("\(ChartPricePrecision.resolve(symbol: symbol, marketClass: marketClass, referencePrice: q.price).format(q.price)) · \(q.statusBadgeText())")
                                     .monospacedDigit()
                             }
                         }

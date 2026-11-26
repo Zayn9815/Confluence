@@ -107,8 +107,8 @@ public enum TrapLifecycleEngine {
 
             // 2a. Post-News Whipsaw Trap (bar spans within 15m of a macro release and reverses sharply)
             let matchingMacro = recentNewsImpulses.first { imp in
-                abs(bar.openTimeEpochSeconds - imp.clusterEpochSeconds) <= 900 ||
-                (imp.clusterEpochSeconds >= bar.openTimeEpochSeconds && imp.clusterEpochSeconds <= bar.closeTimeEpochSeconds)
+                imp.clusterEpochSeconds <= bar.closeTimeEpochSeconds &&
+                (bar.openTimeEpochSeconds - imp.clusterEpochSeconds) <= 900
             }
             if detectNews, let macro = matchingMacro, bar.rangeSize >= atr * 1.4 {
                 if wickRatioUpper >= 0.45 && bar.close < bar.open {
@@ -156,7 +156,7 @@ public enum TrapLifecycleEngine {
 
             // 2b. Osler Psychological Round-Number Stop-Cluster Sweep
             if detectOsler, roundNumberStep > 0 {
-                let nearestUpperRound = floor(bar.high / roundNumberStep) * roundNumberStep
+                let nearestUpperRound = floor((bar.high - atr * 0.15) / roundNumberStep) * roundNumberStep
                 if nearestUpperRound > 0 &&
                     bar.high > nearestUpperRound &&
                     bar.close < nearestUpperRound &&
@@ -183,7 +183,7 @@ public enum TrapLifecycleEngine {
                     continue
                 }
 
-                let nearestLowerRound = ceil(bar.low / roundNumberStep) * roundNumberStep
+                let nearestLowerRound = ceil((bar.low + atr * 0.15) / roundNumberStep) * roundNumberStep
                 if nearestLowerRound > 0 &&
                     bar.low < nearestLowerRound &&
                     bar.close > nearestLowerRound &&

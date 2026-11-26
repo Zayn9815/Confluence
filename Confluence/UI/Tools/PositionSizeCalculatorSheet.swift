@@ -49,9 +49,21 @@ public struct PositionSizeCalculatorSheet: View {
               let riskPct = Double(riskPercentText),
               let entry = Double(entryText),
               let stop = Double(stopText) else { return nil }
-        let rate = (accountCurrency == .usd) ? 1.0 : (Double(conversionRateText) ?? 1.0)
-        let cSize = Double(contractSizeText) ?? InstrumentContractSpec.defaultSpec(for: signal.symbol, marketClass: signal.marketClass).contractSize
-        let pVal = Double(pointValueText) ?? 1.0
+        let rate: Double
+        if accountCurrency == .usd {
+            rate = 1.0
+        } else {
+            guard let parsedRate = Double(conversionRateText), parsedRate.isFinite, parsedRate > 0 else { return nil }
+            rate = parsedRate
+        }
+        guard let cSize = Double(contractSizeText), cSize.isFinite, cSize > 0 else { return nil }
+        let pVal: Double
+        if signal.marketClass == .indices {
+            guard let parsedPV = Double(pointValueText), parsedPV.isFinite, parsedPV > 0 else { return nil }
+            pVal = parsedPV
+        } else {
+            pVal = 1.0
+        }
         let input = PositionSizeInput(
             symbol: signal.symbol,
             marketClass: signal.marketClass,

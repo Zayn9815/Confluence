@@ -794,20 +794,19 @@ public enum PassiveOutcomeEvaluator {
             }
         }
 
-        if hitTP1 {
-            let netPct = lv.reward1Percent - costPct
-            return makeRecord(
-                status: .hitTP1,
-                lifecycle: .resolved,
-                netReturnPercent: netPct,
-                rMultiple: lv.riskRewardRatio - costR,
-                filledAt: filledAt,
-                resolvedAt: tp1Time
-            )
-        }
-
         if isFilled {
             if futureBars.count >= maxLookforwardBars {
+                if hitTP1 {
+                    let netPct = lv.reward1Percent - costPct
+                    return makeRecord(
+                        status: .hitTP1,
+                        lifecycle: .resolved,
+                        netReturnPercent: netPct,
+                        rMultiple: lv.riskRewardRatio - costR,
+                        filledAt: filledAt,
+                        resolvedAt: tp1Time
+                    )
+                }
                 return makeRecord(
                     status: .expired,
                     lifecycle: .resolved,
@@ -927,7 +926,7 @@ public enum PassiveOutcomeEvaluator {
 
         let winRate = counted.isEmpty ? 0.0 : Double(wins) / Double(counted.count)
         let winRateCI = WilsonInterval.compute(wins: wins, total: counted.count)
-        let expectancyR = allResolved.isEmpty ? 0.0 : allResolved.reduce(0.0) { $0 + $1.rMultiple } / Double(allResolved.count)
+        let expectancyR = counted.isEmpty ? 0.0 : counted.reduce(0.0) { $0 + $1.rMultiple } / Double(counted.count)
 
         let brier: Double
         if counted.isEmpty {

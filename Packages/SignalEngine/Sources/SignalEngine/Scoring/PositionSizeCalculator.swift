@@ -64,6 +64,7 @@ public struct PositionSizeInput: Codable, Sendable, Equatable {
     public let accountCurrency: AccountCurrency
     /// Manual conversion rate: `1 USD = usdToAccountRate <AccountCurrency>` (always `1.0` when `accountCurrency == .usd`).
     public let usdToAccountRate: Double
+    public let quoteToUSDRate: Double?
     public let contractSpec: InstrumentContractSpec
 
     public init(
@@ -76,6 +77,7 @@ public struct PositionSizeInput: Codable, Sendable, Equatable {
         riskPercent: Double,
         accountCurrency: AccountCurrency = .usd,
         usdToAccountRate: Double = 1.0,
+        quoteToUSDRate: Double? = nil,
         contractSpec: InstrumentContractSpec? = nil
     ) {
         self.symbol = symbol
@@ -87,6 +89,7 @@ public struct PositionSizeInput: Codable, Sendable, Equatable {
         self.riskPercent = riskPercent
         self.accountCurrency = accountCurrency
         self.usdToAccountRate = usdToAccountRate
+        self.quoteToUSDRate = quoteToUSDRate
         self.contractSpec = contractSpec ?? InstrumentContractSpec.defaultSpec(for: symbol, marketClass: marketClass)
     }
 }
@@ -143,20 +146,22 @@ public enum PositionSizeCalculator {
         guard input.accountBalance.isFinite, input.accountBalance > 0,
               input.riskPercent.isFinite, input.riskPercent > 0,
               input.entryPrice.isFinite, input.entryPrice > 0,
-              input.stopLossPrice.isFinite, input.stopLossPrice > 0
+              input.stopLossPrice.isFinite, input.stopLossPrice > 0,
+              input.contractSpec.contractSize.isFinite, input.contractSpec.contractSize > 0,
+              input.contractSpec.pointValue.isFinite, input.contractSpec.pointValue > 0,
+              (input.accountCurrency == .usd || (input.usdToAccountRate.isFinite && input.usdToAccountRate > 0))
         else { return nil }
 
         let stopDist = abs(input.entryPrice - input.stopLossPrice)
         guard stopDist > 1e-12 else { return nil }
 
         let riskAccount = input.accountBalance * (input.riskPercent / 100.0)
-        let fxRate: Double = (input.accountCurrency == .usd)
-            ? 1.0
-            : max(input.usdToAccountRate.isFinite ? input.usdToAccountRate : 1.0, 1e-6)
+        let fxRate: Double = (input.accountCurrency == .usd) ? 1.0 : input.usdToAccountRate
         let riskUSD = riskAccount / fxRate
 
+        let isLong = input.entryPrice > input.stopLossPrice
         let reward1Account: Double? = input.tp1Price.flatMap { tp1 in
-            guard tp1.isFinite, tp1 > 0 else { return nil }
+            guard tp1.isFinite, tp1 > 0, isLong ? (tp1 > input.entryPrice) : (tp1 < input.entryPrice) else { return nil }
             let rr = abs(tp1 - input.entryPrice) / stopDist
             return riskAccount * rr
         }
@@ -178,12 +183,23 @@ public enum PositionSizeCalculator {
                 pipValueUSD = (lotUnits * pipSize) / input.entryPrice
                 note = "Base USD (\(String(format: "$%.2f", pipValueUSD))/pip per lot @ entry)"
             } else {
-                pipValueUSD = lotUnits * pipSize
+                let quoteToUSD = input.quoteToUSDRate.flatMap { ($0.isFinite && $0 > 0) ? $0 : nil }
+                    ?? (upper.contains("JPY") ? (1.0 / 150.0) : 1.0)
+                pipValueUSD = (lotUnits * pipSize) * quoteToUSD
                 note = "Cross pair approx. (\(String(format: "$%.2f", pipValueUSD))/pip per lot — verify quote/USD)"
             }
             let lots = riskUSD / max(stopPips * pipValueUSD, 1e-12)
             let units = lots * lotUnits
-            let notionalUSD = upper.hasPrefix("USD") ? units : units * input.entryPrice
+            let notionalUSD: Double
+            if upper.hasPrefix("USD") {
+                notionalUSD = units
+            } else if upper.hasSuffix("/USD") || (upper.hasSuffix("USD") && !upper.hasPrefix("USD")) {
+                notionalUSD = units * input.entryPrice
+            } else {
+                let quoteToUSD = input.quoteToUSDRate.flatMap { ($0.isFinite && $0 > 0) ? $0 : nil }
+                    ?? (upper.contains("JPY") ? (1.0 / 150.0) : 1.0)
+                notionalUSD = units * input.entryPrice * quoteToUSD
+            }
             return PositionSizeResult(
                 riskAmountAccount: riskAccount,
                 riskAmountUSD: riskUSD,

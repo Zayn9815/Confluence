@@ -279,6 +279,45 @@ public final class ConfluenceDataStore {
         context.insert(entry)
     }
 
+    public func upsertTradeLedgerSnapshot(_ snapshot: TradeLedgerSnapshot) {
+        let fp = snapshot.fingerprint
+        let desc = FetchDescriptor<TradeLedgerEntry>(
+            predicate: #Predicate { $0.fingerprint == fp }
+        )
+        let stratData = (try? JSONEncoder().encode(snapshot.alignedStrategyIDs)) ?? Data()
+        if let existing = try? context.fetch(desc).first {
+            existing.statusRaw = snapshot.status.rawValue
+            existing.netRMultiple = snapshot.netRMultiple
+            existing.exitedAt = snapshot.exitedAt
+            try? context.save()
+            return
+        }
+        let entry = TradeLedgerEntry(
+            fingerprint: fp,
+            symbol: snapshot.symbol,
+            marketRaw: snapshot.marketClass.rawValue,
+            timeframeRaw: snapshot.timeframe.rawValue,
+            directionRaw: snapshot.direction.rawValue,
+            entryLow: snapshot.entryLow,
+            entryHigh: snapshot.entryHigh,
+            entryMid: snapshot.entryMid,
+            stopLoss: snapshot.stopLoss,
+            tp1: snapshot.tp1,
+            tp2: snapshot.tp2,
+            confidencePercent: snapshot.confidencePercent,
+            regimeRaw: snapshot.regime.rawValue,
+            killzoneRaw: snapshot.killzone.rawValue,
+            dataProvider: snapshot.dataProvider,
+            alignedStrategyIDsJSON: stratData,
+            statusRaw: snapshot.status.rawValue,
+            netRMultiple: snapshot.netRMultiple,
+            createdAt: snapshot.createdAt
+        )
+        entry.exitedAt = snapshot.exitedAt
+        context.insert(entry)
+        try? context.save()
+    }
+
     public func fetchSignals(limit: Int = 200) -> [TradeSignal] {
         var descriptor = FetchDescriptor<PersistedSignalRecord>(
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]

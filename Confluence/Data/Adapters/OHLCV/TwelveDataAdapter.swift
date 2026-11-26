@@ -260,17 +260,18 @@ public actor TwelveDataAdapter {
         if decoded.status?.lowercased() == "error" || decoded.values == nil {
             let msg = decoded.message ?? "Twelve Data returned no values"
             let code = decoded.code ?? 0
+            let lowerMsg = msg.lowercased()
             if code == 401 {
                 throw TwelveDataError.invalidAPIKey(msg)
             }
-            if code == 403 || msg.lowercased().contains("grow") || msg.lowercased().contains("pro") || msg.lowercased().contains("plan") {
-                throw TwelveDataError.planRestrictedSymbol(querySymbol, msg)
-            }
-            if code == 429 || msg.lowercased().contains("credits") {
+            if code == 429 || lowerMsg.contains("credits") || lowerMsg.contains("rate limit") {
                 throw TwelveDataError.apiRateLimited(msg)
             }
             if code == 404 {
                 throw TwelveDataError.symbolNotFound(querySymbol)
+            }
+            if code == 403 || lowerMsg.contains("available starting with") || lowerMsg.contains("grow plan") || lowerMsg.contains("pro plan") {
+                throw TwelveDataError.planRestrictedSymbol(querySymbol, msg)
             }
             throw NetworkAdapterError.decodingFailed(msg)
         }

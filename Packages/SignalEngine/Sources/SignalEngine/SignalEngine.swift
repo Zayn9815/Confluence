@@ -93,7 +93,8 @@ public enum SignalEngine {
         var positioning: PositioningAssessment? = nil
         if let okx = okxDerivatives, config.enabledStrategies.contains(.positioningOkx) {
             positioning = PositioningAnalyzer.analyzeOKX(snapshot: okx, candles: entrySeries.candles)
-        } else if okxDerivatives == nil, !cftcCOTRecords.isEmpty, config.enabledStrategies.contains(.positioningCot) {
+        }
+        if positioning == nil, !cftcCOTRecords.isEmpty, config.enabledStrategies.contains(.positioningCot) {
             positioning = PositioningAnalyzer.analyzeCFTCCOT(records: cftcCOTRecords, asOfEpochSeconds: serverNowEpochSeconds)
         }
 

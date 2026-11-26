@@ -269,9 +269,13 @@ public actor LivePriceEngine {
         await yahooStream.disconnect()
     }
 
+    private var streamGeneration: UInt64 = 0
+
     private func restartStreamsIfActive() async {
+        streamGeneration &+= 1
+        let myGen = streamGeneration
         await stopAllConnections()
-        guard isForegroundActive, !activeSymbols.isEmpty else { return }
+        guard myGen == streamGeneration, isForegroundActive, !activeSymbols.isEmpty else { return }
 
         let descriptors = activeSymbols.compactMap { WatchlistDefaults.descriptor(for: $0) }
         let cryptoAssets = descriptors.filter { $0.marketClass == .crypto }
@@ -292,6 +296,7 @@ public actor LivePriceEngine {
             switch tradFiMode {
             case .autoStreamWithBackup:
                 await startYahooStream(assets: tradFiAssets, allowPollBackup: true)
+                guard myGen == streamGeneration, isForegroundActive else { return }
                 startTradFiPolling(assets: tradFiAssets, backupOnly: true)
             case .liveStreamOnly:
                 await startYahooStream(assets: tradFiAssets, allowPollBackup: false)
@@ -318,6 +323,7 @@ public actor LivePriceEngine {
             }
         )
 
+        binanceWSTask?.cancel()
         binanceWSTask = Task { [weak self] in
             var backoff: Double = 2.0
             while !Task.isCancelled {

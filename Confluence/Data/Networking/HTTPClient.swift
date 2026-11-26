@@ -107,11 +107,27 @@ public actor URLSessionHTTPClient: HTTPTransport {
                     serverDate: serverDate,
                     latencyMs: latencyMs
                 )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let urlErr as URLError where urlErr.code == .cancelled {
+                throw urlErr
+            } catch let netErr as NetworkAdapterError {
+                if case .httpStatus(let code, _) = netErr, (400..<500).contains(code), code != 408, code != 429 {
+                    throw netErr
+                }
+                lastError = netErr
+                if attempt < maxRetries {
+                    let backoff = min(pow(2.0, Double(attempt)) * 0.6, 5.0)
+                    try await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                    attempt += 1
+                    continue
+                }
+                throw lastError
             } catch {
                 lastError = error
                 if attempt < maxRetries {
                     let backoff = min(pow(2.0, Double(attempt)) * 0.6, 5.0)
-                    try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                    try await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
                     attempt += 1
                     continue
                 }
@@ -144,27 +160,30 @@ public actor ProviderRatePacer {
     }
 
     public func acquireSlot() async throws {
-        let now = Date()
-        if let dailyLimit = maxPerUTCDay {
-            let count = currentDailyCount(for: now)
-            if count >= dailyLimit {
-                throw NetworkAdapterError.dailyLimitReached(providerKey)
+        while true {
+            let now = Date()
+            if let dailyLimit = maxPerUTCDay {
+                let count = currentDailyCount(for: now)
+                if count >= dailyLimit {
+                    throw NetworkAdapterError.dailyLimitReached(providerKey)
+                }
             }
-        }
 
-        minuteTimestamps.removeAll { now.timeIntervalSince($0) >= 60.0 }
-        if minuteTimestamps.count >= maxPerMinute, let oldest = minuteTimestamps.first {
-            let waitSec = max(0.2, 60.5 - now.timeIntervalSince(oldest))
-            if waitSec > 10.0 {
-                throw NetworkAdapterError.rateLimited(retryAfterSeconds: waitSec)
+            minuteTimestamps.removeAll { now.timeIntervalSince($0) >= 60.0 }
+            if minuteTimestamps.count >= maxPerMinute, let oldest = minuteTimestamps.first {
+                let waitSec = max(0.2, 60.5 - now.timeIntervalSince(oldest))
+                if waitSec > 10.0 {
+                    throw NetworkAdapterError.rateLimited(retryAfterSeconds: waitSec)
+                }
+                try await Task.sleep(nanoseconds: UInt64(waitSec * 1_000_000_000))
+                continue
             }
-            try? await Task.sleep(nanoseconds: UInt64(waitSec * 1_000_000_000))
-        }
 
-        let stamp = Date()
-        minuteTimestamps.append(stamp)
-        if maxPerUTCDay != nil {
-            incrementDailyCount(for: stamp)
+            minuteTimestamps.append(now)
+            if maxPerUTCDay != nil {
+                incrementDailyCount(for: now)
+            }
+            return
         }
     }
 

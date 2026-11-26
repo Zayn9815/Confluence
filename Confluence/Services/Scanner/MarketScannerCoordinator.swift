@@ -979,7 +979,9 @@ public final class MarketScannerCoordinator {
             if let existing = existingOutcomesById[prior.fingerprint], existing.isTerminal {
                 continue
             }
-            guard let freshBars = sanitizedClosedBySymbol[prior.symbol], !freshBars.isEmpty else { continue }
+            guard prior.timeframe == entryTF,
+                  let freshBars = sanitizedClosedBySymbol[prior.symbol], !freshBars.isEmpty
+            else { continue }
             let outcome = PassiveOutcomeEvaluator.evaluate(signal: prior, subsequentClosedCandles: freshBars)
             if outcome.status != .pending {
                 store.updateOutcome(outcome)
@@ -1017,6 +1019,11 @@ public final class MarketScannerCoordinator {
             await PreNewsNotificationScheduler.shared.postDemoPositionClosedNotification(ev, settings: settings.payload)
         }
 
+        for (sym, bars) in sanitizedClosedBySymbol {
+            if let lastClose = bars.last?.close, lastClose.isFinite, lastClose > 0 {
+                livePriceService.seedReferenceClose(lastClose, for: sym)
+            }
+        }
         self.cachedClosedCandlesBySymbol = sanitizedClosedBySymbol
         self.activeTraps = scannedTraps
         self.signals = store.fetchSignals(limit: 150)

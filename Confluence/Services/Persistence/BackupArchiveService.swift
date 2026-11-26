@@ -192,6 +192,9 @@ public enum BackupArchiveService {
         for sig in archive.signals {
             dataStore.upsertSignal(sig)
         }
+        for ledger in archive.tradeLedger {
+            dataStore.upsertTradeLedgerSnapshot(ledger)
+        }
         for outcome in archive.outcomes {
             dataStore.updateOutcome(outcome)
         }

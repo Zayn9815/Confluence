@@ -220,10 +220,7 @@ public enum WinRateBreakdown {
         filter: CalibrationFilterConfig = .headlineFixed
     ) -> [StrengthBucketStat] {
         let resolved = records.filter { rec in
-            if filter.excludeLegacyImmediateFill && rec.effectiveIsLegacyImmediateFill {
-                return false
-            }
-            return filter.isCountedInWinRateDenominator(rec.status)
+            filter.matchesRecord(rec) && filter.isCountedInWinRateDenominator(rec.status)
         }
 
         return strengthBuckets.map { bucket in

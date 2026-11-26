@@ -274,7 +274,7 @@ public enum TrendMomentumDetector {
     }
 
     public static func computeRSI(closes: [Double], period: Int = 14) -> [Double] {
-        guard closes.count > period else { return [] }
+        guard period > 0, closes.count > period else { return [] }
         var avgGain = 0.0
         var avgLoss = 0.0
         for i in 1...period {
@@ -315,7 +315,7 @@ public enum TrendMomentumDetector {
     }
 
     public static func computeATR(candles: [Candle], period: Int = 14) -> [Double] {
-        guard candles.count >= period else { return [] }
+        guard period > 0, candles.count >= period else { return [] }
         var trs: [Double] = []
         trs.reserveCapacity(candles.count)
         for i in 0..<candles.count {
@@ -337,7 +337,7 @@ public enum TrendMomentumDetector {
     }
 
     public static func computeRVOL(candles: [Candle], lastIdx: Int, lookback: Int = 20) -> Double? {
-        guard lastIdx >= 5, let currentVol = candles[lastIdx].volume, currentVol > 0 else { return nil }
+        guard lookback > 0, lastIdx >= 5, lastIdx < candles.count, let currentVol = candles[lastIdx].volume, currentVol > 0 else { return nil }
         let start = max(0, lastIdx - lookback)
         let prior = candles[start..<lastIdx].compactMap(\.volume).filter { $0 > 0 }
         guard prior.count >= 5 else { return nil }

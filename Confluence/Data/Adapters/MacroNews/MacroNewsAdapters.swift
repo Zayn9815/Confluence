@@ -33,8 +33,12 @@ public actor EconomicCalendarService {
             // Fall through cleanly to disk-cached Forex Factory schedule
         }
 
+        let countrySet = Set(countries.map { $0.uppercased() })
         let fallback = await fetchForexFactoryWithStrictCooldown()
-        let filtered = fallback.filter { $0.importance >= minimumImportance }
+        let filtered = fallback.filter { ev in
+            ev.importance >= minimumImportance &&
+            (countrySet.isEmpty || countrySet.contains(ev.countryCode.uppercased()))
+        }
         return (filtered, "Forex Factory (Schedule Fallback)")
     }
 
@@ -114,12 +118,18 @@ public actor EconomicCalendarService {
         return dedup.values.sorted { $0.scheduledEpochSeconds < $1.scheduledEpochSeconds }
     }
 
+    private var lastFFAttemptDate: Date? = nil
+
     public func fetchForexFactoryWithStrictCooldown() async -> [EconomicEvent] {
         let now = Date()
-        // Enforce strict >= 60-minute refresh cooldown to never trip FF's "Request Denied" HTML block
-        if let last = lastFFFetchDate, now.timeIntervalSince(last) < 3_600.0, !cachedFFEvents.isEmpty {
-            return cachedFFEvents
+        // Enforce strict >= 60-minute refresh cooldown (including after errors) to never trip FF's "Request Denied" HTML block
+        if let lastAttempt = lastFFAttemptDate ?? lastFFFetchDate, now.timeIntervalSince(lastAttempt) < 3_600.0 {
+            if let lastSuccess = lastFFFetchDate, now.timeIntervalSince(lastSuccess) <= 86_400.0 {
+                return cachedFFEvents
+            }
+            return []
         }
+        self.lastFFAttemptDate = now
 
         do {
             let url = URL(string: "https://nfs.faireconomy.media/ff_calendar_thisweek.json")!
@@ -211,13 +221,32 @@ public actor EconomicCalendarService {
 
     private static func parseNumericString(_ raw: String?) -> Double? {
         guard let raw else { return nil }
-        let cleaned = raw.replacingOccurrences(of: "%", with: "")
-            .replacingOccurrences(of: "K", with: "")
-            .replacingOccurrences(of: "M", with: "")
-            .replacingOccurrences(of: "B", with: "")
+        let trimmed = raw
+            .replacingOccurrences(of: "%", with: "")
             .replacingOccurrences(of: ",", with: "")
-            .trimmingCharacters(in: .whitespaces)
-        return Double(cleaned)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let upper = trimmed.uppercased()
+        let multiplier: Double
+        let numericPart: String
+        if upper.hasSuffix("T") {
+            multiplier = 1_000_000_000_000.0
+            numericPart = String(trimmed.dropLast())
+        } else if upper.hasSuffix("B") {
+            multiplier = 1_000_000_000.0
+            numericPart = String(trimmed.dropLast())
+        } else if upper.hasSuffix("M") {
+            multiplier = 1_000_000.0
+            numericPart = String(trimmed.dropLast())
+        } else if upper.hasSuffix("K") {
+            multiplier = 1_000.0
+            numericPart = String(trimmed.dropLast())
+        } else {
+            multiplier = 1.0
+            numericPart = trimmed
+        }
+        guard let base = Double(numericPart.trimmingCharacters(in: .whitespaces)), base.isFinite else { return nil }
+        return base * multiplier
     }
 
     private struct FFDiskCache: Codable {
@@ -468,6 +497,15 @@ private final class SimpleRSSParser: NSObject, XMLParserDelegate {
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
         guard inItem else { return }
+        appendText(string)
+    }
+
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard inItem, let string = String(data: CDATABlock, encoding: .utf8) else { return }
+        appendText(string)
+    }
+
+    private func appendText(_ string: String) {
         switch currentElement {
         case "title": currentTitle += string
         case "link": currentLink += string
@@ -478,6 +516,7 @@ private final class SimpleRSSParser: NSObject, XMLParserDelegate {
     }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+        currentElement = ""
         if elementName.lowercased() == "item" {
             inItem = false
             let title = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)

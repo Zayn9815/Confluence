@@ -141,8 +141,16 @@ public struct ConfidenceCalibrator: Codable, Sendable, Equatable {
             let stepA = (hBB * gA - hAB * gB) / det
             let stepB = (-hAB * gA + hAA * gB) / det
 
-            let nextA = max(0.05, min(10.0, a - stepA))
-            let nextB = max(-8.0, min(8.0, b - stepB))
+            let rawNextA = a - stepA
+            let nextA = max(0.05, min(10.0, rawNextA))
+            let rawNextB: Double
+            if nextA != rawNextA {
+                let dA = nextA - a
+                rawNextB = b - (gB + hAB * dA) / max(hBB, 1e-12)
+            } else {
+                rawNextB = b - stepB
+            }
+            let nextB = max(-8.0, min(8.0, rawNextB))
 
             let delta = abs(nextA - a) + abs(nextB - b)
             a = nextA

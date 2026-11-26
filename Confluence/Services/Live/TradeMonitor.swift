@@ -81,7 +81,7 @@ public enum TradeMonitor {
 
         for posId in activeIds {
             guard let posSnapshot = current.positions.first(where: { $0.id == posId }) else { continue }
-            let relevantBars = sortedClosed.filter { $0.closeTimeEpochSeconds >= posSnapshot.createdAtEpochSeconds }
+            let relevantBars = sortedClosed.filter { $0.openTimeEpochSeconds >= posSnapshot.createdAtEpochSeconds }
             for bar in relevantBars {
                 let beforeStatus = current.positions.first(where: { $0.id == posId })?.status
                 let step = DemoWalletEngine.evaluateClosedBar(wallet: current, positionId: posId, bar: bar)

@@ -59,9 +59,9 @@ public enum TradeLevelCalculator {
 
         // Fixed % Ratio Mode (exact SL%, TP1%, and optional TP2% around entryMid)
         if mode == .fixedPercent {
-            let slFrac = max(0.05, fixedStopLossPercent) / 100.0
-            let tp1Frac = max(0.10, fixedTP1Percent) / 100.0
-            let tp2Frac = max(tp1Frac, fixedTP2Percent / 100.0)
+            let slFrac = min(max(0.05, fixedStopLossPercent), 95.0) / 100.0
+            let tp1Frac = min(max(0.10, fixedTP1Percent), 95.0) / 100.0
+            let tp2Frac = min(max(tp1Frac, fixedTP2Percent / 100.0), 0.95)
 
             let stopLoss: Double
             let tp1: Double
@@ -105,7 +105,7 @@ public enum TradeLevelCalculator {
             let recentOBLow = ict.orderBlocks.reversed().first(where: { $0.direction == .long && $0.bottom < entryMid })?.bottom
             let structuralAnchor = [recentSwingLow, recentOBLow, lastBar.low].compactMap { $0 }.max() ?? lastBar.low
             let rawSL = structuralAnchor - atrBuffer
-            stopLoss = min(rawSL, entryMid - safeATR * 0.65)
+            stopLoss = max(min(rawSL, entryMid - safeATR * 0.65), entryMid * 0.05)
         } else {
             let recentSwingHigh = ict.swings.reversed().first(where: { $0.isHigh && $0.price > entryMid })?.price
             let recentOBHigh = ict.orderBlocks.reversed().first(where: { $0.direction == .short && $0.top > entryMid })?.top
@@ -123,7 +123,7 @@ public enum TradeLevelCalculator {
         let maxTP1RR = min(max(minRR * 1.6, 3.5), 4.0)
         let maxTP2RR = min(max(minRR * 2.2, 4.5), 6.0)
         let atrTP2Multiplier: Double = (timeframe == .m15) ? 8.0 : 10.0
-        let maxTP1Dist = min(riskDistance * maxTP1RR, safeATR * (atrTP2Multiplier * 0.7))
+        let maxTP1Dist = max(minTargetDist, min(riskDistance * max(maxTP1RR, minRR), safeATR * (atrTP2Multiplier * 0.7)))
         let maxTP2Dist = max(minTargetDist * 1.25, min(riskDistance * maxTP2RR, safeATR * atrTP2Multiplier))
         let defaultTP2Dist = min(maxTP2Dist, riskDistance * max(minRR * 1.65, 3.3))
 
@@ -164,15 +164,16 @@ public enum TradeLevelCalculator {
                 .sorted(by: >)
 
             let tp1Candidate = opposingLows.first(where: { $0 <= entryMid - minTargetDist && $0 >= entryMid - maxTP1Dist })
-            tp1 = tp1Candidate ?? (entryMid - minTargetDist)
+            let shortFloor = entryMid * 0.05
+            tp1 = max(tp1Candidate ?? (entryMid - minTargetDist), shortFloor)
 
             if enableTP2Target {
-                let tp2Min = tp1 - riskDistance * 0.5
-                let tp2Max = max(entryMid - maxTP2Dist, entryMid * 0.05)
+                let tp2Min = max(tp1 - riskDistance * 0.5, shortFloor)
+                let tp2Max = max(entryMid - maxTP2Dist, shortFloor)
                 let tp2Candidate = htfLows.first(where: { $0 <= tp2Min && $0 >= tp2Max })
                     ?? opposingLows.first(where: { $0 <= tp2Min && $0 >= tp2Max })
                 let rawTP2 = tp2Candidate ?? min(tp2Min, entryMid - defaultTP2Dist)
-                tp2 = max(rawTP2, min(tp2Min, tp2Max))
+                tp2 = min(tp1, max(rawTP2, tp2Max))
             } else {
                 tp2 = tp1
             }

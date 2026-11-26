@@ -357,7 +357,11 @@ public struct SignalsTabView: View {
             ) {
                 Button("Delete \(feedFilter.rawValue)", role: .destructive) {
                     withAnimation(.easeInOut(duration: 0.2)) {
-                        coordinator.deleteSignals(in: currentSignalCategory)
+                        if selectedMarket != nil {
+                            coordinator.deleteSignals(fingerprints: Set(filteredSignals.map(\.fingerprint)))
+                        } else {
+                            coordinator.deleteSignals(in: currentSignalCategory)
+                        }
                         exitSelectionMode()
                     }
                 }

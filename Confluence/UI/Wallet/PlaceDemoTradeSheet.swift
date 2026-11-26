@@ -101,7 +101,7 @@ public struct PlaceDemoTradeSheet: View {
                             }
                         }
                         .onChange(of: selectedSymbol) { _, newSym in
-                            coordinator.livePriceService.acquire(owner: "place_demo_\(newSym)", symbols: [newSym])
+                            coordinator.livePriceService.acquire(owner: "place_demo_sheet", symbols: [newSym])
                             if let ref = coordinator.livePriceService.latest(for: newSym)?.price ?? coordinator.lastKnownPrice(for: newSym) {
                                 let mc = WatchlistDefaults.descriptor(for: newSym)?.marketClass ?? .crypto
                                 let prec = ChartPricePrecision.resolve(symbol: newSym, marketClass: mc, referencePrice: ref)
@@ -228,10 +228,10 @@ public struct PlaceDemoTradeSheet: View {
                 }
             }
             .onAppear {
-                coordinator.livePriceService.acquire(owner: "place_demo_\(selectedSymbol)", symbols: [selectedSymbol])
+                coordinator.livePriceService.acquire(owner: "place_demo_sheet", symbols: [selectedSymbol])
             }
             .onDisappear {
-                coordinator.livePriceService.release(owner: "place_demo_\(selectedSymbol)")
+                coordinator.livePriceService.release(owner: "place_demo_sheet")
             }
         }
     }

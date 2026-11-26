@@ -13,7 +13,8 @@ public enum PsychologyReportBuilder {
         rejectionReasons: [String],
         rvol: Double?,
         regime: MarketRegime,
-        newsCatalyst: NewsCatalystAssessment? = nil
+        newsCatalyst: NewsCatalystAssessment? = nil,
+        asset: AssetDescriptor? = nil
     ) -> PsychologyReport {
         var evidence: [BehavioralEvidence] = []
         var badges: [String] = []
@@ -52,8 +53,19 @@ public enum PsychologyReportBuilder {
 
         // 3. Macro Surprise & Breaking News catalyst evidence
         if let macro = macroImpulse {
-            badges.append(macro.isWhipsawCautionActive ? "News Whipsaw Risk" : "Macro Catalyst Aligned")
-            let macroPro = macro.impacts.first?.direction ?? .neutral
+            let macroPro: TradeDirection
+            if let asset {
+                macroPro = MacroPolarityTable.impactDirection(for: asset, currency: macro.currency, stance: macro.netStance)
+            } else {
+                macroPro = macro.impacts.first?.direction ?? .neutral
+            }
+            if macro.isWhipsawCautionActive {
+                badges.append("News Whipsaw Risk")
+            } else if macroPro != .neutral && macroPro == signalDirection {
+                badges.append("Macro Catalyst Aligned")
+            } else if macroPro != .neutral && signalDirection != .neutral && macroPro != signalDirection {
+                badges.append("Macro Catalyst Opposes")
+            }
             evidence.append(
                 BehavioralEvidence(
                     badge: "Macro Release",
@@ -129,7 +141,7 @@ public enum PsychologyReportBuilder {
         }
 
         if macroAligns == false && macroLabel != nil {
-            badges.append("Counter-Trend vs Macro COT")
+            badges.append(positioning?.provenance == .cftcCOT ? "Counter-Trend vs Macro COT" : "Counter-Trend vs OKX Flow")
         }
 
         // 6. Compose concrete 3-part narrative grounded purely in triggered facts

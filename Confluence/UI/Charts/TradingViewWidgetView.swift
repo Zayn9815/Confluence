@@ -90,10 +90,9 @@ public enum TradingViewSymbolMapper: Sendable {
         let bgHex = isDark ? "#0B0E14" : "#F8F7F4"
         let textHex = isDark ? "#9CA7BA" : "#5A6577"
 
-        // Escape any unexpected quotes/backslashes defensively
-        let safeSymbol = tvSymbol
-            .replacingOccurrences(of: "\\", with: "")
-            .replacingOccurrences(of: "\"", with: "")
+        // Strict symbol character whitelist to prevent HTML/JS injection inside <script>
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:_.-/")
+        let safeSymbol = String(tvSymbol.unicodeScalars.filter { allowed.contains($0) })
 
         return """
         <!DOCTYPE html>

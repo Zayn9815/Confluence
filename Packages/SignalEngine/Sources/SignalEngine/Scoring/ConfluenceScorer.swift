@@ -80,7 +80,23 @@ public enum ConfluenceScorer {
         }
 
         // Behavioral Trap contributions
-        let actionableTraps = traps.filter(\.isActionable)
+        let trapsAllowed: Bool = {
+            guard config.enabledStrategyGroups.contains(.behavioralTrap) else { return false }
+            if config.strategySelectionMode == .custom && !config.selectedStrategyConcepts.isEmpty {
+                return config.selectedStrategyConcepts.contains(.behavioralTraps)
+            }
+            return true
+        }()
+        let positioningAllowed: Bool = {
+            guard config.enabledStrategyGroups.contains(.behavioralTrap) else { return false }
+            if config.strategySelectionMode == .custom && !config.selectedStrategyConcepts.isEmpty {
+                return config.selectedStrategyConcepts.contains(.positioningFlow)
+            }
+            return true
+        }()
+        let effectiveTraps = trapsAllowed ? traps : []
+        let effectivePositioning = positioningAllowed ? positioning : nil
+        let actionableTraps = effectiveTraps.filter(\.isActionable)
         let freshTrap = actionableTraps.last(where: { candles.count - 1 - $0.triggerBarIndex <= 4 || $0.state == .returned })
         if config.enabledStrategyGroups.contains(.behavioralTrap), let trap = freshTrap {
             allContributions.append(
@@ -206,7 +222,7 @@ public enum ConfluenceScorer {
             htfBias: htfBias,
             killzone: killzone,
             regime: regimeAssessment.regime,
-            positioning: positioning,
+            positioning: effectivePositioning,
             macroAlignedDir: macroAlignedDir,
             macroImpulse: macroImpulse,
             newsCatalyst: newsCatalyst,
@@ -300,17 +316,45 @@ public enum ConfluenceScorer {
             trapDir = freshTrap?.direction
         }
 
+        let finalDirection: TradeDirection
+        let finalLevels: TradeLevels?
+        let finalAligned: [StrategyContribution]
+        if category == .trapAlert, let td = trapDir, td.institutionalDirection != dominantDirection {
+            finalDirection = td.institutionalDirection
+            finalAligned = opposing
+            finalLevels = TradeLevelCalculator.calculate(
+                direction: finalDirection,
+                candles: candles,
+                ict: ict,
+                htfICT: htfICT,
+                atr: momentum.atr14,
+                marketClass: asset.marketClass,
+                minimumRiskReward: config.minimumRiskReward,
+                mode: config.levelCalculationMode,
+                fixedStopLossPercent: config.fixedStopLossPercent,
+                fixedTP1Percent: config.fixedTP1Percent,
+                fixedTP2Percent: config.fixedTP2Percent,
+                enableTP2Target: config.enableTP2Target,
+                timeframe: timeframe
+            )
+        } else {
+            finalDirection = dominantDirection
+            finalLevels = levels
+            finalAligned = aligned
+        }
+
         let psychReport = PsychologyReportBuilder.build(
             category: category,
-            signalDirection: dominantDirection,
+            signalDirection: finalDirection,
             ict: ict,
-            traps: traps,
-            positioning: positioning,
+            traps: effectiveTraps,
+            positioning: effectivePositioning,
             macroImpulse: macroImpulse,
             rejectionReasons: rejectionReasons,
             rvol: momentum.rvol,
             regime: regimeAssessment.regime,
-            newsCatalyst: newsCatalyst
+            newsCatalyst: newsCatalyst,
+            asset: asset
         )
 
         // Chart overlay data (unmitigated FVGs, OBs, active traps, EQ, EMAs)
@@ -351,7 +395,7 @@ public enum ConfluenceScorer {
             symbol: asset.symbol,
             timeframe: timeframe,
             category: category,
-            direction: dominantDirection,
+            direction: finalDirection,
             barCloseEpochSeconds: lastBar.closeTimeEpochSeconds
         )
 
@@ -366,7 +410,7 @@ public enum ConfluenceScorer {
             timeframe: timeframe,
             htfTimeframe: htfTimeframe,
             category: category,
-            direction: dominantDirection,
+            direction: finalDirection,
             trapDirection: trapDir,
             tier: tier,
             confidencePercent: confidence,
@@ -376,8 +420,8 @@ public enum ConfluenceScorer {
             htfBias: htfBias,
             generatedAtEpochSeconds: nowEpochSeconds,
             barCloseEpochSeconds: lastBar.closeTimeEpochSeconds,
-            levels: levels,
-            alignedStrategies: aligned,
+            levels: finalLevels,
+            alignedStrategies: finalAligned,
             rejectionReasons: rejectionReasons,
             psychologyReport: psychReport,
             preNewsBadge: preNewsShield?.badgeText,
@@ -391,7 +435,7 @@ public enum ConfluenceScorer {
             marketClosedReason: marketClosedReason,
             strengthBreakdown: breakdown,
             matchedStrategyIDs: StrategyID.resolveMatched(
-                alignedStrategies: aligned,
+                alignedStrategies: finalAligned,
                 category: category,
                 trapDirection: trapDir,
                 traps: traps
@@ -459,7 +503,7 @@ public enum ConfluenceScorer {
                 notes.append("Opposing \(trap.direction.rawValue) (-10)")
             }
         }
-        if let pos = positioning, pos.proDirection != .neutral {
+        if let pos = effectivePositioning, pos.proDirection != .neutral {
             if pos.provenance == .okxFundingOI {
                 if pos.proDirection == dominantDirection {
                     psychScore += 5.0

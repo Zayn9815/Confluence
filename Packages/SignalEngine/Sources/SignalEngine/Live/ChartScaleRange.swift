@@ -50,7 +50,10 @@ public enum ChartScaleRange {
         func considerOverlay(id: String, label: String, price: Double, alwaysIncludeCore: Bool) {
             guard price.isFinite, price > 0 else { return }
             let deviation = abs(price - lastClose) / lastClose
-            if deviation <= maxOverlayDeviationFraction {
+            let effectiveLimit = alwaysIncludeCore
+                ? maxOverlayDeviationFraction * 1.5
+                : maxOverlayDeviationFraction
+            if deviation <= effectiveLimit {
                 minY = min(minY, price)
                 maxY = max(maxY, price)
             } else {
@@ -62,10 +65,6 @@ public enum ChartScaleRange {
                         deviationPercent: deviation * 100.0
                     )
                 )
-                if alwaysIncludeCore && deviation <= maxOverlayDeviationFraction * 1.5 {
-                    minY = min(minY, price)
-                    maxY = max(maxY, price)
-                }
             }
         }
 

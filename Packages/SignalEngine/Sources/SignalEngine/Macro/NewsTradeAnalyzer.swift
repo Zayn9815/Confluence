@@ -56,6 +56,8 @@ public struct NewsMarketSummary: Codable, Sendable, Equatable, Hashable {
     public let assetImpacts: [NewsAssetImpactSummary]
     public let isPreReleasePending: Bool
     public let isWhipsawGuardActive: Bool
+    public let eventCurrency: String?
+    public let macroStance: MacroStance?
 
     public init(
         title: String,
@@ -68,7 +70,9 @@ public struct NewsMarketSummary: Codable, Sendable, Equatable, Hashable {
         whyItMovesMarket: [String],
         assetImpacts: [NewsAssetImpactSummary],
         isPreReleasePending: Bool,
-        isWhipsawGuardActive: Bool
+        isWhipsawGuardActive: Bool,
+        eventCurrency: String? = nil,
+        macroStance: MacroStance? = nil
     ) {
         self.title = title
         self.source = source
@@ -81,6 +85,8 @@ public struct NewsMarketSummary: Codable, Sendable, Equatable, Hashable {
         self.assetImpacts = assetImpacts
         self.isPreReleasePending = isPreReleasePending
         self.isWhipsawGuardActive = isWhipsawGuardActive
+        self.eventCurrency = eventCurrency
+        self.macroStance = macroStance
     }
 }
 
@@ -238,7 +244,9 @@ public enum NewsTradeAnalyzer {
             whyItMovesMarket: whyBullets,
             assetImpacts: assetImpacts,
             isPreReleasePending: isPending,
-            isWhipsawGuardActive: isWhipsaw
+            isWhipsawGuardActive: isWhipsaw,
+            eventCurrency: event.currency,
+            macroStance: surprise?.currencyStance
         )
     }
 
@@ -339,7 +347,15 @@ public enum NewsTradeAnalyzer {
         serverNowEpochSeconds: TimeInterval
     ) -> NewsTradeEvaluation {
         let assetImpact = summary.assetImpacts.first { $0.symbol.caseInsensitiveCompare(asset.symbol) == .orderedSame }
-        let newsBias = assetImpact?.direction ?? summary.headlineBias
+        let newsBias: NewsDirectionBias
+        if let impact = assetImpact {
+            newsBias = impact.direction
+        } else if let ccy = summary.eventCurrency, let stance = summary.macroStance {
+            let dir = MacroPolarityTable.impactDirection(for: asset, currency: ccy, stance: stance)
+            newsBias = summary.isWhipsawGuardActive ? .twoWayWhipsaw : biasFrom(direction: dir)
+        } else {
+            newsBias = summary.headlineBias
+        }
 
         let analysis = SignalEngine.analyze(
             asset: asset,
@@ -480,12 +496,28 @@ public enum NewsTradeAnalyzer {
         asset: AssetDescriptor,
         baseBias: NewsDirectionBias
     ) -> NewsDirectionBias {
-        // Handle USD/JPY inverse rate sensitivity when headline is strictly Fed/USD hawkish/dovish
         let norm = HeadlineSentimentClassifier.normalizedTokenString("\(newsItem.title) \(newsItem.summary ?? "")")
-        let isFedRateNews = norm.contains(" rate hike ") || norm.contains(" hawkish ") || norm.contains(" rate cut ") || norm.contains(" dovish ")
-        if asset.symbol == "USD/JPY" && isFedRateNews {
-            if baseBias == .bearish { return .bullish } // Hawkish Fed = bearish risk assets, bullish USD/JPY
-            if baseBias == .bullish { return .bearish } // Dovish Fed = bullish risk assets, bearish USD/JPY
+        let isHawkish = norm.contains(" rate hike ") || norm.contains(" hawkish ")
+        let isDovish = norm.contains(" rate cut ") || norm.contains(" dovish ")
+        guard isHawkish != isDovish else { return baseBias }
+        let stance: MacroStance = isHawkish ? .hawkish : .dovish
+        let cbCurrency: String?
+        if norm.contains(" boj ") || norm.contains(" bank of japan ") || norm.contains(" yen ") {
+            cbCurrency = "JPY"
+        } else if norm.contains(" ecb ") || norm.contains(" eurozone ") || norm.contains(" lagarde ") {
+            cbCurrency = "EUR"
+        } else if norm.contains(" boe ") || norm.contains(" bank of england ") || norm.contains(" sterling ") || norm.contains(" pound ") {
+            cbCurrency = "GBP"
+        } else if norm.contains(" fed ") || norm.contains(" fomc ") || norm.contains(" powell ") || norm.contains(" usd ") || norm.contains(" us ") {
+            cbCurrency = "USD"
+        } else {
+            cbCurrency = nil
+        }
+        if let ccy = cbCurrency {
+            let dir = MacroPolarityTable.impactDirection(for: asset, currency: ccy, stance: stance)
+            if dir != .neutral {
+                return biasFrom(direction: dir)
+            }
         }
         return baseBias
     }

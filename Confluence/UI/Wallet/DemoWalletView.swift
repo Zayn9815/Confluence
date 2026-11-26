@@ -18,6 +18,7 @@ public enum LivePositionRowMetrics {
         direction: TradeDirection,
         entryPrice: Double,
         stopLoss: Double,
+        initialStopLoss: Double? = nil,
         target1: Double,
         liveQuote: LivePriceQuote?,
         fallbackPrice: Double,
@@ -26,7 +27,8 @@ public enum LivePositionRowMetrics {
         nowEpochSeconds: TimeInterval = Date().timeIntervalSince1970
     ) -> Summary {
         let mark = liveQuote?.price ?? fallbackPrice
-        let riskDist = max(abs(entryPrice - stopLoss), 1e-9)
+        let rDenomStop = initialStopLoss ?? stopLoss
+        let riskDist = max(abs(entryPrice - rDenomStop), 1e-9)
         let signedDelta = (direction == .long) ? (mark - entryPrice) : (entryPrice - mark)
         let r = signedDelta / riskDist
         let pct: Double
@@ -296,6 +298,7 @@ public struct DemoWalletView: View {
             direction: pos.direction,
             entryPrice: entry,
             stopLoss: pos.stopLoss,
+            initialStopLoss: pos.initialStopLoss,
             target1: pos.target1,
             liveQuote: quote,
             fallbackPrice: entry,
@@ -303,6 +306,8 @@ public struct DemoWalletView: View {
             marginUSD: pos.marginReservedUSD,
             nowEpochSeconds: now
         )
+        let displayR = pos.status == .open ? metrics.rMultiple : 0.0
+        let displayPct = pos.status == .open ? metrics.returnPercent : 0.0
         let prec = ChartPricePrecision.resolve(symbol: pos.symbol, marketClass: pos.marketClass, referencePrice: entry)
         let pnlColor = pnl >= 0 ? palette.longEmerald : palette.shortCrimson
 
@@ -333,10 +338,10 @@ public struct DemoWalletView: View {
             }
 
             HStack {
-                Text("\(pnl >= 0 ? "+" : "")$\(String(format: "%.2f", pnl))")
+                Text("\(pnl >= 0 ? "+" : "-")$\(String(format: "%.2f", abs(pnl)))")
                     .font(.caption.weight(.bold).monospacedDigit())
                     .foregroundStyle(pnlColor)
-                Text("(\(String(format: "%+.2fR", metrics.rMultiple)) · \(String(format: "%+.1f%%", metrics.returnPercent)))")
+                Text("(\(String(format: "%+.2fR", displayR)) · \(String(format: "%+.1f%%", displayPct)))")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(pnlColor)
                 Spacer()
@@ -446,7 +451,15 @@ public struct DemoWalletView: View {
             return
         }
         let t2Trim = t2Input.trimmingCharacters(in: .whitespaces)
-        let t2: Double? = t2Trim.isEmpty ? nil : Double(t2Trim)
+        let t2: Double?
+        if t2Trim.isEmpty {
+            t2 = nil
+        } else if let parsedT2 = Double(t2Trim) {
+            t2 = parsedT2
+        } else {
+            editError = "Target 2 must be a valid number."
+            return
+        }
         if case .failure(let err) = coordinator.updateDemoStopLoss(positionId: pos.id, newStopLoss: sl) {
             editError = err.userMessage
             return

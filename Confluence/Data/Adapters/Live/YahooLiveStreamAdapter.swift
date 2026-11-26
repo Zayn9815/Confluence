@@ -79,9 +79,9 @@ public enum YahooPricingProtobufDecoder {
 
             switch (fieldNumber, wireType) {
             case (1, 2):
-                guard let len = readVarint(), idx + Int(len) <= bytes.count else { return nil }
-                let slice = bytes[idx..<(idx + Int(len))]
-                idx += Int(len)
+                guard let rawLen = readVarint(), let len = Int(exactly: rawLen), len >= 0, len <= bytes.count - idx else { return nil }
+                let slice = bytes[idx..<(idx + len)]
+                idx += len
                 id = String(bytes: slice, encoding: .utf8)
             case (2, 5):
                 price = readFloat32()
@@ -89,8 +89,7 @@ public enum YahooPricingProtobufDecoder {
                 guard let raw = readVarint() else { return nil }
                 // Protobuf sint64 ZigZag decoding
                 let signed = Int64(bitPattern: (raw >> 1) ^ (0 &- (raw & 1)))
-                let absVal = abs(signed)
-                if absVal > 100_000_000_000 {
+                if signed.magnitude > 100_000_000_000 {
                     timeEpochSec = TimeInterval(signed) / 1000.0
                 } else {
                     timeEpochSec = TimeInterval(signed)
@@ -98,20 +97,19 @@ public enum YahooPricingProtobufDecoder {
             case (8, 5):
                 changePercent = readFloat32()
             case (12, 0):
-                if let mh = readVarint() {
-                    marketHours = Int(mh)
-                }
+                guard let mh = readVarint() else { return nil }
+                marketHours = Int(truncatingIfNeeded: Int64(bitPattern: mh))
             default:
                 // Skip unrecognized fields safely by wire type
                 switch wireType {
                 case 0:
                     guard readVarint() != nil else { return nil }
                 case 1:
-                    guard idx + 8 <= bytes.count else { return nil }
+                    guard bytes.count - idx >= 8 else { return nil }
                     idx += 8
                 case 2:
-                    guard let len = readVarint(), idx + Int(len) <= bytes.count else { return nil }
-                    idx += Int(len)
+                    guard let rawLen = readVarint(), let len = Int(exactly: rawLen), len >= 0, len <= bytes.count - idx else { return nil }
+                    idx += len
                 case 5:
                     guard idx + 4 <= bytes.count else { return nil }
                     idx += 4

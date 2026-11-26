@@ -165,7 +165,10 @@ public actor GeminiJudgeClient: AIJudgeClient {
                 ],
                 "generationConfig": genConfig
             ]
-            let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelID):generateContent")!
+            let encodedModel = modelID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? modelID
+            guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(encodedModel):generateContent") else {
+                throw NetworkAdapterError.invalidURL(modelID)
+            }
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -216,7 +219,10 @@ public actor GeminiJudgeClient: AIJudgeClient {
                 "contents": [["role": "user", "parts": [["text": prompt]]]],
                 "generationConfig": genConfig
             ]
-            let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelID):generateContent")!
+            let encodedModel = modelID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? modelID
+            guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(encodedModel):generateContent") else {
+                throw NetworkAdapterError.invalidURL(modelID)
+            }
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")

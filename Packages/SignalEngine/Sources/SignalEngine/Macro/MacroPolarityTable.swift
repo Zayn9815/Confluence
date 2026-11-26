@@ -24,7 +24,7 @@ public enum MacroPolarityTable {
         if lower.contains("unemployment rate") || lower.contains("jobless rate") {
             return .unemploymentRate
         }
-        if lower.contains("initial jobless") || lower.contains("unemployment claims") {
+        if lower.contains("initial jobless") || lower.contains("jobless claims") || lower.contains("continuing claims") || lower.contains("unemployment claims") || lower.contains("claimant count") {
             return .initialJoblessClaims
         }
         if lower.contains("interest rate") || lower.contains("fed funds") || lower.contains("rate decision") || lower.contains("fomc") || lower.contains("ecb rate") || lower.contains("boe rate") || lower.contains("boj rate") {

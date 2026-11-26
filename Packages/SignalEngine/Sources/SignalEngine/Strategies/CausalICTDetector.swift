@@ -260,7 +260,8 @@ public enum CausalICTDetector {
         var trendBias: TradeDirection = .neutral
         var activeHigh: SwingPivot?
         var activeLow: SwingPivot?
-        var brokenSwingIndices = Set<Int>()
+        var brokenHighSwingIndices = Set<Int>()
+        var brokenLowSwingIndices = Set<Int>()
         var swingCursor = 0
 
         for i in 0...lastIdx {
@@ -286,8 +287,8 @@ public enum CausalICTDetector {
                     )
                 }
                 // Check closed-candle bullish BOS / MSS
-                if bar.close > sh.price && !brokenSwingIndices.contains(sh.index) {
-                    brokenSwingIndices.insert(sh.index)
+                if bar.close > sh.price && !brokenHighSwingIndices.contains(sh.index) {
+                    brokenHighSwingIndices.insert(sh.index)
                     let kind: StructureBreakKind = (trendBias == .short) ? .mss : .bos
                     structureBreaks.append(
                         StructureBreak(kind: kind, direction: .long, brokenLevel: sh.price, breakBarIndex: i, brokenSwingIndex: sh.index)
@@ -315,8 +316,8 @@ public enum CausalICTDetector {
                     )
                 }
                 // Check closed-candle bearish BOS / MSS
-                if bar.close < sl.price && !brokenSwingIndices.contains(sl.index) {
-                    brokenSwingIndices.insert(sl.index)
+                if bar.close < sl.price && !brokenLowSwingIndices.contains(sl.index) {
+                    brokenLowSwingIndices.insert(sl.index)
                     let kind: StructureBreakKind = (trendBias == .long) ? .mss : .bos
                     structureBreaks.append(
                         StructureBreak(kind: kind, direction: .short, brokenLevel: sl.price, breakBarIndex: i, brokenSwingIndex: sl.index)
@@ -469,16 +470,16 @@ public enum CausalICTDetector {
             } else {
                 distanceToZone = 0.0
             }
+            guard ob.isUnmitigated else { return false }
             let nearZone: Bool
             if ob.direction == .long {
-                nearZone = (lastBar.low <= ob.top + causalATR * 0.25 && lastBar.close >= ob.bottom) || distanceToZone <= proximityLimit
+                nearZone = lastBar.close >= ob.bottom &&
+                    (lastBar.low <= ob.top + causalATR * 0.25 || distanceToZone <= proximityLimit)
             } else {
-                nearZone = (lastBar.high >= ob.bottom - causalATR * 0.25 && lastBar.close <= ob.top) || distanceToZone <= proximityLimit
+                nearZone = lastBar.close <= ob.top &&
+                    (lastBar.high >= ob.bottom - causalATR * 0.25 || distanceToZone <= proximityLimit)
             }
-            if ob.isUnmitigated {
-                return age <= 4 || nearZone
-            }
-            return nearZone && (ob.mitigatedAtIndex.map { lastIdx - $0 <= 1 } ?? false)
+            return age <= 4 || nearZone
         })
         if let ob = recentOB {
             let id = "ict_order_block"

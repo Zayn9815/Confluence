@@ -243,6 +243,7 @@ public struct TradeJournalView: View {
             direction: pos.direction,
             entryPrice: entry,
             stopLoss: pos.stopLoss,
+            initialStopLoss: pos.initialStopLoss,
             target1: pos.target1,
             liveQuote: quote,
             fallbackPrice: mark,
@@ -250,6 +251,8 @@ public struct TradeJournalView: View {
             marginUSD: pos.marginReservedUSD,
             nowEpochSeconds: now
         )
+        let displayR: Double = pos.status.isActive ? (pos.status == .open ? metrics.rMultiple : 0.0) : pos.rMultiple
+        let displayPct: Double = (pos.status == .pendingLimit) ? 0.0 : metrics.returnPercent
         let pnlColor = pnlUSD >= 0 ? palette.longEmerald : palette.shortCrimson
 
         return VStack(alignment: .leading, spacing: 6) {
@@ -288,10 +291,10 @@ public struct TradeJournalView: View {
                 Text(pos.status.isActive ? "Live \(prec.format(mark))" : "Exit \(prec.format(mark))")
                     .foregroundStyle(palette.secondaryInk)
                 Spacer()
-                Text("\(pnlUSD >= 0 ? "+" : "")$\(String(format: "%.2f", pnlUSD))")
+                Text("\(pnlUSD >= 0 ? "+" : "-")$\(String(format: "%.2f", abs(pnlUSD)))")
                     .fontWeight(.bold)
                     .foregroundStyle(pnlColor)
-                Text("(\(String(format: "%+.2fR", pos.status.isActive ? metrics.rMultiple : pos.rMultiple)) · \(String(format: "%+.1f%%", metrics.returnPercent)))")
+                Text("(\(String(format: "%+.2fR", displayR)) · \(String(format: "%+.1f%%", displayPct)))")
                     .foregroundStyle(pnlColor)
             }
             .font(.caption2.monospacedDigit())

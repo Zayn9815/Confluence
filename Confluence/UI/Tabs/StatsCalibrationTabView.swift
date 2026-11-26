@@ -262,7 +262,7 @@ public struct StatsCalibrationTabView: View {
             .background(palette.canvas)
                 }
             }
-            .navigationTitle(activeTab == .journal ? "Trade Journal" : "Calibration Stats")
+            .navigationTitle(activeTab == .journal ? "Trade Journal" : (activeTab == .wallet ? "Demo Wallet" : "Calibration Stats"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

@@ -371,6 +371,7 @@ public struct NewsTradeAnalysisSheet: View {
     private func runEvaluation(summary: NewsMarketSummary, symbol: String) async {
         isEvaluating = true
         let result = await coordinator.evaluateNewsTrade(summary: summary, symbol: symbol)
+        guard selectedSymbol == symbol else { return }
         self.evaluation = result
         isEvaluating = false
     }

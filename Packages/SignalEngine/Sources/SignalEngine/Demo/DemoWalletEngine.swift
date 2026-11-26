@@ -622,7 +622,9 @@ public enum DemoWalletEngine {
             entryHigh: max(request.entryLow, request.entryHigh),
             filledPrice: isMarket ? effectiveEntry : nil,
             filledAtEpochSeconds: isMarket ? nowEpochSeconds : nil,
-            fillBarOpenEpochSeconds: nil,
+            fillBarOpenEpochSeconds: isMarket
+                ? LiveCandleAggregator.bucketOpenEpoch(for: nowEpochSeconds, timeframe: request.timeframe)
+                : nil,
             limitExpiryEpochSeconds: isMarket ? nil : request.limitExpiryEpochSeconds,
             stopLoss: request.stopLoss,
             initialStopLoss: request.stopLoss,
@@ -677,6 +679,7 @@ public enum DemoWalletEngine {
         var updated = wallet
         var pos = updated.positions[idx]
         guard pos.status.isActive else { return (wallet, pos, false) }
+        guard bar.closeTimeEpochSeconds > pos.createdAtEpochSeconds else { return (wallet, pos, false) }
 
         if pos.status == .pendingLimit {
             if let expiry = pos.limitExpiryEpochSeconds, bar.openTimeEpochSeconds >= expiry {
@@ -818,10 +821,29 @@ public enum DemoWalletEngine {
                 )
                 return (updated, pos, true)
             }
-            if tickPrice >= pos.entryLow && tickPrice <= pos.entryHigh {
+            let triggeredLimit = (pos.direction == .long)
+                ? (tickPrice <= pos.entryHigh)
+                : (tickPrice >= pos.entryLow)
+            if triggeredLimit {
                 pos.status = .open
                 pos.filledPrice = pos.entryPrice
                 pos.filledAtEpochSeconds = tickEpochSeconds
+                pos.fillBarOpenEpochSeconds = LiveCandleAggregator.bucketOpenEpoch(
+                    for: tickEpochSeconds,
+                    timeframe: pos.timeframe
+                )
+                let slHit = (pos.direction == .long) ? (tickPrice <= pos.stopLoss) : (tickPrice >= pos.stopLoss)
+                if slHit {
+                    let (w2, closed) = settleClose(
+                        wallet: updated,
+                        positionIndex: idx,
+                        position: pos,
+                        exitPrice: pos.stopLoss,
+                        status: .closedStopLoss,
+                        closedAt: tickEpochSeconds
+                    )
+                    return (w2, closed, true)
+                }
                 updated.positions[idx] = pos
                 return (updated, pos, true)
             }
@@ -1039,12 +1061,14 @@ public enum DemoWalletEngine {
         pos.status = status
         pos.exitPrice = exitPrice
         pos.closedAtEpochSeconds = closedAt
+        let preCloseCash = updated.cashBalanceUSD
+        let riskUSD = abs(pnlUSD(for: pos, markPrice: pos.initialStopLoss))
         pos.realizedPnLUSD = netPnL
         pos.feesPaidUSD = feeUSD
-        pos.rMultiple = rMultiple(for: pos, markPrice: exitPrice)
+        pos.rMultiple = riskUSD > 1e-9 ? (netPnL / riskUSD) : rMultiple(for: pos, markPrice: exitPrice)
 
         updated.reservedMarginUSD = max(0.0, updated.reservedMarginUSD - pos.marginReservedUSD)
-        updated.cashBalanceUSD += netPnL
+        updated.cashBalanceUSD = preCloseCash + netPnL
         updated.realizedPnLUSD += netPnL
         updated.totalFeesPaidUSD += feeUSD
         updated.positions[positionIndex] = pos
@@ -1056,7 +1080,7 @@ public enum DemoWalletEngine {
                 symbol: pos.symbol,
                 positionId: pos.id,
                 amountUSD: pos.marginReservedUSD,
-                balanceAfterUSD: updated.cashBalanceUSD,
+                balanceAfterUSD: preCloseCash,
                 note: "Margin released on \(status.rawValue) (\(pos.symbol))"
             )
         )
@@ -1067,7 +1091,7 @@ public enum DemoWalletEngine {
                 symbol: pos.symbol,
                 positionId: pos.id,
                 amountUSD: grossPnL,
-                balanceAfterUSD: updated.cashBalanceUSD,
+                balanceAfterUSD: preCloseCash + grossPnL,
                 note: "Closed \(pos.symbol) @ \(String(format: "%.5g", exitPrice)) (\(status.rawValue))"
             )
         )

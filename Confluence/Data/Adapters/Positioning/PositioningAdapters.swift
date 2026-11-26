@@ -159,8 +159,16 @@ public actor CFTCCOTAdapter {
         async let disaggTask = fetchBatch(dataset: .disaggregatedFuturesOnly, contractCodes: disaggCodes)
         async let tffTask = fetchBatch(dataset: .tradersInFinancialFutures, contractCodes: tffCodes)
 
-        let disagg = (try? await disaggTask) ?? []
-        let tff = (try? await tffTask) ?? []
+        var disagg: [CFTCCOTRecord] = []
+        var tff: [CFTCCOTRecord] = []
+        var firstError: Error? = nil
+        do { disagg = try await disaggTask } catch { firstError = error }
+        do { tff = try await tffTask } catch { if firstError == nil { firstError = error } }
+
+        if disagg.isEmpty && tff.isEmpty {
+            if let firstError { throw firstError }
+            return
+        }
 
         var grouped: [String: [CFTCCOTRecord]] = memoryCache
         for rec in (disagg + tff) {
