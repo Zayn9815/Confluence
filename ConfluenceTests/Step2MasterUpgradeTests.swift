@@ -118,15 +118,15 @@ final class Step2MasterUpgradeTests: XCTestCase {
         let original = store.payload
         defer { store.payload = original }
 
-        store.payload.enabledStrategies = [.ictStructure]
-        let accepted = store.setStrategyEnforcingCoreFloor(.ictStructure, enabled: false)
+        store.payload.enabledStrategies = [.ictBos]
+        let accepted = store.setStrategyEnforcingCoreFloor(.ictBos, enabled: false)
         XCTAssertFalse(accepted)
-        XCTAssertTrue(store.payload.enabledStrategies.contains(.ictStructure))
+        XCTAssertTrue(store.payload.enabledStrategies.contains(.ictBos))
 
-        let enabledAnother = store.setStrategyEnforcingCoreFloor(.trendMomentum, enabled: true)
+        let enabledAnother = store.setStrategyEnforcingCoreFloor(.momentumEmaPullback, enabled: true)
         XCTAssertTrue(enabledAnother)
-        let disabledFirst = store.setStrategyEnforcingCoreFloor(.ictStructure, enabled: false)
+        let disabledFirst = store.setStrategyEnforcingCoreFloor(.ictBos, enabled: false)
         XCTAssertTrue(disabledFirst)
-        XCTAssertEqual(store.payload.enabledStrategies, [.trendMomentum])
+        XCTAssertEqual(store.payload.enabledStrategies, [.momentumEmaPullback])
     }
 }
