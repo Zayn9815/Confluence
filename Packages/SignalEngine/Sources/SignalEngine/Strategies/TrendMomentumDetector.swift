@@ -327,11 +327,17 @@ public enum TrendMomentumDetector {
                 trs.append(max(c.high - c.low, max(abs(c.high - pc), abs(c.low - pc))))
             }
         }
-        var sum = trs.prefix(period).reduce(0, +)
-        var out: [Double] = [sum / Double(period)]
-        for i in period..<trs.count {
-            sum += trs[i] - trs[i - period]
-            out.append(sum / Double(period))
+        var out: [Double] = []
+        out.reserveCapacity(trs.count - period + 1)
+        for i in (period - 1)..<trs.count {
+            var windowSum = 0.0
+            for j in (i - period + 1)...i {
+                let v = trs[j]
+                if v.isFinite && v > 0 {
+                    windowSum += v
+                }
+            }
+            out.append(max(0.0, windowSum / Double(period)))
         }
         return out
     }
