@@ -501,10 +501,11 @@ public enum OrderFlowAnalyzer {
             let nearConfirmedBidWall = (nearestBidWall?.isConfirmed == true && (nearestBidWall?.distanceBps ?? 999) <= max(35.0, bandBps))
             let nearConfirmedAskWall = (nearestAskWall?.isConfirmed == true && (nearestAskWall?.distanceBps ?? 999) <= max(35.0, bandBps))
 
-            let flatToleranceBps = max(4.0, spreadBps * 1.1)
-            if cvdRatio <= -0.35 && (netMoveBps >= -flatToleranceBps || (nearConfirmedBidWall && netMoveBps >= -flatToleranceBps * 2.0)) {
+            let flatToleranceBps = max(1.5, spreadBps * 1.1)
+            let wallStallToleranceBps = max(3.0, spreadBps * 1.5)
+            if cvdRatio <= -0.35 && (netMoveBps >= -flatToleranceBps || (nearConfirmedBidWall && netMoveBps >= -wallStallToleranceBps)) {
                 absorptionState = .bullishAbsorption
-            } else if cvdRatio >= 0.35 && (netMoveBps <= flatToleranceBps || (nearConfirmedAskWall && netMoveBps <= flatToleranceBps * 2.0)) {
+            } else if cvdRatio >= 0.35 && (netMoveBps <= flatToleranceBps || (nearConfirmedAskWall && netMoveBps <= wallStallToleranceBps)) {
                 absorptionState = .bearishAbsorption
             }
         }
