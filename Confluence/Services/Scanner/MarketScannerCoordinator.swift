@@ -863,6 +863,8 @@ public final class MarketScannerCoordinator {
                     let calendarSnapshot = calendarEvents
                     let newsSnapshot = breakingNews
                     let fgSnapshot = asset.marketClass == .crypto ? fearGreed : nil
+                    let okxSnapSnapshot = okxSnap
+                    let cotRecordsSnapshot = cotRecords
 
                     let (sanitizedEntry, output) = await Task.detached(priority: .userInitiated) {
                         let sanitized = CandleHygieneEngine.sanitize(
@@ -881,8 +883,8 @@ public final class MarketScannerCoordinator {
                             rawHTFCandles: htfCandlesSnapshot,
                             timeframe: entryTF,
                             htfTimeframe: htfTF,
-                            okxDerivatives: okxSnap,
-                            cftcCOTRecords: cotRecords,
+                            okxDerivatives: okxSnapSnapshot,
+                            cftcCOTRecords: cotRecordsSnapshot,
                             calendarEvents: calendarSnapshot,
                             breakingNews: newsSnapshot,
                             fearGreed: fgSnapshot,
@@ -1797,31 +1799,19 @@ public final class MarketScannerCoordinator {
                 task.setTaskCompleted(success: false)
                 return
             }
-            nonisolated(unsafe) let boxedTask = refreshTask
-            final class CompletionGuard: @unchecked Sendable {
-                private let lock = NSLock()
-                private var completed = false
-                func completeOnce(_ task: BGAppRefreshTask, success: Bool) {
-                    lock.lock()
-                    defer { lock.unlock() }
-                    guard !completed else { return }
-                    completed = true
-                    task.setTaskCompleted(success: success)
-                }
-            }
-            let guardBox = CompletionGuard()
+            let guardBox = BGTaskCompletionGuard(task: refreshTask)
             let work = Task { @MainActor [weak self] in
                 guard let self else {
-                    guardBox.completeOnce(boxedTask, success: false)
+                    guardBox.completeOnce(success: false)
                     return
                 }
                 self.scheduleNextBackgroundRefresh()
                 await self.scanAllMarkets(isBackground: true)
-                guardBox.completeOnce(boxedTask, success: !Task.isCancelled)
+                guardBox.completeOnce(success: !Task.isCancelled)
             }
             refreshTask.expirationHandler = {
                 work.cancel()
-                guardBox.completeOnce(boxedTask, success: false)
+                guardBox.completeOnce(success: false)
             }
         }
     }
@@ -1835,5 +1825,23 @@ public final class MarketScannerCoordinator {
         let interval = TimeInterval(max(15, settings.payload.backgroundRefreshIntervalMinutes) * 60)
         req.earliestBeginDate = Date(timeIntervalSinceNow: interval)
         try? BGTaskScheduler.shared.submit(req)
+    }
+}
+
+private final class BGTaskCompletionGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private let task: BGAppRefreshTask
+    private var completed = false
+
+    init(task: BGAppRefreshTask) {
+        self.task = task
+    }
+
+    func completeOnce(success: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !completed else { return }
+        completed = true
+        task.setTaskCompleted(success: success)
     }
 }
