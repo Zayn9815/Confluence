@@ -125,13 +125,11 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
                 NativeCanvasFallbackChartView(
                     candles: candles,
                     formingCandle: formingCandle,
-                    liveTick: liveTick,
                     overlayModel: overlayModel,
                     timeframe: timeframe,
                     pricePrecision: pricePrecision,
                     palette: palette,
-                    isDark: isDark,
-                    engineLabel: "CandleKit",
+                    showVolumePane: true,
                     onCrosshairChange: onCrosshairChange
                 )
             } else {

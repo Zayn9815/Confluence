@@ -115,11 +115,15 @@ public actor CryptoOrderFlowAdapter {
         let syms = CryptoOrderFlowVenueSymbols.resolve(symbol: symbol)
         switch venue {
         case "OKX":
-            return await fetchOKXOrderBook(instId: syms.okxSwapInstId)
-                ?? await fetchOKXOrderBook(instId: syms.okxSpotInstId)
+            if let swap = await fetchOKXOrderBook(instId: syms.okxSwapInstId) {
+                return swap
+            }
+            return await fetchOKXOrderBook(instId: syms.okxSpotInstId)
         case "Bybit":
-            return await fetchBybitOrderBook(category: "linear", symbol: syms.bybitLinearSymbol)
-                ?? await fetchBybitOrderBook(category: "spot", symbol: syms.bybitSpotSymbol)
+            if let linear = await fetchBybitOrderBook(category: "linear", symbol: syms.bybitLinearSymbol) {
+                return linear
+            }
+            return await fetchBybitOrderBook(category: "spot", symbol: syms.bybitSpotSymbol)
         case "Binance":
             return await fetchBinanceFuturesOrderBook(symbol: syms.binanceFuturesSymbol)
         default:
