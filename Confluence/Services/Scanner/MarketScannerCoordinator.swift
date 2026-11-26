@@ -856,16 +856,44 @@ public final class MarketScannerCoordinator {
                     let clockSkew = await http.estimatedClockSkewSeconds()
                     let serverNow = Date().timeIntervalSince1970 + clockSkew
 
-                    let sanitizedEntry = CandleHygieneEngine.sanitize(
-                        rawCandles: entryRes.candles,
-                        symbol: asset.symbol,
-                        marketClass: asset.marketClass,
-                        timeframe: entryTF,
-                        providerName: entryRes.providerName,
-                        serverNowEpochSeconds: serverNow,
-                        clockSkewSeconds: clockSkew,
-                        asset: asset
-                    )
+                    try Task.checkCancellation()
+                    let entryCandlesSnapshot = entryRes.candles
+                    let htfCandlesSnapshot = htfRes.candles
+                    let entryProviderSnapshot = entryRes.providerName
+                    let calendarSnapshot = calendarEvents
+                    let newsSnapshot = breakingNews
+                    let fgSnapshot = asset.marketClass == .crypto ? fearGreed : nil
+
+                    let (sanitizedEntry, output) = await Task.detached(priority: .userInitiated) {
+                        let sanitized = CandleHygieneEngine.sanitize(
+                            rawCandles: entryCandlesSnapshot,
+                            symbol: asset.symbol,
+                            marketClass: asset.marketClass,
+                            timeframe: entryTF,
+                            providerName: entryProviderSnapshot,
+                            serverNowEpochSeconds: serverNow,
+                            clockSkewSeconds: clockSkew,
+                            asset: asset
+                        )
+                        let analyzed = SignalEngine.analyze(
+                            asset: asset,
+                            rawEntryCandles: entryCandlesSnapshot,
+                            rawHTFCandles: htfCandlesSnapshot,
+                            timeframe: entryTF,
+                            htfTimeframe: htfTF,
+                            okxDerivatives: okxSnap,
+                            cftcCOTRecords: cotRecords,
+                            calendarEvents: calendarSnapshot,
+                            breakingNews: newsSnapshot,
+                            fearGreed: fgSnapshot,
+                            config: engineConfig,
+                            dataProvider: entryProviderSnapshot,
+                            serverNowEpochSeconds: serverNow,
+                            clockSkewSeconds: clockSkew
+                        )
+                        return (sanitized, analyzed)
+                    }.value
+                    try Task.checkCancellation()
                     sanitizedClosedBySymbol[asset.symbol] = sanitizedEntry.candles
 
                     if sanitizedEntry.report.droppedOpenBars > 0 {
@@ -875,23 +903,6 @@ public final class MarketScannerCoordinator {
                             message: "\(asset.symbol) \(entryTF.displayLabel) (\(entryRes.providerName)): dropped \(sanitizedEntry.report.droppedOpenBars) forming bar(s)."
                         )
                     }
-
-                    let output = SignalEngine.analyze(
-                        asset: asset,
-                        rawEntryCandles: entryRes.candles,
-                        rawHTFCandles: htfRes.candles,
-                        timeframe: entryTF,
-                        htfTimeframe: htfTF,
-                        okxDerivatives: okxSnap,
-                        cftcCOTRecords: cotRecords,
-                        calendarEvents: calendarEvents,
-                        breakingNews: breakingNews,
-                        fearGreed: asset.marketClass == .crypto ? fearGreed : nil,
-                        config: engineConfig,
-                        dataProvider: entryRes.providerName,
-                        serverNowEpochSeconds: serverNow,
-                        clockSkewSeconds: clockSkew
-                    )
 
                     // Record 4-stage Behavioral Traps + evaluate post-trap respect
                     let atrApprox = sanitizedEntry.candles.suffix(14).map { $0.high - $0.low }.reduce(0, +) / Double(max(1, min(14, sanitizedEntry.candles.count)))
@@ -959,7 +970,12 @@ public final class MarketScannerCoordinator {
                             await dispatchArrivalFeedback(for: signal, isBackground: isBackground)
                         }
                     }
+                } catch is CancellationError {
+                    return
+                } catch let urlErr as URLError where urlErr.code == .cancelled {
+                    return
                 } catch {
+                    if Task.isCancelled { return }
                     let msg = "\(asset.symbol): \(error.localizedDescription)"
                     errors.append(msg)
                     diagnosticLog.log(.error, category: .feed, message: msg)
@@ -1454,18 +1470,24 @@ public final class MarketScannerCoordinator {
             )
         }
 
+        try Task.checkCancellation()
         let clockSkew = await http.estimatedClockSkewSeconds()
         let serverNow = Date().timeIntervalSince1970 + clockSkew
-        let sanitized = CandleHygieneEngine.sanitize(
-            rawCandles: res.candles,
-            symbol: asset.symbol,
-            marketClass: asset.marketClass,
-            timeframe: timeframe,
-            providerName: res.providerName,
-            serverNowEpochSeconds: serverNow,
-            clockSkewSeconds: clockSkew,
-            enforceMinimumBars: false
-        )
+        let rawChartCandles = res.candles
+        let chartProvider = res.providerName
+        let sanitized = await Task.detached(priority: .userInitiated) {
+            CandleHygieneEngine.sanitize(
+                rawCandles: rawChartCandles,
+                symbol: asset.symbol,
+                marketClass: asset.marketClass,
+                timeframe: timeframe,
+                providerName: chartProvider,
+                serverNowEpochSeconds: serverNow,
+                clockSkewSeconds: clockSkew,
+                enforceMinimumBars: false
+            )
+        }.value
+        try Task.checkCancellation()
 
         if let latestClose = sanitized.candles.last?.close, endTimeEpochSeconds == nil {
             livePriceService.seedReferenceClose(latestClose, for: asset.symbol)
@@ -1776,17 +1798,30 @@ public final class MarketScannerCoordinator {
                 return
             }
             nonisolated(unsafe) let boxedTask = refreshTask
+            final class CompletionGuard: @unchecked Sendable {
+                private let lock = NSLock()
+                private var completed = false
+                func completeOnce(_ task: BGAppRefreshTask, success: Bool) {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    guard !completed else { return }
+                    completed = true
+                    task.setTaskCompleted(success: success)
+                }
+            }
+            let guardBox = CompletionGuard()
             let work = Task { @MainActor [weak self] in
                 guard let self else {
-                    boxedTask.setTaskCompleted(success: false)
+                    guardBox.completeOnce(boxedTask, success: false)
                     return
                 }
                 self.scheduleNextBackgroundRefresh()
                 await self.scanAllMarkets(isBackground: true)
-                boxedTask.setTaskCompleted(success: true)
+                guardBox.completeOnce(boxedTask, success: !Task.isCancelled)
             }
             refreshTask.expirationHandler = {
                 work.cancel()
+                guardBox.completeOnce(boxedTask, success: false)
             }
         }
     }
