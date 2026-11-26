@@ -107,7 +107,7 @@ public struct MiniCandlestickCanvas: View {
                 drawLevelLine(context: context, width: size.width, y: yFor(lv.stopLoss), color: palette.shortCrimson.opacity(0.85), dash: [3, 3])
                 drawLevelLine(context: context, width: size.width, y: yFor(lv.tp1), color: palette.longEmerald.opacity(0.85), dash: [4, 2])
                 if lv.isTP2Enabled && lv.tp2 >= lowBound && lv.tp2 <= highBound {
-                    drawLevelLine(context: context, width: size.width, y: yFor(lv.tp2), color: palette.macroIceBlue.opacity(0.8), dash: [2, 3])
+                    drawLevelLine(context: context, width: size.width, y: yFor(lv.tp2), color: palette.longEmerald.opacity(0.85), dash: [2, 3])
                 }
             }
 

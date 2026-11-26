@@ -1028,23 +1028,23 @@ public final class JournalEntry {
     }
 }
 
-// MARK: - Purely Additive v1.5 SwiftData @Model Classes (Demo Paper Wallet)
+// MARK: - Legacy v1.5 Migration-Only SwiftData @Model Stubs (Retained for Crash-Free SQLite Migration)
 
-/// Purely additive v1.5 table storing the simulated paper-trading wallet summary.
+/// Migration-only v1.5 table retained in Schema so existing SQLite stores open without quarantine.
 @Model
 public final class DemoWalletRecord {
-    @Attribute(.unique) public var id: String
-    public var startingBalanceUSD: Double
-    public var cashBalanceUSD: Double
-    public var reservedMarginUSD: Double
-    public var realizedPnLUSD: Double
-    public var totalFeesPaidUSD: Double
-    public var updatedAt: Date
+    @Attribute(.unique) public var id: String = "primary"
+    public var startingBalanceUSD: Double = 1_000.0
+    public var cashBalanceUSD: Double = 1_000.0
+    public var reservedMarginUSD: Double = 0
+    public var realizedPnLUSD: Double = 0
+    public var totalFeesPaidUSD: Double = 0
+    public var updatedAt: Date = Date()
 
     public init(
         id: String = "primary",
-        startingBalanceUSD: Double = DemoWallet.defaultStartingBalanceUSD,
-        cashBalanceUSD: Double = DemoWallet.defaultStartingBalanceUSD,
+        startingBalanceUSD: Double = 1_000.0,
+        cashBalanceUSD: Double = 1_000.0,
         reservedMarginUSD: Double = 0,
         realizedPnLUSD: Double = 0,
         totalFeesPaidUSD: Double = 0,
@@ -1060,15 +1060,15 @@ public final class DemoWalletRecord {
     }
 }
 
-/// Purely additive v1.5 table storing simulated demo positions (JSON-encoded `DemoPosition` payload).
+/// Migration-only v1.5 table retained in Schema so existing SQLite stores open without quarantine.
 @Model
 public final class DemoPositionRecord {
-    @Attribute(.unique) public var id: String
-    public var symbol: String
-    public var statusRaw: String
-    public var positionJSON: Data
-    public var createdAt: Date
-    public var closedAt: Date?
+    @Attribute(.unique) public var id: String = ""
+    public var symbol: String = ""
+    public var statusRaw: String = ""
+    public var positionJSON: Data = Data()
+    public var createdAt: Date = Date()
+    public var closedAt: Date? = nil
     public var activeStrategyProfileKey: String = ""
     public var enabledStrategyIDsCSV: String = ""
     public var orderFlowStatus: String = "off"
@@ -1094,23 +1094,19 @@ public final class DemoPositionRecord {
         self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
         self.orderFlowStatus = orderFlowStatus
     }
-
-    public func toPosition() -> DemoPosition? {
-        try? JSONDecoder().decode(DemoPosition.self, from: positionJSON)
-    }
 }
 
-/// Purely additive v1.5 table storing simulated demo wallet transactions.
+/// Migration-only v1.5 table retained in Schema so existing SQLite stores open without quarantine.
 @Model
 public final class DemoWalletTransactionRecord {
-    @Attribute(.unique) public var id: String
-    public var timestamp: Date
-    public var kindRaw: String
-    public var symbol: String?
-    public var positionId: String?
-    public var amountUSD: Double
-    public var balanceAfterUSD: Double
-    public var note: String
+    @Attribute(.unique) public var id: String = ""
+    public var timestamp: Date = Date()
+    public var kindRaw: String = ""
+    public var symbol: String? = nil
+    public var positionId: String? = nil
+    public var amountUSD: Double = 0
+    public var balanceAfterUSD: Double = 0
+    public var note: String = ""
 
     public init(
         id: String,
@@ -1131,17 +1127,163 @@ public final class DemoWalletTransactionRecord {
         self.balanceAfterUSD = balanceAfterUSD
         self.note = note
     }
+}
 
-    public func toTransaction() -> DemoWalletTransaction {
-        DemoWalletTransaction(
+// MARK: - Purely Additive v1.6 SwiftData @Model Class (Automatic 3-Section Signal Journal)
+
+/// Purely additive v1.6 table storing 100% automatically tracked Signal Journal trades
+/// across Strong Signals, Weak & Filtered, and Trap Alerts.
+/// Every persisted property declares an inline default for lightweight over-the-top migration.
+@Model
+public final class TrackedSignalJournalEntry {
+    @Attribute(.unique) public var id: String = UUID().uuidString
+    public var symbol: String = ""
+    public var assetClassRaw: String = ""
+    public var timeframeRaw: String = ""
+    public var directionRaw: String = ""
+    public var sectionRaw: String = ""
+    public var statusRaw: String = ""
+    public var score: Double = 0
+    public var signalBarTimestamp: Double = 0
+    public var entryZoneLow: Double = 0
+    public var entryZoneHigh: Double = 0
+    public var entryPrice: Double = 0
+    public var fillPrice: Double? = nil
+    public var stopLoss: Double = 0
+    public var target1: Double = 0
+    public var target2: Double = 0
+    public var isTP2Enabled: Bool = true
+    public var currentPrice: Double = 0
+    public var livePnLPercent: Double = 0
+    public var liveRMultiple: Double = 0
+    public var realizedR: Double? = nil
+    public var isWinLocked: Bool = false
+    public var activeStrategyProfileKey: String = ""
+    public var orderFlowStatus: String = "off"
+    public var orderFlowSummaryJSON: Data? = nil
+    public var orderFlowCapturedAt: Date? = nil
+    public var createdAt: Date = Date()
+    public var filledAt: Date? = nil
+    public var tp1HitAt: Date? = nil
+    public var closedAt: Date? = nil
+    public var lastEvaluatedAt: Date = Date()
+    public var filterReason: String? = nil
+    public var matchedStrategyIDsCSV: String = ""
+
+    public init(from trade: TrackedJournalTrade) {
+        self.id = trade.id
+        self.symbol = trade.symbol
+        self.assetClassRaw = trade.assetClass.rawValue
+        self.timeframeRaw = trade.timeframe.rawValue
+        self.directionRaw = trade.direction.rawValue
+        self.sectionRaw = trade.section.rawValue
+        self.statusRaw = trade.status.rawValue
+        self.score = trade.score
+        self.signalBarTimestamp = trade.signalBarTimestamp
+        self.entryZoneLow = trade.entryZoneLow
+        self.entryZoneHigh = trade.entryZoneHigh
+        self.entryPrice = trade.entryPrice
+        self.fillPrice = trade.fillPrice
+        self.stopLoss = trade.stopLoss
+        self.target1 = trade.target1
+        self.target2 = trade.target2
+        self.isTP2Enabled = trade.isTP2Enabled
+        self.currentPrice = trade.currentPrice
+        self.livePnLPercent = trade.livePnLPercent
+        self.liveRMultiple = trade.liveRMultiple
+        self.realizedR = trade.realizedR
+        self.isWinLocked = trade.isWinLocked
+        self.activeStrategyProfileKey = trade.activeStrategyProfileKey
+        self.orderFlowStatus = trade.orderFlowStatus
+        self.orderFlowSummaryJSON = trade.orderFlowSummary.flatMap { try? JSONEncoder().encode($0) }
+        self.orderFlowCapturedAt = trade.orderFlowCapturedAt.map { Date(timeIntervalSince1970: $0) }
+        self.createdAt = Date(timeIntervalSince1970: trade.createdAt)
+        self.filledAt = trade.filledAt.map { Date(timeIntervalSince1970: $0) }
+        self.tp1HitAt = trade.tp1HitAt.map { Date(timeIntervalSince1970: $0) }
+        self.closedAt = trade.closedAt.map { Date(timeIntervalSince1970: $0) }
+        self.lastEvaluatedAt = Date(timeIntervalSince1970: trade.lastEvaluatedAt)
+        self.filterReason = trade.filterReason
+        self.matchedStrategyIDsCSV = trade.matchedStrategyIDs.joined(separator: ",")
+    }
+
+    public func apply(from trade: TrackedJournalTrade) {
+        self.symbol = trade.symbol
+        self.assetClassRaw = trade.assetClass.rawValue
+        self.timeframeRaw = trade.timeframe.rawValue
+        self.directionRaw = trade.direction.rawValue
+        self.sectionRaw = trade.section.rawValue
+        self.statusRaw = trade.status.rawValue
+        self.score = trade.score
+        self.signalBarTimestamp = trade.signalBarTimestamp
+        self.entryZoneLow = trade.entryZoneLow
+        self.entryZoneHigh = trade.entryZoneHigh
+        self.entryPrice = trade.entryPrice
+        self.fillPrice = trade.fillPrice
+        self.stopLoss = trade.stopLoss
+        self.target1 = trade.target1
+        self.target2 = trade.target2
+        self.isTP2Enabled = trade.isTP2Enabled
+        self.currentPrice = trade.currentPrice
+        self.livePnLPercent = trade.livePnLPercent
+        self.liveRMultiple = trade.liveRMultiple
+        self.realizedR = trade.realizedR
+        self.isWinLocked = trade.isWinLocked
+        self.activeStrategyProfileKey = trade.activeStrategyProfileKey
+        self.orderFlowStatus = trade.orderFlowStatus
+        if let summary = trade.orderFlowSummary, let data = try? JSONEncoder().encode(summary) {
+            self.orderFlowSummaryJSON = data
+        }
+        self.orderFlowCapturedAt = trade.orderFlowCapturedAt.map { Date(timeIntervalSince1970: $0) }
+        self.filledAt = trade.filledAt.map { Date(timeIntervalSince1970: $0) }
+        self.tp1HitAt = trade.tp1HitAt.map { Date(timeIntervalSince1970: $0) }
+        self.closedAt = trade.closedAt.map { Date(timeIntervalSince1970: $0) }
+        self.lastEvaluatedAt = Date(timeIntervalSince1970: trade.lastEvaluatedAt)
+        self.filterReason = trade.filterReason
+        self.matchedStrategyIDsCSV = trade.matchedStrategyIDs.joined(separator: ",")
+    }
+
+    public func toTrackedTrade() -> TrackedJournalTrade {
+        let decodedOF: ChartOrderFlowSummary? = orderFlowSummaryJSON.flatMap {
+            try? JSONDecoder().decode(ChartOrderFlowSummary.self, from: $0)
+        }
+        let strategyIDs = matchedStrategyIDsCSV
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return TrackedJournalTrade(
             id: id,
-            timestampEpochSeconds: timestamp.timeIntervalSince1970,
-            kind: DemoTransactionKind(rawValue: kindRaw) ?? .balanceAdjustment,
             symbol: symbol,
-            positionId: positionId,
-            amountUSD: amountUSD,
-            balanceAfterUSD: balanceAfterUSD,
-            note: note
+            assetClass: MarketClass(rawValue: assetClassRaw) ?? .crypto,
+            timeframe: Timeframe(rawValue: timeframeRaw) ?? .h1,
+            direction: TradeDirection(rawValue: directionRaw) ?? .long,
+            section: JournalSection(rawValue: sectionRaw) ?? .strongSignals,
+            status: JournalTradeStatus(rawValue: statusRaw) ?? .pending,
+            score: score,
+            signalBarTimestamp: signalBarTimestamp,
+            entryZoneLow: entryZoneLow,
+            entryZoneHigh: entryZoneHigh,
+            entryPrice: entryPrice,
+            fillPrice: fillPrice,
+            stopLoss: stopLoss,
+            target1: target1,
+            target2: target2,
+            isTP2Enabled: isTP2Enabled,
+            currentPrice: currentPrice,
+            livePnLPercent: livePnLPercent,
+            liveRMultiple: liveRMultiple,
+            realizedR: realizedR,
+            isWinLocked: isWinLocked,
+            activeStrategyProfileKey: activeStrategyProfileKey,
+            orderFlowStatus: orderFlowStatus,
+            orderFlowSummary: decodedOF,
+            orderFlowCapturedAt: orderFlowCapturedAt?.timeIntervalSince1970,
+            createdAt: createdAt.timeIntervalSince1970,
+            filledAt: filledAt?.timeIntervalSince1970,
+            tp1HitAt: tp1HitAt?.timeIntervalSince1970,
+            closedAt: closedAt?.timeIntervalSince1970,
+            lastEvaluatedAt: lastEvaluatedAt.timeIntervalSince1970,
+            filterReason: filterReason,
+            matchedStrategyIDs: strategyIDs
         )
     }
 }

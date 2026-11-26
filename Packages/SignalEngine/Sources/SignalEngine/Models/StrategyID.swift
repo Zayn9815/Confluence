@@ -211,4 +211,71 @@ extension StrategyID {
         }
         return out
     }
+
+    /// Normalizes raw persisted strategy keys (e.g. `"ict_fvg"`, `"Ict Fvg"`, `"positioning_cot"`, `"Positioning Cot"`)
+    /// into canonical human-readable display names so Calibration & Diagnostics views never render ugly snake-case.
+    public static func displayName(forRawKey raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Unknown Strategy" }
+
+        let snake = trimmed
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+
+        if let exact = StrategyID(rawValue: snake) {
+            return exact.displayName
+        }
+
+        let normalized = snake
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: "__", with: "_")
+
+        for sid in StrategyID.allCases {
+            let sidNorm = sid.rawValue.replacingOccurrences(of: "-", with: "_")
+            if sidNorm == normalized || sid.displayName.lowercased() == trimmed.lowercased() {
+                return sid.displayName
+            }
+        }
+
+        switch normalized {
+        case "ict_sweep", "ict_liquidity_sweeps":
+            return StrategyID.ictLiquiditySweep.displayName
+        case "ict_bos_mss", "ict_structure":
+            return "ICT BOS / MSS Structure"
+        case "ict_premium_discount":
+            return "Premium / Discount EQ"
+        case "trap_osler", "trap_osler_round_number", "trap_osler_round_number_sweep":
+            return StrategyID.trapOslerRoundNumber.displayName
+        case "trap_news", "trap_post_news_whipsaw", "trap_post_news_whipsaw_trap":
+            return StrategyID.trapNewsWhipsaw.displayName
+        case "trap_swing", "trap_liquidity_sweep":
+            return StrategyID.trapLiquiditySwingSweep.displayName
+        case "trap_fomo", "trap_attention_fomo":
+            return StrategyID.trapAttentionFomo.displayName
+        case "crypto_order_flow", "order_flow":
+            return "Order Flow (Crypto Only)"
+        case "positioning_flow":
+            return "Positioning (OKX / COT)"
+        case "candlestick_patterns":
+            return "Candlestick Patterns"
+        case "behavioral_traps":
+            return "Behavioral Traps"
+        default:
+            break
+        }
+
+        let acronyms: Set<String> = ["ict", "fvg", "ob", "bos", "mss", "eq", "ema", "rsi", "atr", "rvol", "okx", "cot", "fomo", "smc"]
+        let words = trimmed
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .split(separator: " ")
+            .map { token -> String in
+                let lower = token.lowercased()
+                if acronyms.contains(lower) {
+                    return lower.uppercased()
+                }
+                return lower.prefix(1).uppercased() + lower.dropFirst()
+            }
+        return words.isEmpty ? trimmed : words.joined(separator: " ")
+    }
 }

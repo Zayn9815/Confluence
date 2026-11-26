@@ -154,11 +154,11 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var geminiDailyCallLimit: Int = 25
     public var geminiConfirmationThreshold: Double = 0.80
 
-    // Section 6 — v1.5 Live Feeds, Chart Options, Auto-Scan & Demo Wallet
+    // Section 6 — Live Feeds, Chart Options & Auto-Scan
     public var tradFiLiveFeedMode: TradFiLiveFeedMode = .autoStreamWithBackup
     public var cryptoLiveFeedMode: CryptoLiveFeedMode = .liveStream
     public var defaultChartViewMode: DefaultChartViewMode = .confluence
-    public var chartEngine: ChartEngineOption = .lightweightCharts
+    public var chartEngine: ChartEngineOption = .candleKit
     public var tradingViewPreferDesktop: Bool = false
     public var showTradingViewOption: Bool = true
     public var scanOnOpenEnabled: Bool = true
@@ -349,16 +349,14 @@ public final class AppSettingsStore {
     public init() {
         if let data = UserDefaults.standard.data(forKey: Self.storageKey),
            var decoded = try? JSONDecoder().decode(PersistedSettingsPayload.self, from: data) {
-            if let storedEngineRaw = UserDefaults.standard.string(forKey: ChartEngineOption.appStorageKey),
-               let storedEngine = ChartEngineOption(rawValue: storedEngineRaw) {
-                decoded.chartEngine = storedEngine
+            if let storedEngineRaw = UserDefaults.standard.string(forKey: ChartEngineOption.appStorageKey) {
+                decoded.chartEngine = ChartEngineOption.fromStoredRawValue(storedEngineRaw)
             }
             self.payload = decoded
         } else {
             var initial = PersistedSettingsPayload()
-            if let storedEngineRaw = UserDefaults.standard.string(forKey: ChartEngineOption.appStorageKey),
-               let storedEngine = ChartEngineOption(rawValue: storedEngineRaw) {
-                initial.chartEngine = storedEngine
+            if let storedEngineRaw = UserDefaults.standard.string(forKey: ChartEngineOption.appStorageKey) {
+                initial.chartEngine = ChartEngineOption.fromStoredRawValue(storedEngineRaw)
             }
             self.payload = initial
         }

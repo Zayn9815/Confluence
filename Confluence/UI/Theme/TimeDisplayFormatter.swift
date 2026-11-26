@@ -1,23 +1,34 @@
 import Foundation
 import SignalEngine
 
+/// Lock-free, Swift 6 `Sendable` date/time formatter using `Date.VerbatimFormatStyle`.
+/// Eliminates hot-path `DateFormatter()` allocations on the main thread.
 public enum TimeDisplayFormatter {
-    private static let lock = NSLock()
+    private static let posixLocale = Locale(identifier: "en_US_POSIX")
+    private static let gregorianCalendar = Calendar(identifier: .gregorian)
     private static let utcTimeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
-    nonisolated(unsafe) private static var cache: [String: DateFormatter] = [:]
 
-    private static func formatter(format: String, useUTC: Bool) -> DateFormatter {
-        let tz = useUTC ? utcTimeZone : TimeZone.current
-        let key = "\(format)|\(tz.identifier)"
-        if let existing = cache[key] {
-            return existing
-        }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = tz
-        f.dateFormat = format
-        cache[key] = f
-        return f
+    private static let dateTime24Format: Date.FormatString = "\(month: .abbreviated) \(day: .defaultDigits), \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)"
+    private static let dateTime12Format: Date.FormatString = "\(month: .abbreviated) \(day: .defaultDigits), \(hour: .defaultDigits(clock: .twelveHour, hourCycle: .oneBased)):\(minute: .twoDigits) \(dayPeriod: .standard(.abbreviated))"
+    private static let shortTime24Format: Date.FormatString = "\(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)"
+    private static let shortTime12Format: Date.FormatString = "\(hour: .defaultDigits(clock: .twelveHour, hourCycle: .oneBased)):\(minute: .twoDigits) \(dayPeriod: .standard(.abbreviated))"
+    private static let compact24Format: Date.FormatString = "\(month: .twoDigits)/\(day: .twoDigits) \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)"
+    private static let compact12Format: Date.FormatString = "\(month: .twoDigits)/\(day: .twoDigits) \(hour: .defaultDigits(clock: .twelveHour, hourCycle: .oneBased)):\(minute: .twoDigits) \(dayPeriod: .standard(.abbreviated))"
+
+    private static func format(
+        epochSeconds: TimeInterval,
+        formatString: Date.FormatString,
+        useUTC: Bool
+    ) -> String {
+        guard epochSeconds.isFinite else { return "—" }
+        let style = Date.VerbatimFormatStyle(
+            format: formatString,
+            locale: posixLocale,
+            timeZone: useUTC ? utcTimeZone : TimeZone.current,
+            calendar: gregorianCalendar
+        )
+        let suffix = useUTC ? " UTC" : ""
+        return style.format(Date(timeIntervalSince1970: epochSeconds)) + suffix
     }
 
     public static func formatDateTime(
@@ -25,12 +36,11 @@ public enum TimeDisplayFormatter {
         use24Hour: Bool,
         useUTC: Bool
     ) -> String {
-        guard epochSeconds.isFinite else { return "—" }
-        let fmt = use24Hour ? "MMM d, HH:mm" : "MMM d, h:mm a"
-        let suffix = useUTC ? " UTC" : ""
-        lock.lock()
-        defer { lock.unlock() }
-        return formatter(format: fmt, useUTC: useUTC).string(from: Date(timeIntervalSince1970: epochSeconds)) + suffix
+        format(
+            epochSeconds: epochSeconds,
+            formatString: use24Hour ? dateTime24Format : dateTime12Format,
+            useUTC: useUTC
+        )
     }
 
     public static func formatShortTime(
@@ -38,12 +48,11 @@ public enum TimeDisplayFormatter {
         use24Hour: Bool,
         useUTC: Bool
     ) -> String {
-        guard epochSeconds.isFinite else { return "—" }
-        let fmt = use24Hour ? "HH:mm" : "h:mm a"
-        let suffix = useUTC ? " UTC" : ""
-        lock.lock()
-        defer { lock.unlock() }
-        return formatter(format: fmt, useUTC: useUTC).string(from: Date(timeIntervalSince1970: epochSeconds)) + suffix
+        format(
+            epochSeconds: epochSeconds,
+            formatString: use24Hour ? shortTime24Format : shortTime12Format,
+            useUTC: useUTC
+        )
     }
 
     public static func formatCompactStamp(
@@ -51,11 +60,10 @@ public enum TimeDisplayFormatter {
         use24Hour: Bool,
         useUTC: Bool
     ) -> String {
-        guard epochSeconds.isFinite else { return "—" }
-        let fmt = use24Hour ? "MM/dd HH:mm" : "MM/dd h:mm a"
-        let suffix = useUTC ? " UTC" : ""
-        lock.lock()
-        defer { lock.unlock() }
-        return formatter(format: fmt, useUTC: useUTC).string(from: Date(timeIntervalSince1970: epochSeconds)) + suffix
+        format(
+            epochSeconds: epochSeconds,
+            formatString: use24Hour ? compact24Format : compact12Format,
+            useUTC: useUTC
+        )
     }
 }

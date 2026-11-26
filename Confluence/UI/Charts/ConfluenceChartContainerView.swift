@@ -1,10 +1,9 @@
 import SwiftUI
-import LightweightCharts
 import SignalEngine
 
 /// Engine-agnostic chart container and lazy router.
 /// Instantiates ONLY the currently selected `ChartEngineOption` engine for battery efficiency,
-/// and layers the lightweight native SwiftUI top OHLCV + R:R crosshair HUD on top.
+/// and layers the lightweight native SwiftUI top OHLCV + R:R crosshair strip on top.
 public struct ConfluenceChartContainerView: View {
     public let selectedEngine: ChartEngineOption
     public let symbol: String
@@ -17,7 +16,7 @@ public struct ConfluenceChartContainerView: View {
     public let liveUpdateToken: Int
     public let fitRequestToken: Int
     public let overlayModel: ChartSignalOverlayModel
-    public let replayMarkers: [SeriesMarker]
+    public let replayMarkers: [ChartReplayMarker]
     public let pricePrecision: ChartPricePrecision
     public let timeframe: Timeframe
     public let providerTag: String
@@ -40,7 +39,7 @@ public struct ConfluenceChartContainerView: View {
         liveUpdateToken: Int,
         fitRequestToken: Int,
         overlayModel: ChartSignalOverlayModel,
-        replayMarkers: [SeriesMarker] = [],
+        replayMarkers: [ChartReplayMarker] = [],
         pricePrecision: ChartPricePrecision,
         timeframe: Timeframe,
         providerTag: String,
@@ -85,38 +84,21 @@ public struct ConfluenceChartContainerView: View {
 
             // Lazy-instantiate ONLY the active engine (unselected engines are never created)
             switch selectedEngine {
-            case .lightweightCharts:
-                ZStack(alignment: .topLeading) {
-                    LightweightChartsAdapterView(
-                        closedCandles: closedCandles,
-                        formingCandle: formingCandle,
-                        lastRolledOverCandle: lastRolledOverCandle,
-                        dataSetRevision: dataSetRevision,
-                        liveUpdateToken: liveUpdateToken,
-                        fitRequestToken: fitRequestToken,
-                        overlayModel: overlayModel,
-                        replayMarkers: replayMarkers,
-                        pricePrecision: pricePrecision,
-                        timeframe: timeframe,
-                        providerTag: providerTag,
-                        isDark: isDark,
-                        onNeedOlderHistory: onNeedOlderHistory,
-                        onCrosshairChange: { readout in
-                            crosshairReadout = readout
-                        }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                    if assetClass == .crypto, let orderFlow = overlayModel.orderFlowSummary {
-                        CryptoOrderFlowMicroStrip(summary: orderFlow, palette: palette)
-                            .frame(maxWidth: 230)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 6)
-                            .confluenceLiquidGlass(cornerRadius: 10, borderColor: palette.border)
-                            .padding(10)
-                            .allowsHitTesting(false)
+            case .candleKit:
+                CandleKitAdapterView(
+                    candles: closedCandles,
+                    formingCandle: formingCandle,
+                    liveTick: liveTick,
+                    overlayModel: overlayModel,
+                    timeframe: timeframe,
+                    pricePrecision: pricePrecision,
+                    palette: palette,
+                    isDark: isDark,
+                    resetTrigger: fitRequestToken,
+                    onCrosshairChange: { readout in
+                        crosshairReadout = readout
                     }
-                }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             case .dgCharts:
@@ -129,6 +111,7 @@ public struct ConfluenceChartContainerView: View {
                     pricePrecision: pricePrecision,
                     palette: palette,
                     isDark: isDark,
+                    resetTrigger: fitRequestToken,
                     onCrosshairChange: { readout in
                         crosshairReadout = readout
                     }
@@ -145,22 +128,7 @@ public struct ConfluenceChartContainerView: View {
                     pricePrecision: pricePrecision,
                     palette: palette,
                     isDark: isDark,
-                    onCrosshairChange: { readout in
-                        crosshairReadout = readout
-                    }
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            case .candleKit:
-                CandleKitAdapterView(
-                    candles: closedCandles,
-                    formingCandle: formingCandle,
-                    liveTick: liveTick,
-                    overlayModel: overlayModel,
-                    timeframe: timeframe,
-                    pricePrecision: pricePrecision,
-                    palette: palette,
-                    isDark: isDark,
+                    resetTrigger: fitRequestToken,
                     onCrosshairChange: { readout in
                         crosshairReadout = readout
                     }
@@ -175,6 +143,7 @@ public struct ConfluenceChartContainerView: View {
                     pricePrecision: pricePrecision,
                     palette: palette,
                     isDark: isDark,
+                    resetTrigger: fitRequestToken,
                     preferDesktop: $tradingViewPreferDesktop
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

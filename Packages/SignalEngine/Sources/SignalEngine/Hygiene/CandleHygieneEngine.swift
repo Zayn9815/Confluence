@@ -237,4 +237,61 @@ public enum CandleHygieneEngine {
         }
         return result
     }
+
+    /// Causally resamples closed 15m candles into exact UTC-aligned 30m candles (:00 / :30 UTC boundaries).
+    /// Drops any incomplete forming bucket whose `bucketClose > serverNowEpochSeconds` so forming bars
+    /// are never falsely marked closed. Preserves `nil` volume for OTC feeds when all constituent bars lack volume.
+    public static func resample15MTo30M(
+        m15Candles: [Candle],
+        serverNowEpochSeconds: TimeInterval
+    ) -> [Candle] {
+        let bucketSeconds: TimeInterval = Timeframe.m30.seconds // 1_800
+        var dedupedByOpen: [TimeInterval: Candle] = [:]
+        for bar in m15Candles where bar.isClosed
+            && bar.closeTimeEpochSeconds <= serverNowEpochSeconds
+            && bar.open.isFinite && bar.high.isFinite && bar.low.isFinite && bar.close.isFinite
+            && bar.open > 0 && bar.high >= max(bar.open, bar.close) && bar.low <= min(bar.open, bar.close) {
+            dedupedByOpen[bar.openTimeEpochSeconds] = bar
+        }
+
+        var buckets: [TimeInterval: [Candle]] = [:]
+        for bar in dedupedByOpen.values {
+            let bucketStart = floor(bar.openTimeEpochSeconds / bucketSeconds) * bucketSeconds
+            buckets[bucketStart, default: []].append(bar)
+        }
+
+        var result: [Candle] = []
+        for bucketStart in buckets.keys.sorted() {
+            let bucketClose = bucketStart + bucketSeconds
+            let isClosed = bucketClose <= serverNowEpochSeconds
+            guard let group = buckets[bucketStart]?.sorted(by: { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }),
+                  let first = group.first,
+                  let last = group.last
+            else { continue }
+
+            // Require bucket close elapsed (never mark forming 30m bars as closed);
+            // also verify both constituent 15m slots when still within an active bucket boundary.
+            let hasBothSlots = group.count >= 2
+            guard isClosed && (hasBothSlots || bucketClose <= serverNowEpochSeconds) else { continue }
+
+            let high = group.map(\.high).max() ?? first.high
+            let low = group.map(\.low).min() ?? first.low
+            let volumes = group.compactMap(\.volume)
+            let totalVolume: Double? = volumes.isEmpty ? nil : volumes.reduce(0, +)
+
+            result.append(
+                Candle(
+                    openTimeEpochSeconds: bucketStart,
+                    closeTimeEpochSeconds: bucketClose,
+                    open: first.open,
+                    high: high,
+                    low: low,
+                    close: last.close,
+                    volume: totalVolume,
+                    isClosed: isClosed
+                )
+            )
+        }
+        return result
+    }
 }

@@ -107,12 +107,17 @@ public enum OrderFlowDivergence: String, Codable, Sendable, Equatable, Hashable 
     case bullish = "bullish_div"
     case bearish = "bearish_div"
     case none = "none"
+    case notEvaluated = "not_evaluated"
+
+    public var isDetected: Bool {
+        self == .bullish || self == .bearish
+    }
 
     public var shortTag: String? {
         switch self {
         case .bullish: return "DIV+"
         case .bearish: return "DIV-"
-        case .none: return nil
+        case .none, .notEvaluated: return nil
         }
     }
 }
@@ -121,12 +126,17 @@ public enum OrderFlowAbsorptionState: String, Codable, Sendable, Equatable, Hash
     case bullishAbsorption = "bullish_absorption"
     case bearishAbsorption = "bearish_absorption"
     case none = "none"
+    case notEvaluated = "not_evaluated"
+
+    public var isDetected: Bool {
+        self == .bullishAbsorption || self == .bearishAbsorption
+    }
 
     public var shortTag: String? {
         switch self {
         case .bullishAbsorption: return "ABSORB+"
         case .bearishAbsorption: return "ABSORB-"
-        case .none: return nil
+        case .none, .notEvaluated: return nil
         }
     }
 }
@@ -245,8 +255,8 @@ public struct OrderFlowAssessment: Codable, Sendable, Equatable, Hashable {
     public var isStrongConflict: Bool {
         alignment == .conflicting && (
             confirmedWallBlocksTP1 ||
-            divergence != .none ||
-            absorptionState != .none ||
+            divergence.isDetected ||
+            absorptionState.isDetected ||
             abs(compositeScore) >= 0.40
         )
     }
@@ -264,7 +274,22 @@ public struct OrderFlowAssessment: Codable, Sendable, Equatable, Hashable {
             bidWallPrice: nearestBidWall?.price,
             bidWallConfirmed: nearestBidWall?.isConfirmed ?? false,
             askWallPrice: nearestAskWall?.price,
-            askWallConfirmed: nearestAskWall?.isConfirmed ?? false
+            askWallConfirmed: nearestAskWall?.isConfirmed ?? false,
+            spreadBps: spreadBps,
+            bidWallDistanceBps: nearestBidWall?.distanceBps,
+            askWallDistanceBps: nearestAskWall?.distanceBps,
+            bidWallSizeMultiple: nearestBidWall?.sizeMultipleOfMedian,
+            askWallSizeMultiple: nearestAskWall?.sizeMultipleOfMedian,
+            longLiquidationRatio: longLiquidationRatio,
+            shortLiquidationRatio: shortLiquidationRatio,
+            liquidationExhaustionDirectionRaw: liquidationExhaustionDirection.rawValue,
+            compositeScore: compositeScore,
+            confirmedWallBlocksTP1: confirmedWallBlocksTP1,
+            tradeSampleCount: tradeSampleCount,
+            capturedAtEpochSeconds: timestampEpochSeconds,
+            divergenceRaw: divergence.rawValue,
+            absorptionRaw: absorptionState.rawValue,
+            isLowLiquidity: isLowLiquidity
         )
     }
 
@@ -280,8 +305,8 @@ public struct OrderFlowAssessment: Codable, Sendable, Equatable, Hashable {
             micropriceBias: 0,
             cvdRatio: 0,
             tradeSampleCount: 0,
-            divergence: .none,
-            absorptionState: .none,
+            divergence: .notEvaluated,
+            absorptionState: .notEvaluated,
             nearestBidWall: nil,
             nearestAskWall: nil,
             longLiquidationRatio: 0,
@@ -306,10 +331,11 @@ public enum OrderFlowAnalyzer {
     public static let wallMedianMultipleThreshold: Double = 3.0
 
     /// Timeframe-aware base weight for Order Flow inside `ConfluenceScorer`.
-    /// Stronger on execution timeframes (`15m`, `1H`), smoothly tapered on swing timeframes (`4H`, `1D`).
+    /// Stronger on execution timeframes (`15m`, `30m`, `1H`), smoothly tapered on swing timeframes (`4H`, `1D`).
     public static func timeframeBaseWeight(for timeframe: Timeframe) -> Double {
         switch timeframe {
         case .m15: return 1.25
+        case .m30: return 1.125
         case .h1: return 1.00
         case .h4: return 0.65
         case .d1: return 0.40
@@ -465,10 +491,16 @@ public enum OrderFlowAnalyzer {
             : 0.0
 
         let minMeaningfulMoveBps = max(5.0, spreadBps * 1.2)
-        var divergence: OrderFlowDivergence = .none
-        var absorptionState: OrderFlowAbsorptionState = .none
+        var divergence: OrderFlowDivergence
+        var absorptionState: OrderFlowAbsorptionState
 
-        if validTrades.count >= minTradesForCVDAndAbsorption, totalTradeVol > 0 {
+        if !snap.isLiveWebSocket || validTrades.count < minTradesForCVDAndAbsorption || totalTradeVol <= 0 {
+            divergence = .notEvaluated
+            absorptionState = .notEvaluated
+        } else {
+            divergence = .none
+            absorptionState = .none
+
             let halfIdx = validTrades.count / 2
             let firstHalf = validTrades[0..<halfIdx]
             let secondHalf = validTrades[halfIdx..<validTrades.count]
@@ -552,7 +584,7 @@ public enum OrderFlowAnalyzer {
         switch divergence {
         case .bullish: rawComposite += 0.22
         case .bearish: rawComposite -= 0.22
-        case .none: break
+        case .none, .notEvaluated: break
         }
 
         // Resting walls: confirmed WS walls carry full weight; unconfirmed REST/flash walls weighted conservatively (0.35x)
@@ -685,8 +717,8 @@ public enum OrderFlowAnalyzer {
             micropriceBias: 0,
             cvdRatio: 0,
             tradeSampleCount: snap.recentTrades.count,
-            divergence: .none,
-            absorptionState: .none,
+            divergence: .notEvaluated,
+            absorptionState: .notEvaluated,
             nearestBidWall: nil,
             nearestAskWall: nil,
             longLiquidationRatio: 0,

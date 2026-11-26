@@ -218,7 +218,7 @@ public struct MarketsFeedsSettingsView: View {
             } header: {
                 Text("Live Price Feeds & Chart View")
             } footer: {
-                Text("Live feeds run only while the app is open (up to 8 symbols). Twelve Data is never used for live streaming or polling. Clearing the TradingView cache signs out your embedded TradingView Web session and deletes local web cookies.")
+                Text("Recommended defaults: Auto live feeds, CandleKit chart engine, and Confluence full-screen chart. Live feeds run only while the app is open (up to 8 symbols) and never use Twelve Data. Clearing the TradingView cache signs out your embedded TradingView Web session and deletes local web cookies.")
             }
 
             Section {

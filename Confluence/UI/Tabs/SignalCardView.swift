@@ -2,6 +2,127 @@ import SwiftUI
 @preconcurrency import Pow
 import SignalEngine
 
+// MARK: - Native SwiftUI Wrapping Flow Layout (Zero Mid-Word Pill Clipping)
+
+public struct ConfluenceFlowLayout: Layout {
+    public var horizontalSpacing: CGFloat
+    public var verticalSpacing: CGFloat
+
+    public init(horizontalSpacing: CGFloat = 6, verticalSpacing: CGFloat = 6) {
+        self.horizontalSpacing = horizontalSpacing
+        self.verticalSpacing = verticalSpacing
+    }
+
+    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX > 0 && currentX + size.width > maxWidth {
+                currentX = 0
+                currentY += rowHeight + verticalSpacing
+                rowHeight = 0
+            }
+            totalWidth = max(totalWidth, currentX + size.width)
+            currentX += size.width + horizontalSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: proposal.width ?? totalWidth, height: currentY + rowHeight)
+    }
+
+    public func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var currentX = bounds.minX
+        var currentY = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX > bounds.minX && currentX + size.width > bounds.maxX {
+                currentX = bounds.minX
+                currentY += rowHeight + verticalSpacing
+                rowHeight = 0
+            }
+            subview.place(
+                at: CGPoint(x: currentX, y: currentY),
+                proposal: ProposedViewSize(width: min(size.width, bounds.width), height: size.height)
+            )
+            currentX += size.width + horizontalSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+// MARK: - Isolated Live Price Leaf Views (Zero Parent Card Invalidation on Ticks)
+
+private struct SignalLivePriceLeafView: View {
+    let symbol: String
+    let marketClass: MarketClass
+    let referencePrice: Double?
+    let livePriceService: LivePriceService
+    let palette: ConfluencePalette
+
+    var body: some View {
+        if let quote = livePriceService.latest(for: symbol) {
+            let prec = PriceFormatHelper.precision(
+                for: symbol,
+                marketClass: marketClass,
+                referencePrice: referencePrice ?? quote.price
+            )
+            let isUp = (referencePrice.map { quote.price >= $0 } ?? true)
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(quote.isStreaming ? palette.longEmerald : palette.secondaryInk)
+                    .frame(width: 5, height: 5)
+                Text(prec.format(quote.price))
+                    .font(.caption2.weight(.bold).monospacedDigit())
+                    .foregroundStyle(isUp ? palette.longEmerald : palette.shortCrimson)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(palette.elevatedSurface, in: Capsule())
+        }
+    }
+}
+
+private struct SignalMiniChartLeafView: View {
+    let symbol: String
+    let candles: [Candle]
+    let levels: TradeLevels?
+    let overlays: ChartOverlayData
+    let palette: ConfluencePalette
+    let height: CGFloat
+    let livePriceService: LivePriceService
+
+    @State private var throttledLivePrice: Double? = nil
+    @State private var miniThrottle = LiveChartThrottle(minimumIntervalSeconds: 1.0)
+
+    var body: some View {
+        let latestPrice = livePriceService.latest(for: symbol)?.price
+        MiniCandlestickCanvas(
+            candles: candles,
+            levels: levels,
+            overlays: overlays,
+            palette: palette,
+            height: height,
+            livePrice: throttledLivePrice ?? latestPrice
+        )
+        .onChange(of: latestPrice) { _, newPrice in
+            guard let newPrice else { return }
+            let now = Date().timeIntervalSince1970
+            if miniThrottle.shouldEmit(at: now) {
+                throttledLivePrice = newPrice
+            }
+        }
+    }
+}
+
+// MARK: - Signal Card View (Clean Collapsed Face + In-Place Smooth Expansion)
+
 public struct SignalCardView: View {
     let signal: TradeSignal
     let outcome: SignalOutcomeRecord?
@@ -9,7 +130,6 @@ public struct SignalCardView: View {
     let brokerOffsetInfo: BrokerPriceOffset?
     let isBrokerAdjusted: Bool
     let correlationWarnings: [CorrelationPairWarning]
-    let isTakenInJournal: Bool
     let use24HourTime: Bool
     let useUTCTimeZone: Bool
     let palette: ConfluencePalette
@@ -19,25 +139,23 @@ public struct SignalCardView: View {
     let hapticsEnabled: Bool
     let isSelecting: Bool
     let isSelected: Bool
-    let livePrice: Double?
+    let isExpanded: Bool
+    let livePriceService: LivePriceService
+    let onToggleExpand: () -> Void
     let onToggleSelect: (() -> Void)?
     let onDelete: (() -> Void)?
     let onToggleBrokerAdjusted: (() -> Void)?
     let onOpenPositionSizer: (() -> Void)?
-    let onMarkAsTaken: (() -> Void)?
+    let onOpenOrderFlow: ((ChartOrderFlowSummary) -> Void)?
     let onOpenGlossaryTerm: ((String) -> Void)?
     let onOpenChart: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var showStrategies = false
-    @State private var showBreakdown = false
-    @State private var showPsychology = true
+    @State private var showStrategyDetails = false
     @State private var showScoreExplanation = false
     @State private var arrivalTriggerCount = 0
     @State private var didCopy = false
-    @State private var throttledLivePrice: Double? = nil
-    @State private var miniThrottle = LiveChartThrottle(minimumIntervalSeconds: 1.0)
 
     public init(
         signal: TradeSignal,
@@ -46,7 +164,6 @@ public struct SignalCardView: View {
         brokerOffsetInfo: BrokerPriceOffset? = nil,
         isBrokerAdjusted: Bool = false,
         correlationWarnings: [CorrelationPairWarning] = [],
-        isTakenInJournal: Bool = false,
         use24HourTime: Bool = false,
         useUTCTimeZone: Bool = false,
         palette: ConfluencePalette,
@@ -56,12 +173,14 @@ public struct SignalCardView: View {
         hapticsEnabled: Bool,
         isSelecting: Bool = false,
         isSelected: Bool = false,
-        livePrice: Double? = nil,
+        isExpanded: Bool = false,
+        livePriceService: LivePriceService,
+        onToggleExpand: @escaping () -> Void = {},
         onToggleSelect: (() -> Void)? = nil,
         onDelete: (() -> Void)? = nil,
         onToggleBrokerAdjusted: (() -> Void)? = nil,
         onOpenPositionSizer: (() -> Void)? = nil,
-        onMarkAsTaken: (() -> Void)? = nil,
+        onOpenOrderFlow: ((ChartOrderFlowSummary) -> Void)? = nil,
         onOpenGlossaryTerm: ((String) -> Void)? = nil,
         onOpenChart: @escaping () -> Void
     ) {
@@ -71,7 +190,6 @@ public struct SignalCardView: View {
         self.brokerOffsetInfo = brokerOffsetInfo
         self.isBrokerAdjusted = isBrokerAdjusted
         self.correlationWarnings = correlationWarnings
-        self.isTakenInJournal = isTakenInJournal
         self.use24HourTime = use24HourTime
         self.useUTCTimeZone = useUTCTimeZone
         self.palette = palette
@@ -81,35 +199,48 @@ public struct SignalCardView: View {
         self.hapticsEnabled = hapticsEnabled
         self.isSelecting = isSelecting
         self.isSelected = isSelected
-        self.livePrice = livePrice
+        self.isExpanded = isExpanded
+        self.livePriceService = livePriceService
+        self.onToggleExpand = onToggleExpand
         self.onToggleSelect = onToggleSelect
         self.onDelete = onDelete
         self.onToggleBrokerAdjusted = onToggleBrokerAdjusted
         self.onOpenPositionSizer = onOpenPositionSizer
-        self.onMarkAsTaken = onMarkAsTaken
+        self.onOpenOrderFlow = onOpenOrderFlow
         self.onOpenGlossaryTerm = onOpenGlossaryTerm
         self.onOpenChart = onOpenChart
-        _throttledLivePrice = State(initialValue: livePrice)
     }
 
     private var activeLevels: TradeLevels? {
         displayLevelsOverride ?? signal.levels
     }
 
+    private var compactPreviewLine: String {
+        let stratCount = max(signal.matchedStrategyIDs.count, signal.alignedStrategies.count)
+        let proDir = signal.psychologyReport.proDirection.rawValue.capitalized
+        var parts: [String] = []
+        if stratCount > 0 {
+            parts.append("\(stratCount) \(stratCount == 1 ? "strategy" : "strategies")")
+        }
+        parts.append("Pro: \(proDir)")
+        parts.append(signal.killzone.displayName)
+        return parts.joined(separator: " · ")
+    }
+
     public var body: some View {
         let dec = PriceFormatHelper.decimals(for: signal.symbol, marketClass: signal.marketClass, referencePrice: activeLevels?.entryMid)
         let accentBorder: Color? = {
             if isSelecting && isSelected { return palette.shortCrimson.opacity(0.85) }
-            if signal.tier == .aPlusInstitutional { return palette.champagneGold.opacity(0.65) }
-            if signal.category == .trapAlert { return palette.trapAmber.opacity(0.65) }
+            if signal.tier == .aPlusInstitutional { return palette.champagneGold.opacity(0.60) }
+            if signal.category == .trapAlert { return palette.trapAmber.opacity(0.60) }
             return nil
         }()
         let gridCols: [GridItem] = dynamicTypeSize.isAccessibilitySize
             ? [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
             : [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
 
-        VStack(alignment: .leading, spacing: density == .compact ? 10 : 13) {
-            // 1. Header Row: Selection Checkmark (when selecting), Market, Pair, Direction/Trap Badge, Score Gauge
+        VStack(alignment: .leading, spacing: density == .compact ? 10 : 12) {
+            // 1. Header Row: Selection Checkmark (when selecting), Market/TF/Direction, Symbol + Isolated Live Price, Score Ring
             HStack(alignment: .center, spacing: 10) {
                 if isSelecting {
                     Button {
@@ -128,18 +259,25 @@ public struct SignalCardView: View {
                         badgePill(signal.timeframe.displayLabel, color: palette.primaryInk, fill: palette.elevatedSurface)
                         directionOrTrapBadge
                     }
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .center, spacing: 6) {
                         Text(signal.symbol)
                             .font(.headline.weight(.bold))
                             .foregroundStyle(palette.primaryInk)
-                        Text(signal.strengthBreakdown?.strengthLabel ?? signal.tier.displayName)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(palette.color(for: signal.tier))
+                            .lineLimit(1)
+                        SignalLivePriceLeafView(
+                            symbol: signal.symbol,
+                            marketClass: signal.marketClass,
+                            referencePrice: activeLevels?.entryMid ?? signal.recentCandles.last?.close,
+                            livePriceService: livePriceService,
+                            palette: palette
+                        )
                     }
-                    // Persisted signal generation date, formatted time (12h/24h, Local/UTC) & relative age
-                    HStack(spacing: 4) {
-                        Image(systemName: "clock")
-                            .font(.system(size: 9, weight: .semibold))
+                    HStack(spacing: 5) {
+                        Text(signal.strengthBreakdown?.strengthLabel ?? signal.tier.displayName)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(palette.color(for: signal.tier))
+                        Text("·")
+                            .font(.system(size: 10))
                             .foregroundStyle(palette.tertiaryInk)
                         Text(formattedGeneratedStamp(epochSeconds: signal.generatedAtEpochSeconds))
                             .font(.system(size: 10, weight: .medium).monospacedDigit())
@@ -148,49 +286,27 @@ public struct SignalCardView: View {
                             .minimumScaleFactor(0.85)
                     }
                 }
-                Spacer()
+                Spacer(minLength: 4)
                 confidenceGauge
             }
 
-            // 2. Lifecycle, Correlation, Broker Offset, Regime, Killzone, Market Closed & News Catalyst Pills
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    if let lifecycle = lifecycleBadge {
-                        badgePill(lifecycle.text, color: lifecycle.color, fill: lifecycle.color.opacity(0.15))
+            // 2. Compact Status Row (Max 3 high-signal pills: Lifecycle + Regime + Tappable Order Flow Sign)
+            ConfluenceFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+                if let lifecycle = lifecycleBadge {
+                    badgePill(lifecycle.text, color: lifecycle.color, fill: lifecycle.color.opacity(0.14))
+                }
+                badgePill(signal.regime.badgeLabel, color: palette.color(for: signal.regime), fill: palette.color(for: signal.regime).opacity(0.14))
+                if signal.marketClass == .crypto, let ofSummary = signal.orderFlowSummary {
+                    OrderFlowSignPill(summary: ofSummary, palette: palette) {
+                        onOpenOrderFlow?(ofSummary)
                     }
-                    if isTakenInJournal {
-                        badgePill("Taken · Journal", color: palette.champagneGold, fill: palette.champagneGold.opacity(0.16))
-                    }
-                    ForEach(correlationWarnings.prefix(2)) { warn in
-                        badgePill(warn.badgeText, color: palette.trapAmber, fill: palette.trapAmber.opacity(0.15))
-                    }
-                    if let offsetInfo = brokerOffsetInfo {
-                        Button {
-                            onToggleBrokerAdjusted?()
-                        } label: {
-                            let staleSuffix = offsetInfo.isStale() ? " · Stale >24h" : ""
-                            let label = isBrokerAdjusted ? "Broker-Adjusted\(staleSuffix)" : "Feed Prices (Tap for Broker)"
-                            badgePill(label, color: isBrokerAdjusted ? palette.macroIceBlue : palette.secondaryInk, fill: (isBrokerAdjusted ? palette.macroIceBlue : palette.elevatedSurface).opacity(isBrokerAdjusted ? 0.16 : 1.0))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    badgePill(signal.regime.badgeLabel, color: palette.color(for: signal.regime), fill: palette.color(for: signal.regime).opacity(0.14))
-                    badgePill(signal.killzone.displayName, color: palette.secondaryInk, fill: palette.elevatedSurface)
-                    badgePill("HTF \(signal.htfTimeframe.displayLabel): \(signal.htfBias.rawValue.uppercased())", color: palette.color(for: signal.htfBias), fill: palette.elevatedSurface)
-                    if signal.isMarketClosedSnapshot {
-                        let reasonText = signal.marketClosedReason ?? "Last Bar"
-                        badgePill("Market Closed · \(reasonText)", color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
-                    }
-                    if let pre = signal.preNewsBadge {
-                        badgePill(pre, color: palette.macroIceBlue, fill: palette.macroIceBlue.opacity(0.14))
-                    }
-                    if let post = signal.postNewsCatalystBadge {
-                        badgePill(post, color: palette.champagneGold, fill: palette.champagneGold.opacity(0.14))
-                    }
+                } else if signal.isMarketClosedSnapshot {
+                    let reasonText = signal.marketClosedReason ?? "Closed"
+                    badgePill("Market Closed · \(reasonText)", color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
                 }
             }
 
-            // 3. Pure SwiftUI Canvas Mini-Chart (tap -> full-screen LightweightCharts)
+            // 3. Non-Interactive Mini Candlestick Snapshot (tap -> FullScreenChartSheet)
             if showMiniChart && !signal.recentCandles.isEmpty {
                 Button {
                     if isSelecting {
@@ -200,21 +316,15 @@ public struct SignalCardView: View {
                     }
                 } label: {
                     ZStack(alignment: .topTrailing) {
-                        MiniCandlestickCanvas(
+                        SignalMiniChartLeafView(
+                            symbol: signal.symbol,
                             candles: signal.recentCandles,
                             levels: signal.levels,
                             overlays: signal.overlays,
                             palette: palette,
-                            height: density == .compact ? 86 : 112,
-                            livePrice: throttledLivePrice
+                            height: density == .compact ? 84 : 108,
+                            livePriceService: livePriceService
                         )
-                        .onChange(of: livePrice) { _, newPrice in
-                            guard let newPrice else { return }
-                            let now = Date().timeIntervalSince1970
-                            if miniThrottle.shouldEmit(at: now) {
-                                throttledLivePrice = newPrice
-                            }
-                        }
                         Label("Interactive", systemImage: "arrow.up.left.and.arrow.down.right")
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(palette.secondaryInk)
@@ -227,7 +337,7 @@ public struct SignalCardView: View {
                 .buttonStyle(.plain)
             }
 
-            // 4. Numeric Execution Grid (Code owns ALL numbers; switches cleanly to 2-col at AX3 Dynamic Type)
+            // 4. 2x3 Numeric Trade Grid (Code owns ALL numbers; semantic emerald for TP1 & TP2)
             if let lv = activeLevels {
                 let levelDec = PriceFormatHelper.decimals(for: signal.symbol, marketClass: signal.marketClass, referencePrice: lv.entryMid)
                 LazyVGrid(columns: gridCols, spacing: 8) {
@@ -259,7 +369,7 @@ public struct SignalCardView: View {
                             title: "TARGET 2",
                             value: PriceFormatHelper.format(lv.tp2, decimals: levelDec),
                             sub: "+\(String(format: "%.2f", lv.reward2Percent))%",
-                            accent: palette.macroIceBlue
+                            accent: palette.longEmerald
                         )
                     } else {
                         metricCell(
@@ -278,202 +388,43 @@ public struct SignalCardView: View {
                 }
             }
 
-            // 5. Expandable Signal Strength Breakdown (4 transparent quantitative pillars)
-            if let bd = signal.strengthBreakdown {
-                VStack(alignment: .leading, spacing: 6) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { showBreakdown.toggle() }
-                    } label: {
-                        HStack {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.caption2)
-                                .foregroundStyle(palette.macroIceBlue)
-                            Text("Signal Strength Breakdown · \(bd.strengthLabel)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.secondaryInk)
-                            Spacer()
-                            Image(systemName: showBreakdown ? "chevron.up" : "chevron.down")
-                                .font(.caption2)
-                                .foregroundStyle(palette.tertiaryInk)
-                        }
-                    }
-                    .buttonStyle(.plain)
-
-                    if showBreakdown {
-                        VStack(alignment: .leading, spacing: 6) {
-                            breakdownRow("Technical Math (ICT / Trend / HTF)", score: bd.technicalScore)
-                            breakdownRow("Psychology & Positioning", score: bd.psychologyScore)
-                            breakdownRow("News & Macro Catalyst", score: bd.newsMacroScore)
-                            breakdownRow("Regime & Session Risk Adj.", score: bd.regimeRiskAdjustment)
-                            Divider().overlay(palette.border)
-                            HStack {
-                                Text("Raw Confluence Score")
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(palette.primaryInk)
-                                Spacer()
-                                Text("\(Int(bd.finalConfidencePercent.rounded()))/100 · \(bd.strengthLabel)")
-                                    .font(.caption2.weight(.bold).monospacedDigit())
-                                    .foregroundStyle(palette.color(for: signal.tier))
-                            }
-                            if let calProb = signal.calibratedProbability {
-                                HStack {
-                                    Text("Calibrated Win Prob. (n=\(signal.calibrationSampleCount ?? 100))")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(palette.macroIceBlue)
-                                    Spacer()
-                                    Text("\(Int((calProb * 100.0).rounded()))%")
-                                        .font(.caption2.weight(.bold).monospacedDigit())
-                                        .foregroundStyle(palette.macroIceBlue)
-                                }
-                            }
-                            if !bd.notes.isEmpty {
-                                Text(bd.notes.joined(separator: " · "))
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(palette.tertiaryInk)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .padding(10)
-                        .background(palette.elevatedSurface.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                }
-            }
-
-            // 6. Matched Strategies Provenance Chips (Expandable with Glossary (i) deep-link)
-            if !signal.alignedStrategies.isEmpty || !signal.matchedStrategyIDs.isEmpty {
-                let matchedCount = max(signal.matchedStrategyIDs.count, signal.alignedStrategies.count)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) { showStrategies.toggle() }
-                        } label: {
-                            HStack {
-                                Text("Matched Strategies (\(matchedCount))")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(palette.secondaryInk)
-                                Spacer()
-                                if !signal.alignedStrategies.isEmpty {
-                                    Image(systemName: showStrategies ? "chevron.up" : "chevron.down")
-                                        .font(.caption2)
-                                        .foregroundStyle(palette.tertiaryInk)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-
-                        if let onOpenGlossaryTerm {
-                            Button {
-                                onOpenGlossaryTerm("")
-                            } label: {
-                                Image(systemName: "info.circle")
-                                    .font(.caption)
-                                    .foregroundStyle(palette.macroIceBlue)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Open strategy glossary")
-                        }
-                    }
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            if !signal.matchedStrategyIDs.isEmpty {
-                                ForEach(signal.matchedStrategyIDs) { sid in
-                                    Button {
-                                        onOpenGlossaryTerm?(sid.displayName)
-                                    } label: {
-                                        badgePill(sid.displayName, color: palette.primaryInk, fill: palette.elevatedSurface)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            } else {
-                                ForEach(signal.alignedStrategies) { strat in
-                                    Button {
-                                        onOpenGlossaryTerm?(strat.name)
-                                    } label: {
-                                        badgePill(strat.name, color: palette.primaryInk, fill: palette.elevatedSurface)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    }
-
-                    if showStrategies {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(signal.alignedStrategies) { strat in
-                                HStack(alignment: .top, spacing: 8) {
-                                    Circle()
-                                        .fill(palette.color(for: strat.direction))
-                                        .frame(width: 6, height: 6)
-                                        .padding(.top, 5)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        HStack {
-                                            Text(strat.name)
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(palette.primaryInk)
-                                            Spacer()
-                                            Text("W \(String(format: "%.2f", strat.weight)) · WR \(Int((strat.historicalWinRate * 100).rounded()))%")
-                                                .font(.caption2.monospacedDigit())
-                                                .foregroundStyle(palette.tertiaryInk)
-                                        }
-                                        Text(strat.detail)
-                                            .font(.caption2)
-                                            .foregroundStyle(palette.secondaryInk)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(10)
-                        .background(palette.elevatedSurface.opacity(0.75), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                }
-            }
-
-            // 7. Market Psychology & Pro-vs-Beginner Module
-            psychologyModule
-
-            // 8. Optional Gemini 4 Hydrogen 1-line Bear / Invalidation Badge
-            if let ai = signal.aiJudgment {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: signal.aiConfirmed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(signal.aiConfirmed ? palette.champagneGold : palette.trapAmber)
-                        .font(.caption)
+            // 5. Full-Width "Show more info" / "Hide info" Toggle Bar
+            Button {
+                onToggleExpand()
+            } label: {
+                HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(signal.aiConfirmed ? "Gemini 4 Hydrogen Confirmed (Q\(ai.setupQuality)/3 · \(Int((ai.confidence * 100).rounded()))%)" : "Gemini 4 Hydrogen Caution (Q\(ai.setupQuality)/3 · \(ai.riskState.rawValue))")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(signal.aiConfirmed ? palette.champagneGold : palette.trapAmber)
-                        Text(ai.invalidationCheck)
-                            .font(.caption2)
-                            .foregroundStyle(palette.secondaryInk)
+                        Text(isExpanded ? "Hide info" : "Show more info")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.primaryInk)
+                        if !isExpanded {
+                            Text(compactPreviewLine)
+                                .font(.system(size: 10))
+                                .foregroundStyle(palette.secondaryInk)
+                                .lineLimit(1)
+                        }
                     }
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(palette.champagneGold)
+                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
                 }
-                .padding(10)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(palette.elevatedSurface.opacity(0.8), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(palette.elevatedSurface, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .strokeBorder(palette.border, lineWidth: 0.75)
+                )
             }
+            .buttonStyle(.plain)
 
-            // 9. Footer Actions: Bar Timestamp + Size + Mark Taken + Delete + Copy Setup (AX3-adaptive via ViewThatFits)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Bar \(TimeDisplayFormatter.formatDateTime(epochSeconds: signal.barCloseEpochSeconds, use24Hour: use24HourTime, useUTC: useUTCTimeZone))")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(palette.tertiaryInk)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 7) {
-                        actionButtons(decimals: dec)
-                        Spacer(minLength: 0)
-                    }
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack(spacing: 7) {
-                            sizeAndJournalButtons
-                        }
-                        HStack(spacing: 7) {
-                            deleteAndCopyButtons(decimals: dec)
-                        }
-                    }
-                }
+            // 6. Expanded In-Place Institutional Details
+            if isExpanded {
+                expandedDetailContent(decimals: dec)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(density == .compact ? 12 : 15)
@@ -490,18 +441,18 @@ public struct SignalCardView: View {
             } label: {
                 Label("Open Interactive Chart", systemImage: "chart.xyaxis.line")
             }
+            if signal.marketClass == .crypto, let ofSummary = signal.orderFlowSummary {
+                Button {
+                    onOpenOrderFlow?(ofSummary)
+                } label: {
+                    Label("Order Flow Breakdown", systemImage: "waveform.path.ecg")
+                }
+            }
             if let onOpenPositionSizer, activeLevels != nil {
                 Button {
                     onOpenPositionSizer()
                 } label: {
                     Label("Position Size Calculator", systemImage: "function")
-                }
-            }
-            if let onMarkAsTaken {
-                Button {
-                    onMarkAsTaken()
-                } label: {
-                    Label(isTakenInJournal ? "Edit Journal Entry" : "Mark as Taken", systemImage: "book.closed")
                 }
             }
             Button {
@@ -526,80 +477,280 @@ public struct SignalCardView: View {
         }
     }
 
-    @ViewBuilder
-    private func actionButtons(decimals dec: Int) -> some View {
-        sizeAndJournalButtons
-        deleteAndCopyButtons(decimals: dec)
-    }
+    // MARK: - Expanded In-Place Content
 
     @ViewBuilder
-    private var sizeAndJournalButtons: some View {
-        if let onOpenPositionSizer, activeLevels != nil {
-            Button {
-                onOpenPositionSizer()
-            } label: {
-                Label("Size", systemImage: "function")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(palette.macroIceBlue)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(palette.elevatedSurface, in: Capsule())
-                    .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
-            }
-            .buttonStyle(.plain)
-        }
-        if let onMarkAsTaken {
-            Button {
-                onMarkAsTaken()
-            } label: {
-                Label(isTakenInJournal ? "Journal" : "Mark Taken", systemImage: isTakenInJournal ? "checkmark.circle.fill" : "book.closed")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(isTakenInJournal ? palette.champagneGold : palette.primaryInk)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(palette.elevatedSurface, in: Capsule())
-                    .overlay(Capsule().strokeBorder(isTakenInJournal ? palette.champagneGold.opacity(0.6) : palette.border, lineWidth: 0.75))
-            }
-            .buttonStyle(.plain)
-        }
-    }
+    private func expandedDetailContent(decimals dec: Int) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Wrapping context pills (zero mid-word clipping)
+            ConfluenceFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+                badgePill(signal.killzone.displayName, color: palette.secondaryInk, fill: palette.elevatedSurface)
+                badgePill("HTF \(signal.htfTimeframe.displayLabel): \(signal.htfBias.rawValue.uppercased())", color: palette.color(for: signal.htfBias), fill: palette.elevatedSurface)
 
-    @ViewBuilder
-    private func deleteAndCopyButtons(decimals dec: Int) -> some View {
-        if !isSelecting, let onDelete {
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Image(systemName: "trash")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(palette.shortCrimson.opacity(0.85))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .background(palette.elevatedSurface, in: Capsule())
-                    .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+                ForEach(correlationWarnings.prefix(3)) { warn in
+                    badgePill(warn.badgeText, color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
+                }
+                if let offsetInfo = brokerOffsetInfo {
+                    Button {
+                        onToggleBrokerAdjusted?()
+                    } label: {
+                        let staleSuffix = offsetInfo.isStale() ? " · Stale >24h" : ""
+                        let label = isBrokerAdjusted ? "Broker-Adjusted\(staleSuffix)" : "Feed Prices (Tap for Broker)"
+                        badgePill(
+                            label,
+                            color: isBrokerAdjusted ? palette.champagneGold : palette.secondaryInk,
+                            fill: (isBrokerAdjusted ? palette.champagneGold : palette.elevatedSurface).opacity(isBrokerAdjusted ? 0.16 : 1.0)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                if signal.isMarketClosedSnapshot {
+                    let reasonText = signal.marketClosedReason ?? "Last Bar"
+                    badgePill("Market Closed · \(reasonText)", color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
+                }
+                if let pre = signal.preNewsBadge {
+                    badgePill(pre, color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
+                }
+                if let post = signal.postNewsCatalystBadge {
+                    badgePill(post, color: palette.champagneGold, fill: palette.champagneGold.opacity(0.14))
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Delete signal")
-        }
 
-        Button {
-            UIPasteboard.general.string = formattedSetupCopyText(decimals: dec)
-            SignalSoundEngine.shared.playCopyConfirmationHaptic(enabled: hapticsEnabled)
-            withAnimation { didCopy = true }
-            Task {
-                try? await Task.sleep(nanoseconds: 1_400_000_000)
-                withAnimation { didCopy = false }
+            // Signal Strength Breakdown (4 transparent quantitative pillars)
+            if let bd = signal.strengthBreakdown {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.caption2)
+                            .foregroundStyle(palette.champagneGold)
+                        Text("Signal Strength Breakdown · \(bd.strengthLabel)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.primaryInk)
+                    }
+                    breakdownRow("Technical Math (ICT / Trend / HTF)", score: bd.technicalScore)
+                    breakdownRow("Psychology & Positioning", score: bd.psychologyScore)
+                    breakdownRow("News & Macro Catalyst", score: bd.newsMacroScore)
+                    breakdownRow("Regime & Session Risk Adj.", score: bd.regimeRiskAdjustment)
+                    Divider().overlay(palette.border)
+                    HStack {
+                        Text("Raw Confluence Score")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(palette.primaryInk)
+                        Spacer()
+                        Text("\(Int(bd.finalConfidencePercent.rounded()))/100 · \(bd.strengthLabel)")
+                            .font(.caption2.weight(.bold).monospacedDigit())
+                            .foregroundStyle(palette.color(for: signal.tier))
+                    }
+                    if let calProb = signal.calibratedProbability {
+                        HStack {
+                            Text("Calibrated Win Prob. (n=\(signal.calibrationSampleCount ?? 100))")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(palette.secondaryInk)
+                            Spacer()
+                            Text("\(Int((calProb * 100.0).rounded()))%")
+                                .font(.caption2.weight(.bold).monospacedDigit())
+                                .foregroundStyle(palette.champagneGold)
+                        }
+                    }
+                    if !bd.notes.isEmpty {
+                        Text(bd.notes.joined(separator: " · "))
+                            .font(.system(size: 10))
+                            .foregroundStyle(palette.tertiaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(10)
+                .background(palette.elevatedSurface.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
-        } label: {
-            Label(didCopy ? "Copied" : "Copy", systemImage: didCopy ? "checkmark" : "doc.on.doc")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(didCopy ? palette.longEmerald : palette.primaryInk)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 6)
-                .background(palette.elevatedSurface, in: Capsule())
-                .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+
+            // Matched Strategies Provenance (Wrapping FlowLayout + Glossary (i) deep-link)
+            if !signal.alignedStrategies.isEmpty || !signal.matchedStrategyIDs.isEmpty {
+                let matchedCount = max(signal.matchedStrategyIDs.count, signal.alignedStrategies.count)
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Text("Matched Strategies (\(matchedCount))")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.primaryInk)
+                        Spacer()
+                        if !signal.alignedStrategies.isEmpty {
+                            Button {
+                                withAnimation(.snappy(duration: 0.22, extraBounce: 0.0)) {
+                                    showStrategyDetails.toggle()
+                                }
+                            } label: {
+                                Text(showStrategyDetails ? "Hide weights" : "Show weights")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(palette.champagneGold)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        if let onOpenGlossaryTerm {
+                            Button {
+                                onOpenGlossaryTerm("")
+                            } label: {
+                                Image(systemName: "info.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(palette.secondaryInk)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Open strategy glossary")
+                        }
+                    }
+
+                    ConfluenceFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+                        if !signal.matchedStrategyIDs.isEmpty {
+                            ForEach(signal.matchedStrategyIDs) { sid in
+                                Button {
+                                    onOpenGlossaryTerm?(sid.displayName)
+                                } label: {
+                                    badgePill(sid.displayName, color: palette.primaryInk, fill: palette.elevatedSurface)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        } else {
+                            ForEach(signal.alignedStrategies) { strat in
+                                Button {
+                                    onOpenGlossaryTerm?(strat.name)
+                                } label: {
+                                    badgePill(StrategyID.displayName(forRawKey: strat.name), color: palette.primaryInk, fill: palette.elevatedSurface)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    if showStrategyDetails {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(signal.alignedStrategies) { strat in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Circle()
+                                        .fill(palette.color(for: strat.direction))
+                                        .frame(width: 6, height: 6)
+                                        .padding(.top, 5)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack {
+                                            Text(StrategyID.displayName(forRawKey: strat.name))
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(palette.primaryInk)
+                                            Spacer()
+                                            Text("W \(String(format: "%.2f", strat.weight)) · WR \(Int((strat.historicalWinRate * 100).rounded()))%")
+                                                .font(.caption2.monospacedDigit())
+                                                .foregroundStyle(palette.tertiaryInk)
+                                        }
+                                        Text(strat.detail)
+                                            .font(.caption2)
+                                            .foregroundStyle(palette.secondaryInk)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(10)
+                        .background(palette.elevatedSurface.opacity(0.75), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            }
+
+            // Market Psychology & Pro-vs-Beginner Module
+            psychologyModule
+
+            // Optional AI Judge 1-line Caution / Confirmation Badge
+            if let ai = signal.aiJudgment {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: signal.aiConfirmed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(signal.aiConfirmed ? palette.champagneGold : palette.trapAmber)
+                        .font(.caption)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(signal.aiConfirmed ? "AI Judge Confirmed (Q\(ai.setupQuality)/3 · \(Int((ai.confidence * 100).rounded()))%)" : "AI Judge Caution (Q\(ai.setupQuality)/3 · \(ai.riskState.rawValue))")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(signal.aiConfirmed ? palette.champagneGold : palette.trapAmber)
+                        Text(ai.invalidationCheck)
+                            .font(.caption2)
+                            .foregroundStyle(palette.secondaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(palette.elevatedSurface.opacity(0.8), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
+            // Footer Actions: Bar Timestamp + Position Sizer + Order Flow + Delete + Copy Setup
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Bar \(TimeDisplayFormatter.formatDateTime(epochSeconds: signal.barCloseEpochSeconds, use24Hour: use24HourTime, useUTC: useUTCTimeZone))")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(palette.tertiaryInk)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+
+                ConfluenceFlowLayout(horizontalSpacing: 7, verticalSpacing: 7) {
+                    if let onOpenPositionSizer, activeLevels != nil {
+                        Button {
+                            onOpenPositionSizer()
+                        } label: {
+                            Label("Size", systemImage: "function")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.primaryInk)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(palette.elevatedSurface, in: Capsule())
+                                .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if signal.marketClass == .crypto, let ofSummary = signal.orderFlowSummary {
+                        Button {
+                            onOpenOrderFlow?(ofSummary)
+                        } label: {
+                            Label("Order Flow", systemImage: "waveform.path.ecg")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.champagneGold)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(palette.elevatedSurface, in: Capsule())
+                                .overlay(Capsule().strokeBorder(palette.champagneGold.opacity(0.4), lineWidth: 0.75))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if !isSelecting, let onDelete {
+                        Button(role: .destructive) {
+                            onDelete()
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.shortCrimson.opacity(0.85))
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 6)
+                                .background(palette.elevatedSurface, in: Capsule())
+                                .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Delete signal")
+                    }
+
+                    Button {
+                        UIPasteboard.general.string = formattedSetupCopyText(decimals: dec)
+                        SignalSoundEngine.shared.playCopyConfirmationHaptic(enabled: hapticsEnabled)
+                        withAnimation { didCopy = true }
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_400_000_000)
+                            withAnimation { didCopy = false }
+                        }
+                    } label: {
+                        Label(didCopy ? "Copied" : "Copy", systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(didCopy ? palette.longEmerald : palette.primaryInk)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 6)
+                            .background(palette.elevatedSurface, in: Capsule())
+                            .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
-        .buttonStyle(.plain)
     }
 
     private func formattedSetupCopyText(decimals: Int) -> String {
@@ -633,7 +784,7 @@ public struct SignalCardView: View {
         } else {
             ageText = "\(Int(ageSeconds / 86_400))d ago"
         }
-        return "Generated \(dateTime) · \(ageText)"
+        return "\(dateTime) · \(ageText)"
     }
 
     private func entryZoneCell(low: String, high: String, mid: String) -> some View {
@@ -675,7 +826,6 @@ public struct SignalCardView: View {
         }
     }
 
-    /// Explicit icon + text direction badge (never color-only, supporting color-blind & VoiceOver users).
     private var directionOrTrapBadge: some View {
         Group {
             if signal.category == .trapAlert, let trap = signal.trapDirection {
@@ -694,11 +844,11 @@ public struct SignalCardView: View {
     private var lifecycleBadge: (text: String, color: Color)? {
         guard signal.category == .strongSignal || signal.category == .trapAlert else { return nil }
         guard let rec = outcome else {
-            return ("Pending Fill", palette.macroIceBlue)
+            return ("Pending Fill", palette.secondaryInk)
         }
         switch rec.status {
         case .pending:
-            return ("Pending Fill", palette.macroIceBlue)
+            return ("Pending Fill", palette.secondaryInk)
         case .open:
             return ("Open · Filled", palette.champagneGold)
         case .hitTP2:
@@ -753,7 +903,7 @@ public struct SignalCardView: View {
                 if let calPct {
                     Text("Cal \(calPct)%")
                         .font(.system(size: 9, weight: .bold).monospacedDigit())
-                        .foregroundStyle(palette.macroIceBlue)
+                        .foregroundStyle(palette.champagneGold)
                 }
             }
         }
@@ -773,23 +923,14 @@ public struct SignalCardView: View {
     private var psychologyModule: some View {
         let psych = signal.psychologyReport
         return VStack(alignment: .leading, spacing: 8) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { showPsychology.toggle() }
-            } label: {
-                HStack {
-                    Image(systemName: "brain.head.profile")
-                        .font(.caption)
-                        .foregroundStyle(palette.champagneGold)
-                    Text("Market Psychology & Pro vs. Beginner")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.primaryInk)
-                    Spacer()
-                    Image(systemName: showPsychology ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(palette.tertiaryInk)
-                }
+            HStack(spacing: 6) {
+                Image(systemName: "brain.head.profile")
+                    .font(.caption)
+                    .foregroundStyle(palette.champagneGold)
+                Text("Market Psychology & Pro vs. Beginner")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.primaryInk)
             }
-            .buttonStyle(.plain)
 
             VStack(spacing: 7) {
                 HStack(spacing: 8) {
@@ -839,38 +980,36 @@ public struct SignalCardView: View {
             .padding(9)
             .background(palette.elevatedSurface.opacity(0.8), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    badgePill(psych.provenanceBadge, color: palette.macroIceBlue, fill: palette.macroIceBlue.opacity(0.12))
-                    ForEach(psych.behavioralBadges, id: \.self) { b in
-                        badgePill(b, color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
-                    }
+            // Wrapping FlowLayout so long badges like "Osler Round-Number Sweep" never clip mid-word
+            ConfluenceFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+                badgePill(psych.provenanceBadge, color: palette.secondaryInk, fill: palette.elevatedSurface)
+                ForEach(psych.behavioralBadges, id: \.self) { b in
+                    badgePill(b, color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
                 }
             }
 
-            if showPsychology {
-                VStack(alignment: .leading, spacing: 7) {
-                    psychLine(label: "What Happened", text: psych.whatHappened, accent: palette.primaryInk)
-                    psychLine(label: "Beginner Mistake / Trap", text: psych.beginnerPsychology, accent: palette.trapAmber)
-                    psychLine(label: "Institutional Play", text: psych.proPsychology, accent: palette.longEmerald)
+            VStack(alignment: .leading, spacing: 7) {
+                psychLine(label: "What Happened", text: psych.whatHappened, accent: palette.primaryInk)
+                psychLine(label: "Beginner Mistake / Trap", text: psych.beginnerPsychology, accent: palette.trapAmber)
+                psychLine(label: "Institutional Play", text: psych.proPsychology, accent: palette.longEmerald)
 
-                    if signal.category == .weakSignal && !signal.rejectionReasons.isEmpty {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Why Filtered Out")
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(palette.shortCrimson)
-                            ForEach(signal.rejectionReasons, id: \.self) { reason in
-                                Text("• \(reason)")
-                                    .font(.caption2)
-                                    .foregroundStyle(palette.secondaryInk)
-                            }
+                if signal.category == .weakSignal && !signal.rejectionReasons.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Why Filtered Out")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(palette.shortCrimson)
+                        ForEach(signal.rejectionReasons, id: \.self) { reason in
+                            Text("• \(reason)")
+                                .font(.caption2)
+                                .foregroundStyle(palette.secondaryInk)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .padding(.top, 2)
                     }
+                    .padding(.top, 2)
                 }
-                .padding(10)
-                .background(palette.canvas.opacity(0.55), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
+            .padding(10)
+            .background(palette.canvas.opacity(0.55), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }
 
@@ -911,6 +1050,7 @@ public struct SignalCardView: View {
         Text(text)
             .font(.system(size: 10, weight: .semibold).monospacedDigit())
             .foregroundStyle(color)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(fill, in: Capsule())
@@ -924,6 +1064,7 @@ public struct SignalCardView: View {
                 .font(.system(size: 10, weight: .semibold).monospacedDigit())
         }
         .foregroundStyle(color)
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
         .background(fill, in: Capsule())

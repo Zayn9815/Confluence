@@ -62,8 +62,14 @@ public struct MarketsScannerTabView: View {
                                 Text("ENTRY TF")
                                     .font(.system(size: 10, weight: .bold))
                                     .foregroundStyle(palette.tertiaryInk)
-                                Picker("Entry", selection: $coordinator.settings.payload.entryTimeframe) {
+                                Picker("Entry", selection: Binding(
+                                    get: { coordinator.settings.payload.entryTimeframe },
+                                    set: { newTF in
+                                        coordinator.handleEntryTimeframeChanged(to: newTF)
+                                    }
+                                )) {
                                     Text("15m").tag(Timeframe.m15)
+                                    Text("30m").tag(Timeframe.m30)
                                     Text("1H").tag(Timeframe.h1)
                                 }
                                 .pickerStyle(.segmented)
@@ -122,9 +128,15 @@ public struct MarketsScannerTabView: View {
                     // 2. Live Active Traps Summary
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Label("Active Behavioral Traps (\(coordinator.activeTraps.count))", systemImage: "exclamationmark.triangle.fill")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(palette.trapAmber)
+                            if coordinator.activeTraps.isEmpty {
+                                Label("Behavioral Traps Clear (0)", systemImage: "checkmark.shield.fill")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(palette.longEmerald)
+                            } else {
+                                Label("Active Behavioral Traps (\(coordinator.activeTraps.count))", systemImage: "exclamationmark.triangle.fill")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(palette.trapAmber)
+                            }
                             Spacer()
                         }
                         if coordinator.activeTraps.isEmpty {
@@ -144,7 +156,7 @@ public struct MarketsScannerTabView: View {
                                                 .foregroundStyle(palette.trapAmber)
                                             Text(trap.state.rawValue.uppercased())
                                                 .font(.system(size: 9, weight: .semibold))
-                                                .foregroundStyle(palette.macroIceBlue)
+                                                .foregroundStyle(palette.secondaryInk)
                                         }
                                         Text(trap.detail)
                                             .font(.caption2)
@@ -211,9 +223,11 @@ public struct MarketsScannerTabView: View {
                 }
                 .padding(14)
             }
+            .safeAreaPadding(.bottom, 96)
             .background(palette.canvas)
             .navigationTitle("Markets & Scanner")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(palette.canvas, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     NotificationBellButton(

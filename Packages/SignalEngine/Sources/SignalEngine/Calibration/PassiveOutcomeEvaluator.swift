@@ -563,6 +563,7 @@ public enum PassiveOutcomeEvaluator {
     public static func defaultFillWindowBars(for timeframe: Timeframe) -> Int {
         switch timeframe {
         case .m15: return 16
+        case .m30: return 12
         case .h1: return 12
         case .h4: return 6
         case .d1: return 3
@@ -892,9 +893,7 @@ public enum PassiveOutcomeEvaluator {
             let bestRegimes = byRegime.filter { $0.1 > 0 }.sorted { $0.1 > $1.1 }.prefix(2).map(\.0)
             let worstRegimes = byRegime.filter { $0.1 <= 0 }.sorted { $0.1 < $1.1 }.prefix(2).map(\.0)
 
-            let prettyName = sid
-                .replacingOccurrences(of: "_", with: " ")
-                .capitalized
+            let prettyName = StrategyID.displayName(forRawKey: sid)
 
             return StrategyDiagnosticBreakdown(
                 strategyId: sid,

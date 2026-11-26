@@ -97,8 +97,14 @@ jobs:
             test -f "$APP_PATH/$caf" || { echo "Missing $caf in Confluence.app root!"; exit 1; }
           done
 
-          echo "Checking LightweightCharts resources inside app bundle..."
-          find "$APP_PATH" -maxdepth 3 -iname "*lightweight*" -print
+          echo "Asserting zero removed chart framework bundles inside app bundle..."
+          REMOVED_BUNDLES=$(find "$APP_PATH" -maxdepth 4 \( -iname "*lightweight*" -o -iname "*SwiftTradingView*" \) -print)
+          if [ -n "$REMOVED_BUNDLES" ]; then
+            echo "FAIL: Found removed chart package artifacts in Confluence.app:"
+            echo "$REMOVED_BUNDLES"
+            exit 1
+          fi
+          echo "Verified zero LightweightCharts or external SwiftTradingView bundles in Confluence.app."
 
           rm -rf build/Payload Confluence.ipa
           mkdir -p build/Payload

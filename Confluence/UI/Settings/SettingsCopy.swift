@@ -228,7 +228,7 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
             return SettingCopy(
                 label: "Chart rendering engine",
                 subtitle: "Choose the interactive candlestick engine used for full-screen charts.",
-                helpText: "Switch seamlessly between TradingView LightweightCharts (default), DGCharts (native UIKit candlesticks), Swift Trading View (SwiftUI Canvas + MA/Volume), CandleKit (120Hz SwiftUI Canvas with native order lines), and TradingView Web (persistent logged-in tradingview.com with Clean Mode & 1-tap Sync Pair)."
+                helpText: "Switch seamlessly between CandleKit (default 120Hz SwiftUI Canvas with native order lines), DGCharts (native CoreGraphics candlesticks with price-axis drag-to-scale), Swift Trading View (native multi-pane SwiftUI Canvas with MA and Volume), and TradingView Web (persistent logged-in tradingview.com with Clean Mode & 1-tap Sync Pair)."
             )
         case .defaultChartView:
             return SettingCopy(
@@ -264,7 +264,7 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
             return SettingCopy(
                 label: "Match to broker price",
                 subtitle: "Shift displayed prices to match your broker's quote without altering analysis.",
-                helpText: "Adds the difference between your broker's live price and the data feed's price purely for display and copying levels. Engine math, calibration stats, and demo fills are never altered."
+                helpText: "Adds the difference between your broker's live price and the data feed's price purely for display and copying levels. Engine math, calibration stats, and automatic journal fills are never altered."
             )
 
         // Category 4 — Signal Rules & AI
@@ -345,13 +345,13 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
         case .backupAndRestore:
             return SettingCopy(
                 label: "Backup and restore",
-                subtitle: "Save or restore your settings, history, journal, and demo wallet.",
+                subtitle: "Save or restore your settings, history, and automatic signal journal.",
                 helpText: "Exports a versioned schema v2 JSON backup (previous v1 backups remain importable). Keychain keys are never included, and all exports pass through SecretRedactor."
             )
         case .spreadsheetExports:
             return SettingCopy(
                 label: "Spreadsheet exports",
-                subtitle: "Export your trade ledger, journal, or demo wallet history to spreadsheet files.",
+                subtitle: "Export your trade ledger or automatic signal journal to spreadsheet files.",
                 helpText: "Generates standard RFC-4180 CSV files compatible with Excel, Numbers, and Google Sheets, scrubbed by SecretRedactor."
             )
         case .diagnosticsAndLogs:
@@ -366,7 +366,7 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
     /// Plain-English display labels for enum pickers (never alters Codable raw values).
     public static func displayLabel(for mode: TradeLevelMode) -> String {
         switch mode {
-        case .structureATR: return "Market structure & volatility (Recommended)"
+        case .structureATR: return "Market structure & volatility"
         case .fixedPercent: return "Fixed percentage distances"
         }
     }
@@ -380,7 +380,7 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
 
     public static func displayLabel(for pref: TradFiProviderPreference) -> String {
         switch pref {
-        case .auto: return "Automatic with fallback (Recommended)"
+        case .auto: return "Automatic with fallback"
         case .twelveData: return "Twelve Data (requires personal key)"
         case .biquote: return "biquote.io"
         case .yahooFinance: return "Yahoo Finance"
@@ -389,7 +389,7 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
 
     public static func displayLabel(for exchange: CryptoExchangePreference) -> String {
         switch exchange {
-        case .auto: return "Automatic with fallback (Recommended)"
+        case .auto: return "Automatic with fallback"
         case .binanceVision: return "Binance Vision"
         case .okx: return "OKX"
         case .kraken: return "Kraken"
@@ -399,7 +399,7 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
 
     public static func displayLabel(for mode: StrategySelectionMode) -> String {
         switch mode {
-        case .defaultAll: return "All built-in confirmations (Recommended)"
+        case .defaultAll: return "All built-in confirmations"
         case .custom: return "Custom rule mix"
         }
     }

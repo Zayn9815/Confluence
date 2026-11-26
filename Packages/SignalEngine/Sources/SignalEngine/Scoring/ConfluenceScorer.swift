@@ -257,8 +257,16 @@ public enum ConfluenceScorer {
         }()
         let effectiveTraps = trapsAllowed ? traps : []
         let effectivePositioning = positioningAllowed ? positioning : nil
+        let trapFreshnessBars: Int
+        switch timeframe {
+        case .m15: trapFreshnessBars = 5
+        case .m30: trapFreshnessBars = 4
+        case .h1: trapFreshnessBars = 4
+        case .h4: trapFreshnessBars = 3
+        case .d1: trapFreshnessBars = 2
+        }
         let actionableTraps = effectiveTraps.filter(\.isActionable)
-        let freshTrap = actionableTraps.last(where: { candles.count - 1 - $0.triggerBarIndex <= 4 || $0.state == .returned })
+        let freshTrap = actionableTraps.last(where: { candles.count - 1 - $0.triggerBarIndex <= trapFreshnessBars || $0.state == .returned })
         if config.enabledStrategyGroups.contains(.behavioralTrap), let trap = freshTrap {
             allContributions.append(
                 StrategyContribution(
@@ -847,7 +855,7 @@ public enum ConfluenceScorer {
             case .aligned:
                 let boost = min(9.0, max(2.0, abs(orderFlowAssessment.compositeScore) * 7.5) * tfWeight)
                 psychScore += boost
-                if orderFlowAssessment.absorptionState != .none {
+                if orderFlowAssessment.absorptionState.isDetected {
                     notes.append("Crypto \(orderFlowAssessment.venue) passive absorption aligned (+\(String(format: "%.1f", boost)))")
                 } else {
                     notes.append("Crypto \(orderFlowAssessment.venue) Order Flow aligned (+\(String(format: "%.1f", boost)))")

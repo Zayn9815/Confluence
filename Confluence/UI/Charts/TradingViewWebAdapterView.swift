@@ -57,6 +57,45 @@ private struct PersistedWebCookieRecord: Codable, Sendable {
     }
 }
 
+private actor CookieVaultStorage {
+    private let fileName: String
+
+    init(fileName: String = "tv_session_cookies.json") {
+        self.fileName = fileName
+    }
+
+    private func vaultURL() -> URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent(fileName, isDirectory: false)
+    }
+
+    func save(_ records: [PersistedWebCookieRecord]) {
+        guard let url = vaultURL() else { return }
+        do {
+            let dir = url.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(records)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            // Non-fatal: WebKit's default store still holds cookies in-process.
+        }
+    }
+
+    func load() -> [PersistedWebCookieRecord] {
+        guard let url = vaultURL(),
+              let data = try? Data(contentsOf: url),
+              let records = try? JSONDecoder().decode([PersistedWebCookieRecord].self, from: data)
+        else { return [] }
+        return records
+    }
+
+    func clear() {
+        guard let url = vaultURL() else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
 // MARK: - Leak-Free Script Message Handler
 
 @MainActor
@@ -234,8 +273,8 @@ public final class TradingViewWebSessionManager {
     private var forwardObservation: NSKeyValueObservation?
     private var hasLoadedInitialPage: Bool = false
     private var cookieFlushTask: Task<Void, Never>?
+    private let cookieVault = CookieVaultStorage(fileName: "tv_session_cookies.json")
 
-    private static let cookieVaultFileName = "tv_session_cookies.json"
     private static let scriptBridgeName = "confluenceBridge"
     private static let defaultChartURLString = "https://www.tradingview.com/chart/"
     private static let safariUserAgent =
@@ -260,7 +299,8 @@ public final class TradingViewWebSessionManager {
                 seedCookiesAndLoadInitial(
                     webView: existing,
                     fallbackSymbol: initialSymbol,
-                    fallbackTimeframe: initialTimeframe
+                    fallbackTimeframe: initialTimeframe,
+                    isDark: isDark
                 )
             }
             return existing
@@ -305,7 +345,8 @@ public final class TradingViewWebSessionManager {
         seedCookiesAndLoadInitial(
             webView: wv,
             fallbackSymbol: initialSymbol,
-            fallbackTimeframe: initialTimeframe
+            fallbackTimeframe: initialTimeframe,
+            isDark: isDark
         )
         return wv
     }
@@ -357,22 +398,24 @@ public final class TradingViewWebSessionManager {
 
     /// 1-tap **Sync Pair** action: navigates to the active Confluence symbol & timeframe while
     /// preserving any saved user chart layout path (`/chart/<layoutId>/`). Never called automatically.
-    public func syncToSymbol(_ symbol: String, timeframe: Timeframe) {
+    public func syncToSymbol(_ symbol: String, timeframe: Timeframe, isDark: Bool = true) {
         guard let wv = webView else { return }
         loadErrorMessage = nil
         let targetURL = Self.buildSyncURL(
             symbol: symbol,
             timeframe: timeframe,
-            existingURL: currentURL ?? savedChartURL()
+            existingURL: currentURL ?? savedChartURL(),
+            isDark: isDark
         )
         wv.load(URLRequest(url: targetURL))
     }
 
-    /// Pure helper preserving `/chart/<layoutId>/` path while replacing `symbol` & `interval` query items.
+    /// Pure helper preserving `/chart/<layoutId>/` path while replacing `symbol`, `interval`, and `theme` query items.
     public static func buildSyncURL(
         symbol: String,
         timeframe: Timeframe,
-        existingURL: URL?
+        existingURL: URL?,
+        isDark: Bool = true
     ) -> URL {
         let tvSymbol = TradingViewSymbolMapper.tradingViewSymbol(for: symbol)
         let tvInterval = TradingViewSymbolMapper.interval(for: timeframe)
@@ -391,12 +434,13 @@ public final class TradingViewWebSessionManager {
         components.path = basePath
         components.queryItems = [
             URLQueryItem(name: "symbol", value: tvSymbol),
-            URLQueryItem(name: "interval", value: tvInterval)
+            URLQueryItem(name: "interval", value: tvInterval),
+            URLQueryItem(name: "theme", value: isDark ? "dark" : "light")
         ]
         return components.url ?? URL(string: defaultChartURLString)!
     }
 
-    // MARK: - Cookie Vault Persistence (LiveContainer & SideStore Safe)
+    // MARK: - Cookie Vault Persistence (LiveContainer & SideStore Safe, Off-MainActor I/O)
 
     /// Flushes `tradingview.com` cookies from `WKWebsiteDataStore.default().httpCookieStore`
     /// into `Application Support/tv_session_cookies.json` immediately on app backgrounding.
@@ -424,24 +468,12 @@ public final class TradingViewWebSessionManager {
         guard !tvCookies.isEmpty else { return }
 
         let records = tvCookies.map(PersistedWebCookieRecord.init(cookie:))
-        guard let vaultURL = Self.cookieVaultFileURL() else { return }
-
-        do {
-            let dir = vaultURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(records)
-            try data.write(to: vaultURL, options: [.atomic])
-        } catch {
-            // Non-fatal: WebKit's default store still holds cookies in-process.
-        }
+        await cookieVault.save(records)
     }
 
     private func reseedCookiesFromVault() async {
-        guard let vaultURL = Self.cookieVaultFileURL(),
-              let data = try? Data(contentsOf: vaultURL),
-              let records = try? JSONDecoder().decode([PersistedWebCookieRecord].self, from: data),
-              !records.isEmpty
-        else { return }
+        let records = await cookieVault.load()
+        guard !records.isEmpty else { return }
 
         let now = Date().timeIntervalSince1970
         let cookieStore = WKWebsiteDataStore.default().httpCookieStore
@@ -450,12 +482,6 @@ public final class TradingViewWebSessionManager {
                 await cookieStore.setCookie(cookie)
             }
         }
-    }
-
-    private static func cookieVaultFileURL() -> URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?
-            .appendingPathComponent(cookieVaultFileName, isDirectory: false)
     }
 
     // MARK: - Complete Sign-Out & Cache Wipe
@@ -498,10 +524,8 @@ public final class TradingViewWebSessionManager {
         currentURL = nil
         loadErrorMessage = nil
 
-        // Delete persisted Cookie Vault file
-        if let vaultURL = Self.cookieVaultFileURL() {
-            try? FileManager.default.removeItem(at: vaultURL)
-        }
+        // Delete persisted Cookie Vault file off-main-actor
+        await cookieVault.clear()
 
         // Delete saved last chart URL
         UserDefaults.standard.removeObject(forKey: BackupArchiveService.tvLastChartURLDefaultsKey)
@@ -525,12 +549,17 @@ public final class TradingViewWebSessionManager {
     private func seedCookiesAndLoadInitial(
         webView wv: WKWebView,
         fallbackSymbol: String,
-        fallbackTimeframe: Timeframe
+        fallbackTimeframe: Timeframe,
+        isDark: Bool
     ) {
         hasLoadedInitialPage = true
         let initialURL = savedChartURL()
-            ?? TradingViewSymbolMapper.webFallbackURL(for: fallbackSymbol, timeframe: fallbackTimeframe)
-            ?? URL(string: Self.defaultChartURLString)!
+            ?? Self.buildSyncURL(
+                symbol: fallbackSymbol,
+                timeframe: fallbackTimeframe,
+                existingURL: nil,
+                isDark: isDark
+            )
 
         Task { @MainActor [weak self, weak wv] in
             await self?.reseedCookiesFromVault()
@@ -802,7 +831,7 @@ private struct TradingViewWebContainerView: UIViewRepresentable {
     }
 }
 
-// MARK: - TradingView Full Web Adapter View (Liquid Glass Utility Bar + Signal HUD)
+// MARK: - TradingView Full Web Adapter View (Liquid Glass Utility Bar)
 
 public struct TradingViewWebAdapterView: View {
     public let symbol: String
@@ -811,9 +840,9 @@ public struct TradingViewWebAdapterView: View {
     public let pricePrecision: ChartPricePrecision
     public let palette: ConfluencePalette
     public let isDark: Bool
+    public let resetTrigger: Int
     @Binding public var preferDesktop: Bool
 
-    @State private var showSignalHUD: Bool = true
     @AppStorage("tv_web_signin_tip_dismissed") private var isSignInTipDismissed: Bool = false
 
     private var session: TradingViewWebSessionManager {
@@ -827,6 +856,7 @@ public struct TradingViewWebAdapterView: View {
         pricePrecision: ChartPricePrecision,
         palette: ConfluencePalette,
         isDark: Bool,
+        resetTrigger: Int = 0,
         preferDesktop: Binding<Bool>
     ) {
         self.symbol = symbol
@@ -835,15 +865,16 @@ public struct TradingViewWebAdapterView: View {
         self.pricePrecision = pricePrecision
         self.palette = palette
         self.isDark = isDark
+        self.resetTrigger = resetTrigger
         self._preferDesktop = preferDesktop
     }
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Compact iOS 27 Liquid Glass utility bar
+            // Compact Liquid Glass utility bar
             HStack(spacing: 6) {
                 Button {
-                    session.syncToSymbol(symbol, timeframe: timeframe)
+                    session.syncToSymbol(symbol, timeframe: timeframe, isDark: isDark)
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.triangle.2.circlepath")
@@ -904,18 +935,6 @@ public struct TradingViewWebAdapterView: View {
                             .frame(width: 26, height: 26)
                     }
                     .accessibilityLabel("Clean Chart Mode")
-
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            showSignalHUD.toggle()
-                        }
-                    } label: {
-                        Image(systemName: showSignalHUD ? "eye.fill" : "eye.slash")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(showSignalHUD ? palette.champagneGold : palette.secondaryInk)
-                            .frame(width: 26, height: 26)
-                    }
-                    .accessibilityLabel("Toggle Signal HUD")
                 }
                 .foregroundStyle(palette.primaryInk)
                 .buttonStyle(.plain)
@@ -943,7 +962,7 @@ public struct TradingViewWebAdapterView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "person.badge.key.fill")
                         .font(.system(size: 10))
-                        .foregroundStyle(palette.macroIceBlue)
+                        .foregroundStyle(palette.secondaryInk)
                     Text("Sign in with TradingView email/username & password to keep layouts saved (Google blocks embedded WebView Sign-In).")
                         .font(.system(size: 10))
                         .foregroundStyle(palette.secondaryInk)
@@ -961,7 +980,7 @@ public struct TradingViewWebAdapterView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(palette.macroIceBlue.opacity(0.10))
+                .background(palette.elevatedSurface)
             }
 
             // Inline Offline / Error Retry Banner
@@ -989,27 +1008,13 @@ public struct TradingViewWebAdapterView: View {
                 .background(palette.shortCrimson.opacity(0.14))
             }
 
-            // Persistent WebView + Non-Blocking Floating Liquid Glass Signal Level HUD
-            ZStack(alignment: .topLeading) {
-                TradingViewWebContainerView(
-                    symbol: symbol,
-                    timeframe: timeframe,
-                    preferDesktop: preferDesktop,
-                    isDark: isDark
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if showSignalHUD && overlayModel.hasAnyOverlayLevels {
-                    ChartSignalOverlayHUD(
-                        overlayModel: overlayModel,
-                        precision: pricePrecision,
-                        palette: palette,
-                        engineBadge: "TV Full Web"
-                    )
-                    .padding(10)
-                    .allowsHitTesting(false)
-                }
-            }
+            // Persistent WebView (unobstructed chart canvas)
+            TradingViewWebContainerView(
+                symbol: symbol,
+                timeframe: timeframe,
+                preferDesktop: preferDesktop,
+                isDark: isDark
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }

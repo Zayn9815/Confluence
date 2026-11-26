@@ -78,9 +78,12 @@ public struct SignalRulesSettingsView: View {
                         Text("Minimum strength threshold")
                         Spacer()
                         Text("\(Int(coordinator.settings.payload.minimumConfidencePercent.rounded()))/100")
-                            .monospacedDigit()
-                            .fontWeight(.bold)
+                            .font(.subheadline.weight(.bold).monospacedDigit())
                             .foregroundStyle(palette.longEmerald)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(palette.longEmerald.opacity(0.14), in: Capsule())
                     }
                     Slider(value: $coordinator.settings.payload.minimumConfidencePercent, in: 55...95, step: 1)
                 }
@@ -207,7 +210,7 @@ public struct SignalRulesSettingsView: View {
                                     Text(String(format: "%.2f%%", coordinator.settings.payload.fixedTP2Percent))
                                         .monospacedDigit()
                                         .fontWeight(.semibold)
-                                        .foregroundStyle(palette.macroIceBlue)
+                                        .foregroundStyle(palette.longEmerald)
                                 }
                                 Slider(value: $coordinator.settings.payload.fixedTP2Percent, in: 1.0...20.0, step: 0.5)
                             }
@@ -380,7 +383,7 @@ public struct SignalRulesSettingsView: View {
                                  ? "≥\(Int(coordinator.settings.payload.calibrationMinConfidencePercent.rounded()))"
                                  : "Any")
                                 .font(.caption.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(palette.macroIceBlue)
+                                .foregroundStyle(palette.champagneGold)
                         }
                         HStack(spacing: 6) {
                             ForEach(calibrationConfidencePresets, id: \.self) { val in
@@ -393,7 +396,7 @@ public struct SignalRulesSettingsView: View {
                                         .foregroundStyle(selected ? palette.canvas : palette.primaryInk)
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 5)
-                                        .background(selected ? palette.macroIceBlue : palette.elevatedSurface, in: Capsule())
+                                        .background(selected ? palette.champagneGold : palette.elevatedSurface, in: Capsule())
                                 }
                                 .buttonStyle(.plain)
                             }

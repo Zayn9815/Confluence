@@ -43,44 +43,6 @@ public enum ChartPagingPolicy {
     }
 }
 
-/// Builds a safe, zero-dependency JavaScript `autoscaleInfoProvider` for `LightweightChartsIOS` v5.2.0
-/// that fits the Y-axis to visible candles + core trade levels within ±20% without deleting extreme
-/// Trap or Target 2 lines from the chart.
-public enum ChartAutoscaleScriptBuilder {
-    public static func makeProviderJS(
-        corePrices: [Double],
-        maxDeviationFraction: Double = 0.20
-    ) -> String {
-        let valid = corePrices.filter { $0.isFinite && $0 > 0 }
-        let coreArray = valid.map { String(format: "%.8f", $0) }.joined(separator: ",")
-        let maxDev = String(format: "%.4f", max(0.05, min(maxDeviationFraction, 0.50)))
-        return """
-        function(original) {
-            var res = original();
-            if (!res || !res.priceRange) { return res; }
-            var lo = res.priceRange.minValue;
-            var hi = res.priceRange.maxValue;
-            if (!isFinite(lo) || !isFinite(hi) || hi <= 0) { return res; }
-            var mid = (lo + hi) * 0.5;
-            var core = [\(coreArray)];
-            var minAllowed = lo;
-            var maxAllowed = hi;
-            for (var i = 0; i < core.length; i++) {
-                var p = core[i];
-                if (mid > 0 && Math.abs(p - mid) / mid <= \(maxDev)) {
-                    if (p < minAllowed) { minAllowed = p; }
-                    if (p > maxAllowed) { maxAllowed = p; }
-                }
-            }
-            return {
-                priceRange: { minValue: minAllowed, maxValue: maxAllowed },
-                margins: res.margins
-            };
-        }
-        """
-    }
-}
-
 /// Display-only controller for `FullScreenChartSheet` managing closed history, lazy pan-left paging,
 /// and live display-only forming candle updates. Forming candles NEVER flow back to `SignalEngine`.
 @MainActor

@@ -189,6 +189,7 @@ public actor TwelveDataAdapter {
         let interval: String
         switch timeframe {
         case .m15: interval = "15min"
+        case .m30: interval = "30min"
         case .h1: interval = "1h"
         case .h4: interval = "4h"
         case .d1: interval = "1day"

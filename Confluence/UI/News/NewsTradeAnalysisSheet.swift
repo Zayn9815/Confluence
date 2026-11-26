@@ -310,7 +310,7 @@ public struct NewsTradeAnalysisSheet: View {
                     levelBox("ENTRY ZONE", "\(PriceFormatHelper.format(lv.entryLow, decimals: dec))\nto \(PriceFormatHelper.format(lv.entryHigh, decimals: dec))", sub: "Mid \(PriceFormatHelper.format(lv.entryMid, decimals: dec))", accent: palette.champagneGold)
                     levelBox("STOP LOSS", PriceFormatHelper.format(lv.stopLoss, decimals: dec), sub: "-\(String(format: "%.2f", lv.riskPercent))% Risk", accent: palette.shortCrimson)
                     levelBox("TARGET 1", PriceFormatHelper.format(lv.tp1, decimals: dec), sub: "+\(String(format: "%.2f", lv.reward1Percent))%", accent: palette.longEmerald)
-                    levelBox("TARGET 2", lv.isTP2Enabled ? PriceFormatHelper.format(lv.tp2, decimals: dec) : "Disabled", sub: lv.isTP2Enabled ? "+\(String(format: "%.2f", lv.reward2Percent))%" : "Settings -> Rules", accent: palette.macroIceBlue)
+                    levelBox("TARGET 2", lv.isTP2Enabled ? PriceFormatHelper.format(lv.tp2, decimals: dec) : "Disabled", sub: lv.isTP2Enabled ? "+\(String(format: "%.2f", lv.reward2Percent))%" : "Settings -> Rules", accent: lv.isTP2Enabled ? palette.longEmerald : palette.tertiaryInk)
                 }
             }
 
@@ -355,7 +355,7 @@ public struct NewsTradeAnalysisSheet: View {
                     .foregroundStyle(palette.canvas)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(isActionable ? palette.champagneGold : palette.macroIceBlue, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(isActionable ? palette.champagneGold : palette.primaryInk, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }

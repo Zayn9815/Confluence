@@ -86,29 +86,44 @@ public struct ConfidenceCalibrator: Codable, Sendable, Equatable {
         let eligible = records.filter {
             filter.matchesRecord($0) && filter.isCountedInWinRateDenominator($0.status)
         }
-        guard eligible.count >= minimumSamples else {
+        let samples: [(score: Double, isWin: Bool)] = eligible.map { rec in
+            let prob = rec.predictedProbability.isFinite ? min(1.0, max(0.0, rec.predictedProbability)) : 0.5
+            return (score: prob * 100.0, isWin: filter.isCountedWin(rec.status))
+        }
+        return fitPlatt(samples: samples)
+    }
+
+    /// Fits walk-forward Platt scaling directly over resolved automatic `TrackedJournalTrade` entries
+    /// (excluding `.pending`, `.live`, and `.expired`; strictly inactive until `N >= minimumSamples`).
+    public static func fit(
+        journalEntries: [TrackedJournalTrade]
+    ) -> ConfidenceCalibrator {
+        let eligible = journalEntries.filter { $0.status.isCountedWin || $0.status.isCountedLoss }
+        let samples: [(score: Double, isWin: Bool)] = eligible.map { entry in
+            let safeScore = entry.score.isFinite ? min(100.0, max(0.0, entry.score)) : 50.0
+            return (score: safeScore, isWin: entry.status.isCountedWin)
+        }
+        return fitPlatt(samples: samples)
+    }
+
+    private static func fitPlatt(samples: [(score: Double, isWin: Bool)]) -> ConfidenceCalibrator {
+        guard samples.count >= minimumSamples else {
             return ConfidenceCalibrator(
                 isActive: false,
-                sampleCount: eligible.count,
+                sampleCount: samples.count,
                 slopeA: 1.0,
                 interceptB: 0.0
             )
         }
 
-        let nPos = Double(eligible.filter { filter.isCountedWin($0.status) }.count)
-        let nNeg = Double(eligible.count) - nPos
+        let nPos = Double(samples.filter(\.isWin).count)
+        let nNeg = Double(samples.count) - nPos
         // Platt target smoothing avoids infinite weights on linearly separable subsets
         let tPos = (nPos + 1.0) / (nPos + 2.0)
         let tNeg = 1.0 / (nNeg + 2.0)
 
-        let xs: [Double] = eligible.map { rec in
-            let prob = rec.predictedProbability.isFinite ? min(1.0, max(0.0, rec.predictedProbability)) : 0.5
-            let score = prob * 100.0
-            return (score - 50.0) / 25.0
-        }
-        let ts: [Double] = eligible.map { rec in
-            filter.isCountedWin(rec.status) ? tPos : tNeg
-        }
+        let xs: [Double] = samples.map { ($0.score - 50.0) / 25.0 }
+        let ts: [Double] = samples.map { $0.isWin ? tPos : tNeg }
 
         var a = 1.0
         var b = 0.0
@@ -161,7 +176,7 @@ public struct ConfidenceCalibrator: Codable, Sendable, Equatable {
 
         return ConfidenceCalibrator(
             isActive: true,
-            sampleCount: eligible.count,
+            sampleCount: samples.count,
             slopeA: a,
             interceptB: b
         )

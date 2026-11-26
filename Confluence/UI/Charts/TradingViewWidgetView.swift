@@ -49,6 +49,7 @@ public enum TradingViewSymbolMapper: Sendable {
     public static func interval(for timeframe: Timeframe) -> String {
         switch timeframe {
         case .m15: return "15"
+        case .m30: return "30"
         case .h1: return "60"
         case .h4: return "240"
         case .d1: return "D"

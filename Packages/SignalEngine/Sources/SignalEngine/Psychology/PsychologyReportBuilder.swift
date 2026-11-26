@@ -138,7 +138,7 @@ public enum PsychologyReportBuilder {
                     badge: "\(of.venue) Order Flow",
                     fact: of.warningNote ?? of.summary,
                     proBias: of.directionalBias,
-                    retailBias: (of.absorptionState != .none) ? retailAggressor : .neutral
+                    retailBias: of.absorptionState.isDetected ? retailAggressor : .neutral
                 )
             )
         }
@@ -210,7 +210,7 @@ public enum PsychologyReportBuilder {
         var proDir: TradeDirection = .neutral
         if let trap = latestTrap {
             proDir = trap.direction.institutionalDirection
-        } else if let of = activeOrderFlow, of.absorptionState != .none {
+        } else if let of = activeOrderFlow, of.absorptionState.isDetected {
             proDir = of.absorptionState == .bullishAbsorption ? .long : .short
         } else if signalDirection != .neutral {
             proDir = signalDirection
@@ -227,7 +227,7 @@ public enum PsychologyReportBuilder {
             retailDir = trap.direction.trappedRetailDirection
         } else if let pos = positioning, pos.retailCrowdDirection != .neutral {
             retailDir = pos.retailCrowdDirection
-        } else if let of = activeOrderFlow, of.absorptionState != .none {
+        } else if let of = activeOrderFlow, of.absorptionState.isDetected {
             retailDir = of.absorptionState == .bullishAbsorption ? .short : .long
         } else if let sweep = ict.liquiditySweeps.last {
             retailDir = sweep.reversalDirection.opposite
@@ -294,7 +294,7 @@ public enum PsychologyReportBuilder {
                 ? "Closed-bar active strategy confluence aligned \(signalDirection.rawValue.uppercased()) in \(regime.badgeLabel) regime."
                 : facts.joined(separator: " · ")
 
-            if let of = activeOrderFlow, of.absorptionState != .none {
+            if let of = activeOrderFlow, of.absorptionState.isDetected {
                 let aggDir = of.absorptionState == .bullishAbsorption ? "SELL" : "BUY"
                 beginnerPsych = "Aggressive market \(aggDir) orders hammered the tape (\(String(format: "CVD %+.0f%%", of.cvdRatio * 100))) without breaking price through, trapping impatient breakout chasers."
             } else if retailDir != .neutral && retailDir != signalDirection {
@@ -345,8 +345,19 @@ public enum PsychologyReportBuilder {
         )
     }
 
+    /// Timeframe-aware healthy daily signal cadence threshold (used for overtrading / cadence coaching).
+    public static func healthyDailyCadenceLimit(for timeframe: Timeframe) -> Int {
+        switch timeframe {
+        case .m15: return 12
+        case .m30: return 8
+        case .h1: return 6
+        case .h4: return 3
+        case .d1: return 2
+        }
+    }
+
     /// Adaptive trader-level behavioral audit driven strictly by the user's active `ActiveStrategyProfile`,
-    /// historical outcome stream, and Demo Wallet positions.
+    /// historical outcome stream, and automatic `TrackedJournalTrade` entries.
     ///
     /// - **Rule-Consistent Discipline:** Scores adherence strictly against currently enabled strategies.
     /// - **Filter-Hopping Detection:** Detects repeated switches of non-empty `activeStrategyProfileKey`
@@ -354,12 +365,14 @@ public enum PsychologyReportBuilder {
     ///   `"legacy_baseline"` to a real profile key).
     /// - **Order Flow Conflict Coaching (Crypto Only, when ON):** Flags crypto trades taken against
     ///   strong opposing Order Flow (`orderFlowStatus == "conflicting"`) and quantifies their R:R impact.
+    /// - **Timeframe Cadence Audit:** Evaluates rolling 24h trade frequency against `entryTimeframe` thresholds (`.m30` tuned between `.m15` and `.h1`).
     /// - **Confluence Breadth Insight:** Surfaces calm guidance when narrowed down to 1 core strategy.
     public static func buildBehavioralAudit(
         outcomes: [SignalOutcomeRecord],
-        demoPositions: [DemoPosition] = [],
+        journalEntries: [TrackedJournalTrade] = [],
         activeProfile: ActiveStrategyProfile,
-        marketClass: MarketClass? = nil
+        marketClass: MarketClass? = nil,
+        entryTimeframe: Timeframe = .h1
     ) -> TraderPsychologyCoachReport {
         var insights: [TraderPsychologyInsight] = []
 
@@ -384,14 +397,14 @@ public enum PsychologyReportBuilder {
                 rMultiple: rec.rMultiple
             ))
         }
-        for pos in demoPositions where pos.status.isClosed {
+        for entry in journalEntries where entry.status.isCountedWin || entry.status.isCountedLoss {
             timeline.append(ChronologicalTrade(
-                timestamp: pos.closedAtEpochSeconds ?? pos.createdAtEpochSeconds,
-                profileKey: ActiveStrategyProfile.normalizedKey(pos.activeStrategyProfileKey),
-                isLoss: pos.status == .closedStopLoss || pos.rMultiple < 0,
-                isCrypto: pos.marketClass == .crypto,
-                orderFlowStatus: pos.orderFlowStatus,
-                rMultiple: pos.rMultiple
+                timestamp: entry.closedAt ?? entry.tp1HitAt ?? entry.createdAt,
+                profileKey: entry.effectiveStrategyProfileKey,
+                isLoss: entry.status.isCountedLoss,
+                isCrypto: entry.assetClass == .crypto,
+                orderFlowStatus: entry.orderFlowStatus,
+                rMultiple: entry.effectiveRMultiple
             ))
         }
         timeline.sort { $0.timestamp < $1.timestamp }
@@ -458,7 +471,21 @@ public enum PsychologyReportBuilder {
             ))
         }
 
-        // 3. Confluence Breadth Insight (calm feedback strictly on currently enabled core strategies)
+        // 3. Timeframe-Aware Cadence Check (tuned for 15m / 30m / 1H / 4H / 1D)
+        let cadenceLimit = healthyDailyCadenceLimit(for: entryTimeframe)
+        if let latestTs = timeline.last?.timestamp, latestTs > 0 {
+            let recent24hCount = timeline.filter { latestTs - $0.timestamp <= 86_400 }.count
+            if recent24hCount > cadenceLimit {
+                insights.append(TraderPsychologyInsight(
+                    id: "cadence_overtrading",
+                    title: "Elevated \(entryTimeframe.displayLabel) Setup Cadence",
+                    detail: "\(recent24hCount) resolved setups in 24h exceeds the typical \(entryTimeframe.displayLabel) cadence ceiling (\(cadenceLimit)/day). Prioritize A+ killzone alignment over volume.",
+                    severity: .caution
+                ))
+            }
+        }
+
+        // 4. Confluence Breadth Insight (calm feedback strictly on currently enabled core strategies)
         let coreCount = activeProfile.enabledCoreCount
         if coreCount == 1 {
             insights.append(TraderPsychologyInsight(
@@ -483,7 +510,7 @@ public enum PsychologyReportBuilder {
             ))
         }
 
-        // 4. Rule-Consistent Discipline Score (0...100) evaluated strictly against active rules
+        // 5. Rule-Consistent Discipline Score (0...100) evaluated strictly against active rules
         var discipline = 90.0
         if filterHoppingDetected {
             discipline -= min(30.0, Double(postLossSwitches) * 9.0)

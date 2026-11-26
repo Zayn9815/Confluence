@@ -76,9 +76,8 @@ public struct ChartTrapOverlay: Codable, Sendable, Equatable, Hashable, Identifi
     }
 }
 
-/// Compact Crypto-Only live Order Flow summary attached to `ChartSignalOverlayModel`
-/// for rendering the non-blocking Bid/Ask Pressure Bar, venue badge, absorption/divergence tags,
-/// and optional confirmed resting liquidity walls on all chart engines.
+/// Compact Crypto-Only live Order Flow summary attached to `ChartSignalOverlayModel`, `TradeSignal`,
+/// and `TrackedJournalTrade` for rendering Bid/Ask pressure, plain-English narrative sheets, and AI Reflex Judge context.
 public struct ChartOrderFlowSummary: Codable, Sendable, Equatable, Hashable {
     public let obiWeighted: Double
     public let cvdRatio: Double
@@ -92,6 +91,23 @@ public struct ChartOrderFlowSummary: Codable, Sendable, Equatable, Hashable {
     public let askWallPrice: Double?
     public let askWallConfirmed: Bool
 
+    // Enriched optional fields (backwards-compatible via decodeIfPresent)
+    public let spreadBps: Double?
+    public let bidWallDistanceBps: Double?
+    public let askWallDistanceBps: Double?
+    public let bidWallSizeMultiple: Double?
+    public let askWallSizeMultiple: Double?
+    public let longLiquidationRatio: Double?
+    public let shortLiquidationRatio: Double?
+    public let liquidationExhaustionDirectionRaw: String?
+    public let compositeScore: Double?
+    public let confirmedWallBlocksTP1: Bool?
+    public let tradeSampleCount: Int?
+    public let capturedAtEpochSeconds: TimeInterval?
+    public let divergenceRaw: String?
+    public let absorptionRaw: String?
+    public let isLowLiquidity: Bool?
+
     public init(
         obiWeighted: Double,
         cvdRatio: Double,
@@ -103,7 +119,22 @@ public struct ChartOrderFlowSummary: Codable, Sendable, Equatable, Hashable {
         bidWallPrice: Double? = nil,
         bidWallConfirmed: Bool = false,
         askWallPrice: Double? = nil,
-        askWallConfirmed: Bool = false
+        askWallConfirmed: Bool = false,
+        spreadBps: Double? = nil,
+        bidWallDistanceBps: Double? = nil,
+        askWallDistanceBps: Double? = nil,
+        bidWallSizeMultiple: Double? = nil,
+        askWallSizeMultiple: Double? = nil,
+        longLiquidationRatio: Double? = nil,
+        shortLiquidationRatio: Double? = nil,
+        liquidationExhaustionDirectionRaw: String? = nil,
+        compositeScore: Double? = nil,
+        confirmedWallBlocksTP1: Bool? = nil,
+        tradeSampleCount: Int? = nil,
+        capturedAtEpochSeconds: TimeInterval? = nil,
+        divergenceRaw: String? = nil,
+        absorptionRaw: String? = nil,
+        isLowLiquidity: Bool? = nil
     ) {
         self.obiWeighted = obiWeighted.isFinite ? min(1.0, max(-1.0, obiWeighted)) : 0.0
         self.cvdRatio = cvdRatio.isFinite ? min(1.0, max(-1.0, cvdRatio)) : 0.0
@@ -116,6 +147,62 @@ public struct ChartOrderFlowSummary: Codable, Sendable, Equatable, Hashable {
         self.bidWallConfirmed = bidWallConfirmed
         self.askWallPrice = (askWallPrice != nil && askWallPrice!.isFinite && askWallPrice! > 0) ? askWallPrice : nil
         self.askWallConfirmed = askWallConfirmed
+        self.spreadBps = (spreadBps != nil && spreadBps!.isFinite && spreadBps! >= 0) ? spreadBps : nil
+        self.bidWallDistanceBps = (bidWallDistanceBps != nil && bidWallDistanceBps!.isFinite && bidWallDistanceBps! >= 0) ? bidWallDistanceBps : nil
+        self.askWallDistanceBps = (askWallDistanceBps != nil && askWallDistanceBps!.isFinite && askWallDistanceBps! >= 0) ? askWallDistanceBps : nil
+        self.bidWallSizeMultiple = (bidWallSizeMultiple != nil && bidWallSizeMultiple!.isFinite && bidWallSizeMultiple! > 0) ? bidWallSizeMultiple : nil
+        self.askWallSizeMultiple = (askWallSizeMultiple != nil && askWallSizeMultiple!.isFinite && askWallSizeMultiple! > 0) ? askWallSizeMultiple : nil
+        self.longLiquidationRatio = (longLiquidationRatio != nil && longLiquidationRatio!.isFinite && longLiquidationRatio! >= 0) ? longLiquidationRatio : nil
+        self.shortLiquidationRatio = (shortLiquidationRatio != nil && shortLiquidationRatio!.isFinite && shortLiquidationRatio! >= 0) ? shortLiquidationRatio : nil
+        self.liquidationExhaustionDirectionRaw = liquidationExhaustionDirectionRaw
+        self.compositeScore = (compositeScore != nil && compositeScore!.isFinite) ? min(1.0, max(-1.0, compositeScore!)) : nil
+        self.confirmedWallBlocksTP1 = confirmedWallBlocksTP1
+        self.tradeSampleCount = tradeSampleCount.map { max(0, $0) }
+        self.capturedAtEpochSeconds = (capturedAtEpochSeconds != nil && capturedAtEpochSeconds!.isFinite && capturedAtEpochSeconds! > 0) ? capturedAtEpochSeconds : nil
+        self.divergenceRaw = divergenceRaw
+        self.absorptionRaw = absorptionRaw
+        self.isLowLiquidity = isLowLiquidity
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case obiWeighted, cvdRatio, divergenceTag, absorptionTag, alignment, venue, isLiveStream
+        case bidWallPrice, bidWallConfirmed, askWallPrice, askWallConfirmed
+        case spreadBps, bidWallDistanceBps, askWallDistanceBps, bidWallSizeMultiple, askWallSizeMultiple
+        case longLiquidationRatio, shortLiquidationRatio, liquidationExhaustionDirectionRaw
+        case compositeScore, confirmedWallBlocksTP1, tradeSampleCount, capturedAtEpochSeconds
+        case divergenceRaw, absorptionRaw, isLowLiquidity
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            obiWeighted: (try? c.decode(Double.self, forKey: .obiWeighted)) ?? 0.0,
+            cvdRatio: (try? c.decode(Double.self, forKey: .cvdRatio)) ?? 0.0,
+            divergenceTag: try c.decodeIfPresent(String.self, forKey: .divergenceTag),
+            absorptionTag: try c.decodeIfPresent(String.self, forKey: .absorptionTag),
+            alignment: (try? c.decodeIfPresent(String.self, forKey: .alignment)) ?? "neutral",
+            venue: (try? c.decodeIfPresent(String.self, forKey: .venue)) ?? "",
+            isLiveStream: (try? c.decodeIfPresent(Bool.self, forKey: .isLiveStream)) ?? false,
+            bidWallPrice: try c.decodeIfPresent(Double.self, forKey: .bidWallPrice),
+            bidWallConfirmed: (try? c.decodeIfPresent(Bool.self, forKey: .bidWallConfirmed)) ?? false,
+            askWallPrice: try c.decodeIfPresent(Double.self, forKey: .askWallPrice),
+            askWallConfirmed: (try? c.decodeIfPresent(Bool.self, forKey: .askWallConfirmed)) ?? false,
+            spreadBps: try c.decodeIfPresent(Double.self, forKey: .spreadBps),
+            bidWallDistanceBps: try c.decodeIfPresent(Double.self, forKey: .bidWallDistanceBps),
+            askWallDistanceBps: try c.decodeIfPresent(Double.self, forKey: .askWallDistanceBps),
+            bidWallSizeMultiple: try c.decodeIfPresent(Double.self, forKey: .bidWallSizeMultiple),
+            askWallSizeMultiple: try c.decodeIfPresent(Double.self, forKey: .askWallSizeMultiple),
+            longLiquidationRatio: try c.decodeIfPresent(Double.self, forKey: .longLiquidationRatio),
+            shortLiquidationRatio: try c.decodeIfPresent(Double.self, forKey: .shortLiquidationRatio),
+            liquidationExhaustionDirectionRaw: try c.decodeIfPresent(String.self, forKey: .liquidationExhaustionDirectionRaw),
+            compositeScore: try c.decodeIfPresent(Double.self, forKey: .compositeScore),
+            confirmedWallBlocksTP1: try c.decodeIfPresent(Bool.self, forKey: .confirmedWallBlocksTP1),
+            tradeSampleCount: try c.decodeIfPresent(Int.self, forKey: .tradeSampleCount),
+            capturedAtEpochSeconds: try c.decodeIfPresent(TimeInterval.self, forKey: .capturedAtEpochSeconds),
+            divergenceRaw: try c.decodeIfPresent(String.self, forKey: .divergenceRaw),
+            absorptionRaw: try c.decodeIfPresent(String.self, forKey: .absorptionRaw),
+            isLowLiquidity: try c.decodeIfPresent(Bool.self, forKey: .isLowLiquidity)
+        )
     }
 
     /// Fraction in `[0.0, 1.0]` representing Bid share of the pressure bar (`0.5` = balanced).
@@ -125,7 +212,7 @@ public struct ChartOrderFlowSummary: Codable, Sendable, Equatable, Hashable {
 }
 
 /// Clean, engine-agnostic overlay model fed by `SignalEngine` for all chart engines
-/// (`LightweightChartsIOS`, `DGCharts`, `SwiftTradingView`, `CandleKit`, `TradingViewWeb`, and native SwiftUI fallback HUD).
+/// (`CandleKit`, `DGCharts`, `SwiftTradingView` multi-pane Canvas, `TradingViewWeb`, and native SwiftUI fallback).
 public struct ChartSignalOverlayModel: Codable, Sendable, Equatable, Hashable {
     public let symbol: String
     public let marketClass: MarketClass

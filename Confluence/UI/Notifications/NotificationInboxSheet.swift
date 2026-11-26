@@ -94,7 +94,7 @@ public struct NotificationInboxSheet: View {
                             coordinator.markAllNotificationsRead()
                         }
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.macroIceBlue)
+                        .foregroundStyle(palette.champagneGold)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -136,7 +136,7 @@ public struct NotificationInboxSheet: View {
                         .foregroundStyle(selected ? palette.canvas : palette.secondaryInk)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(selected ? palette.primaryInk : palette.elevatedSurface, in: Capsule())
+                        .background(selected ? palette.champagneGold : palette.elevatedSurface, in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -164,30 +164,34 @@ public struct NotificationInboxSheet: View {
     }
 
     private func notificationRow(_ item: NotificationItemSnapshot) -> some View {
-        Button {
+        let isHighConviction = (item.confidence ?? 0) >= 70.0
+        let isLowScoreMuted = item.confidence.map { $0 < 50.0 } ?? false
+        let rowAccent = isLowScoreMuted ? palette.secondaryInk : accentColor(for: item)
+
+        return Button {
             coordinator.handleNotificationTap(item)
             dismiss()
         } label: {
             HStack(alignment: .top, spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(accentColor(for: item).opacity(0.16))
+                        .fill(rowAccent.opacity(isLowScoreMuted ? 0.10 : 0.16))
                         .frame(width: 34, height: 34)
                     Image(systemName: iconName(for: item))
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(accentColor(for: item))
+                        .foregroundStyle(rowAccent)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
                         if !item.isRead {
                             Circle()
-                                .fill(palette.macroIceBlue)
+                                .fill(palette.champagneGold)
                                 .frame(width: 7, height: 7)
                         }
                         Text(item.title)
-                            .font(.subheadline.weight(item.isRead ? .medium : .bold))
-                            .foregroundStyle(palette.primaryInk)
+                            .font(.subheadline.weight(isHighConviction || !item.isRead ? .bold : .medium))
+                            .foregroundStyle(isLowScoreMuted ? palette.secondaryInk : palette.primaryInk)
                             .lineLimit(1)
                         Spacer()
                         Text(item.createdAt, style: .relative)
@@ -197,27 +201,32 @@ public struct NotificationInboxSheet: View {
 
                     Text(item.subtitle)
                         .font(.caption)
-                        .foregroundStyle(palette.secondaryInk)
+                        .foregroundStyle(isLowScoreMuted ? palette.tertiaryInk : palette.secondaryInk)
                         .lineLimit(2)
 
                     HStack(spacing: 6) {
                         Text(item.type.displayName)
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(accentColor(for: item))
+                            .foregroundStyle(rowAccent)
                         if let tf = item.timeframe {
                             Text("· \(tf.displayLabel)")
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(palette.tertiaryInk)
                         }
                         if let conf = item.confidence {
-                            Text("· \(Int(conf.rounded()))%")
-                                .font(.caption2.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(palette.champagneGold)
+                            let scoreInt = Int(conf.rounded())
+                            Text("\(scoreInt)/100")
+                                .font(.system(size: 10, weight: .bold).monospacedDigit())
+                                .foregroundStyle(isHighConviction ? palette.champagneGold : (isLowScoreMuted ? palette.tertiaryInk : palette.secondaryInk))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background((isHighConviction ? palette.champagneGold.opacity(0.16) : palette.elevatedSurface), in: Capsule())
                         }
                     }
                 }
             }
             .padding(.vertical, 4)
+            .opacity(isLowScoreMuted ? 0.72 : 1.0)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -234,7 +243,7 @@ public struct NotificationInboxSheet: View {
             } label: {
                 Label(item.isRead ? "Unread" : "Read", systemImage: item.isRead ? "envelope.badge" : "envelope.open")
             }
-            .tint(palette.macroIceBlue)
+            .tint(palette.champagneGold)
         }
     }
 
@@ -260,7 +269,7 @@ public struct NotificationInboxSheet: View {
         case .preNewsCountdown:
             return palette.champagneGold
         case .newsReleaseImpact:
-            return palette.macroIceBlue
+            return palette.champagneGold
         }
     }
 }

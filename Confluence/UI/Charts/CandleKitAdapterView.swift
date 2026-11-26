@@ -8,7 +8,7 @@ import SignalEngine
 /// - Maps sorted unique-timestamp `CandleKitCore.Candle` bars and locked horizontal `Drawing` lines
 ///   for Entry, Stop Loss, TP1, TP2, Breakeven, Traps, and Confirmed Crypto Bid/Ask Walls.
 /// - Wires `.volumeVisible(true)`, `.headerVisible(false)`, `.priceFractionDigits(pricePrecision.precision)`,
-///   and `.onCrosshairChange`, layered with a non-blocking Liquid Glass `ChartSignalOverlayHUD`.
+///   and `.onCrosshairChange`, with zero floating overlay HUD obstruction.
 public struct CandleKitAdapterView: ConfluenceChartAdapter {
     public let candles: [EngineCandle]
     public let formingCandle: EngineCandle?
@@ -18,6 +18,7 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
     public let pricePrecision: ChartPricePrecision
     public let palette: ConfluencePalette
     public let isDark: Bool
+    public let resetTrigger: Int
     public let onCrosshairChange: (ChartCrosshairReadout?) -> Void
 
     @State private var chartState = CandleChartState(candleSpacing: 10)
@@ -31,6 +32,7 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
         pricePrecision: ChartPricePrecision,
         palette: ConfluencePalette,
         isDark: Bool,
+        resetTrigger: Int = 0,
         onCrosshairChange: @escaping (ChartCrosshairReadout?) -> Void
     ) {
         self.candles = candles
@@ -41,6 +43,7 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
         self.pricePrecision = pricePrecision
         self.palette = palette
         self.isDark = isDark
+        self.resetTrigger = resetTrigger
         self.onCrosshairChange = onCrosshairChange
     }
 
@@ -83,10 +86,10 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
             ))
         }
 
-        let gold = DrawingColor(red: 0.831, green: 0.686, blue: 0.216, opacity: 0.95)
+        let gold = DrawingColor(red: 0.871, green: 0.722, blue: 0.325, opacity: 0.95)
         let crimson = DrawingColor(red: 0.937, green: 0.267, blue: 0.267, opacity: 0.95)
         let emerald = DrawingColor(red: 0.063, green: 0.725, blue: 0.506, opacity: 0.95)
-        let iceBlue = DrawingColor(red: 0.220, green: 0.741, blue: 0.973, opacity: 0.90)
+        let mutedSlate = DrawingColor(red: 0.580, green: 0.639, blue: 0.722, opacity: 0.90)
         let amber = DrawingColor(red: 0.961, green: 0.620, blue: 0.043, opacity: 0.90)
 
         if let entry = overlayModel.entryPrice {
@@ -99,10 +102,10 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
             addLine(price: tp1, color: emerald, lineWidth: 1.8, dash: nil)
         }
         if overlayModel.isTP2Enabled, let tp2 = overlayModel.takeProfit2 {
-            addLine(price: tp2, color: iceBlue, lineWidth: 1.3, dash: [5, 4])
+            addLine(price: tp2, color: emerald, lineWidth: 1.3, dash: [5, 4])
         }
         if let be = overlayModel.breakevenPrice {
-            addLine(price: be, color: iceBlue, lineWidth: 1.2, dash: [2, 3])
+            addLine(price: be, color: mutedSlate, lineWidth: 1.2, dash: [2, 3])
         }
         for trap in overlayModel.traps where trap.isActionable {
             addLine(price: trap.price, color: amber, lineWidth: 1.2, dash: [5, 4])
@@ -130,6 +133,7 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
                     pricePrecision: pricePrecision,
                     palette: palette,
                     showVolumePane: true,
+                    resetTrigger: resetTrigger,
                     onCrosshairChange: onCrosshairChange
                 )
             } else {
@@ -157,19 +161,11 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(palette.canvas)
                     .id("\(overlayModel.symbol)|\(timeframe.rawValue)")
-
-                if overlayModel.hasAnyOverlayLevels {
-                    ChartSignalOverlayHUD(
-                        overlayModel: overlayModel,
-                        precision: pricePrecision,
-                        palette: palette,
-                        engineBadge: "CandleKit"
-                    )
-                    .padding(10)
-                    .allowsHitTesting(false)
-                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: resetTrigger) { _, _ in
+            chartState = CandleChartState(candleSpacing: 10)
+        }
     }
 }

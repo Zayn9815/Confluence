@@ -104,7 +104,7 @@ public struct NewsCalendarTabView: View {
                                     .foregroundStyle(selectedCurrency == ccy ? palette.canvas : palette.secondaryInk)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
-                                    .background(Capsule().fill(selectedCurrency == ccy ? palette.macroIceBlue : palette.surface))
+                                    .background(Capsule().fill(selectedCurrency == ccy ? palette.champagneGold : palette.surface))
                             }
                             .buttonStyle(.plain)
                         }
@@ -123,7 +123,7 @@ public struct NewsCalendarTabView: View {
                         Spacer()
                         Text("\(coordinator.scheduledPreNewsCount) pre-news alerts queued")
                             .font(.caption2.monospacedDigit())
-                            .foregroundStyle(palette.macroIceBlue)
+                            .foregroundStyle(palette.champagneGold)
                     }
                     .padding(.horizontal, 4)
 
@@ -141,8 +141,9 @@ public struct NewsCalendarTabView: View {
                     }
                 }
                 .padding(.horizontal, 14)
-                .padding(.bottom, 24)
+                .padding(.bottom, 16)
             }
+            .safeAreaPadding(.bottom, 96)
             .refreshable {
                 await coordinator.scanAllMarkets()
             }
@@ -199,7 +200,7 @@ public struct NewsCalendarTabView: View {
                             let mins = Int(ceil((ev.scheduledEpochSeconds - nowEpoch) / 60.0))
                             Text(mins < 120 ? "in \(mins)m" : "in \(mins / 60)h \(mins % 60)m")
                                 .font(.caption2.weight(.bold).monospacedDigit())
-                                .foregroundStyle(palette.macroIceBlue)
+                                .foregroundStyle(palette.champagneGold)
                         }
                     } else {
                         // Strict rule: non-exact timeMode displays date only & suppresses countdown
@@ -291,10 +292,10 @@ public struct NewsCalendarTabView: View {
                                     .foregroundStyle(palette.secondaryInk)
                                 Text("CRYPTO ONLY")
                                     .font(.system(size: 8, weight: .bold))
-                                    .foregroundStyle(palette.macroIceBlue)
+                                    .foregroundStyle(palette.champagneGold)
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 2)
-                                    .background(palette.macroIceBlue.opacity(0.14), in: Capsule())
+                                    .background(palette.champagneGold.opacity(0.14), in: Capsule())
                             }
                             Text(fg.classification)
                                 .font(.subheadline.weight(.bold))
@@ -322,8 +323,9 @@ public struct NewsCalendarTabView: View {
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.bottom, 24)
+            .padding(.bottom, 16)
         }
+        .safeAreaPadding(.bottom, 96)
         .refreshable {
             await coordinator.scanAllMarkets()
         }
@@ -375,10 +377,10 @@ public struct NewsCalendarTabView: View {
                         ForEach(item.affectedAssets, id: \.self) { sym in
                             Text(sym)
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(palette.macroIceBlue)
+                                .foregroundStyle(palette.secondaryInk)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 2)
-                                .background(palette.macroIceBlue.opacity(0.12), in: Capsule())
+                                .background(palette.elevatedSurface, in: Capsule())
                         }
                     }
                 }
@@ -442,7 +444,7 @@ public struct NewsCalendarTabView: View {
         VStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.title2)
-                .foregroundStyle(palette.macroIceBlue)
+                .foregroundStyle(palette.champagneGold)
             Text(title).font(.headline).foregroundStyle(palette.primaryInk)
             Text(body).font(.caption).foregroundStyle(palette.secondaryInk).multilineTextAlignment(.center)
         }

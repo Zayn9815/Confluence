@@ -110,13 +110,17 @@ public final class MarketScannerCoordinator {
 
     public let livePriceService: LivePriceService
     public let liveOrderFlowService: LiveOrderFlowService
-    public var demoWallet: DemoWallet = DemoWallet()
+    public let journalCoordinator: SignalJournalCoordinator
+    public var journalSectionStats: [JournalSectionStat] = WinRateBreakdown.byJournalSection(entries: [])
     public var manualTradeSuggestions: [String: ManualTradeLevelSuggestion] = [:]
     public var originWinRates: [OriginWinRateStat] = WinRateBreakdown.byOrigin(records: [])
     public var strengthBuckets: [StrengthBucketStat] = WinRateBreakdown.byStrengthBucket(records: [])
     public var nextScheduledScanEpochSeconds: TimeInterval? = nil
     private var dismissedManualSuggestionIds: Set<String> = []
     private var autoScanTask: Task<Void, Never>?
+    private var activeScanTask: Task<Void, Never>?
+
+    public static let maxCachedBarsPerSymbol = 300
 
     public var scanUsageEstimate: ScanUsageEstimate {
         ScanSchedulePolicy.estimateDailyUsage(
@@ -148,11 +152,45 @@ public final class MarketScannerCoordinator {
         self.openRouterClient = OpenAICompatibleJudgeClient(provider: .openrouter, http: client)
         self.livePriceService = LivePriceService(http: client)
         self.liveOrderFlowService = LiveOrderFlowService(adapter: ofAdapter)
+        self.journalCoordinator = SignalJournalCoordinator(store: store)
         self.liveOrderFlowService.setEnabled(settings.payload.isOrderFlowEnabled)
+
+        self.journalCoordinator.onStatsChanged = { [weak self] in
+            guard let self else { return }
+            self.recomputeCalibration()
+            self.acquireActivePositionsLiveFeed()
+        }
 
         wireNotificationRouter()
         wireLivePriceMonitor()
         loadPersistedState()
+    }
+
+    /// Cancels any in-flight scan, switches the active entry timeframe (15m / 30m / 1H),
+    /// clears stale per-timeframe candle caches, and immediately triggers a fresh scan.
+    public func handleEntryTimeframeChanged(to newTF: Timeframe) {
+        guard settings.payload.entryTimeframe != newTF || !isScanning else { return }
+        activeScanTask?.cancel()
+        activeScanTask = nil
+        isScanning = false
+        settings.payload.entryTimeframe = newTF
+        cachedClosedCandlesBySymbol.removeAll(keepingCapacity: true)
+        activeScanTask = Task { [weak self] in
+            await self?.scanAllMarkets(isBackground: false)
+        }
+    }
+
+    /// Trims non-visible in-memory candle and order-flow caches under iOS memory pressure (iPhone 12 4GB RAM guard).
+    public func trimNonVisibleCaches() {
+        let keepSymbols = Set(signals.map(\.symbol)).union(journalCoordinator.openTrackedSymbols)
+        cachedClosedCandlesBySymbol = cachedClosedCandlesBySymbol.reduce(into: [:]) { acc, pair in
+            if keepSymbols.contains(pair.key) {
+                acc[pair.key] = Array(pair.value.suffix(120))
+            }
+        }
+        cachedHTFCandlesBySymbol.removeAll(keepingCapacity: false)
+        cachedOrderFlowBySymbol.removeAll(keepingCapacity: false)
+        diagnosticLog.log(.info, category: .engine, message: "Memory warning received: trimmed non-visible candle/order-flow caches.")
     }
 
     public func availableModels(for provider: AIProviderOption) -> [AIModelInfo] {
@@ -239,6 +277,14 @@ public final class MarketScannerCoordinator {
         if isActive {
             syncLiveFeedModesFromSettings()
             acquireActivePositionsLiveFeed()
+            Task { [weak self] in
+                guard let self else { return }
+                let liveMap = self.currentLivePricesMap()
+                await self.journalCoordinator.reconcileClosedCandles(
+                    candlesBySymbol: self.cachedClosedCandlesBySymbol,
+                    livePrices: liveMap
+                )
+            }
             scanOnOpenIfDue()
             restartAutoScanLoop()
         } else {
@@ -255,7 +301,8 @@ public final class MarketScannerCoordinator {
             nowEpochSeconds: nowEpochSeconds
         )
         guard due else { return }
-        Task { [weak self] in
+        activeScanTask?.cancel()
+        activeScanTask = Task { [weak self] in
             await self?.scanAllMarkets(isBackground: false)
         }
     }
@@ -311,9 +358,9 @@ public final class MarketScannerCoordinator {
     }
 
     public func acquireActivePositionsLiveFeed() {
-        let demoSyms = demoWallet.activePositions.map(\.symbol)
+        let trackedSyms = journalCoordinator.openTrackedSymbols
         let openJournalSyms = journalEntries.filter { $0.outcome == .open }.map(\.symbol)
-        let combined = Array(Set(demoSyms + openJournalSyms)).sorted()
+        let combined = Array(Set(trackedSyms + openJournalSyms)).sorted()
         if combined.isEmpty {
             livePriceService.release(owner: "positions_monitor")
         } else {
@@ -321,23 +368,20 @@ public final class MarketScannerCoordinator {
         }
     }
 
-    public func handleLivePriceTick(_ quote: LivePriceQuote) {
-        let (updatedWallet, events) = TradeMonitor.reconcileDemoWalletOnTick(
-            wallet: demoWallet,
-            quote: quote
-        )
-        if updatedWallet != demoWallet {
-            demoWallet = updatedWallet
-            store.saveDemoWallet(updatedWallet)
-            acquireActivePositionsLiveFeed()
-        }
-        for event in events {
-            diagnosticLog.log(.info, category: .engine, message: "\(event.title) — \(event.body)")
-            let currentSettings = settings.payload
-            Task {
-                await PreNewsNotificationScheduler.shared.postDemoPositionClosedNotification(event, settings: currentSettings)
+    private func currentLivePricesMap() -> [String: Double] {
+        var map: [String: Double] = [:]
+        for sym in Set(signals.map(\.symbol) + journalCoordinator.openTrackedSymbols) {
+            if let q = livePriceService.latest(for: sym), q.price.isFinite, q.price > 0 {
+                map[sym] = q.price
+            } else if let c = cachedClosedCandlesBySymbol[sym]?.last?.close, c.isFinite, c > 0 {
+                map[sym] = c
             }
         }
+        return map
+    }
+
+    public func handleLivePriceTick(_ quote: LivePriceQuote) {
+        journalCoordinator.enqueueLiveQuote(quote)
 
         let alerts = TradeMonitor.evaluateManualJournalAlerts(
             entries: journalEntries,
@@ -406,7 +450,7 @@ public final class MarketScannerCoordinator {
         self.tradeLedger = store.fetchTradeLedger(limit: 300)
         self.trapLogs = store.fetchTrapLogs(limit: 300)
         self.journalEntries = store.fetchJournalEntries(limit: 500)
-        self.demoWallet = store.loadDemoWallet()
+        self.journalCoordinator.loadFromStore()
         recomputeCalibration()
         recomputeCorrelations()
         reloadNotifications()
@@ -547,7 +591,10 @@ public final class MarketScannerCoordinator {
     }
 
     public func exportJournalCSVURL() -> URL? {
-        let csv = BackupArchiveService.buildJournalCSV(entries: journalEntries)
+        let tracked = journalCoordinator.allEntries
+        let csv = tracked.isEmpty
+            ? BackupArchiveService.buildJournalCSV(entries: journalEntries)
+            : BackupArchiveService.buildTrackedJournalCSV(entries: tracked)
         return BackupArchiveService.writeCSVToTemporaryFile(content: csv, filename: "Confluence_Trade_Journal.csv")
     }
 
@@ -591,11 +638,19 @@ public final class MarketScannerCoordinator {
                 orderFlowStatus: rec.orderFlowStatus == "off" ? (sig?.orderFlowStatus ?? rec.orderFlowStatus) : rec.orderFlowStatus
             )
         }
-        self.confidenceCalibrator = ConfidenceCalibrator.fit(
+        let trackedEntries = journalCoordinator.allEntries
+        self.journalSectionStats = WinRateBreakdown.byJournalSection(entries: trackedEntries)
+
+        let recordCalibrator = ConfidenceCalibrator.fit(
             records: enriched,
             filter: .headlineFixed,
             activeProfileKey: activeProfile.profileKey
         )
+        if recordCalibrator.isActive {
+            self.confidenceCalibrator = recordCalibrator
+        } else {
+            self.confidenceCalibrator = ConfidenceCalibrator.fit(journalEntries: trackedEntries)
+        }
         self.headlineCalibrationSummary = PassiveOutcomeEvaluator.summarize(records: enriched, filter: .headlineFixed)
         self.calibrationSummary = PassiveOutcomeEvaluator.summarize(records: enriched, filter: filter)
         self.strategyBreakdowns = PassiveOutcomeEvaluator.analyzeStrategyPerformance(records: enriched, filter: filter)
@@ -617,14 +672,16 @@ public final class MarketScannerCoordinator {
             activeProfileKey: activeProfile.profileKey,
             filter: .headlineFixed
         )
-        self.cryptoOrderFlowEdgeDelta = WinRateBreakdown.cryptoOrderFlowEdgeDelta(
-            records: enriched,
-            filter: .headlineFixed
-        )
+        let journalOFDelta = WinRateBreakdown.cryptoOrderFlowEdgeDelta(entries: trackedEntries)
+        let recordOFDelta = WinRateBreakdown.cryptoOrderFlowEdgeDelta(records: enriched, filter: .headlineFixed)
+        self.cryptoOrderFlowEdgeDelta = journalOFDelta.totalSamples >= recordOFDelta.totalSamples
+            ? journalOFDelta
+            : recordOFDelta
         self.traderPsychologyReport = PsychologyReportBuilder.buildBehavioralAudit(
             outcomes: enriched,
-            demoPositions: demoWallet.positions,
-            activeProfile: activeProfile
+            journalEntries: trackedEntries,
+            activeProfile: activeProfile,
+            entryTimeframe: settings.payload.entryTimeframe
         )
         recomputeJournalSummary()
     }
@@ -1075,8 +1132,8 @@ public final class MarketScannerCoordinator {
                         return (sanitized, analyzed)
                     }.value
                     try Task.checkCancellation()
-                    sanitizedClosedBySymbol[asset.symbol] = sanitizedEntry.candles
-                    cachedHTFCandlesBySymbol[asset.symbol] = htfCandlesSnapshot
+                    sanitizedClosedBySymbol[asset.symbol] = Array(sanitizedEntry.candles.suffix(Self.maxCachedBarsPerSymbol))
+                    cachedHTFCandlesBySymbol[asset.symbol] = Array(htfCandlesSnapshot.suffix(Self.maxCachedBarsPerSymbol))
                     cachedProviderBySymbol[asset.symbol] = entryProviderSnapshot
 
                     if sanitizedEntry.report.droppedOpenBars > 0 {
@@ -1200,30 +1257,35 @@ public final class MarketScannerCoordinator {
             }
         }
 
-        // Reconcile active Demo Wallet positions against closed bars (pessimistic same-bar SL-first)
-        var reconciledWallet = demoWallet
-        var closedDemoEvents: [DemoPositionCloseEvent] = []
-        for (sym, bars) in sanitizedClosedBySymbol {
-            let (nextW, evs) = TradeMonitor.reconcileDemoWallet(wallet: reconciledWallet, symbol: sym, closedCandles: bars)
-            reconciledWallet = nextW
-            closedDemoEvents.append(contentsOf: evs)
-        }
-        if reconciledWallet != demoWallet {
-            demoWallet = reconciledWallet
-            store.saveDemoWallet(reconciledWallet)
-            acquireActivePositionsLiveFeed()
-        }
-        for ev in closedDemoEvents {
-            diagnosticLog.log(.info, category: .engine, message: "\(ev.title) — \(ev.body)")
-            await PreNewsNotificationScheduler.shared.postDemoPositionClosedNotification(ev, settings: settings.payload)
-        }
-
         for (sym, bars) in sanitizedClosedBySymbol {
             if let lastClose = bars.last?.close, lastClose.isFinite, lastClose > 0 {
                 livePriceService.seedReferenceClose(lastClose, for: sym)
             }
         }
         self.cachedClosedCandlesBySymbol = sanitizedClosedBySymbol
+
+        // Auto-capture scanned setups/traps into the 3-section Signal Journal & reconcile open trades
+        let postScanNow = Date().timeIntervalSince1970
+        let livePriceMap = currentLivePricesMap()
+        let capturedJournalCount = journalCoordinator.captureFromScan(
+            signals: scannedSignals,
+            traps: scannedTraps,
+            candlesBySymbol: sanitizedClosedBySymbol,
+            livePrices: livePriceMap,
+            timeframe: entryTF,
+            activeProfileKey: settings.activeStrategyProfile.profileKey,
+            now: postScanNow
+        )
+        await journalCoordinator.reconcileClosedCandles(
+            candlesBySymbol: sanitizedClosedBySymbol,
+            livePrices: livePriceMap,
+            now: postScanNow
+        )
+        if capturedJournalCount > 0 {
+            diagnosticLog.log(.info, category: .engine, message: "Auto-journal captured \(capturedJournalCount) new setup(s).")
+        }
+        acquireActivePositionsLiveFeed()
+
         self.activeTraps = scannedTraps
         self.signals = store.fetchSignals(limit: 150)
         self.outcomeRecords = store.fetchOutcomeRecords()
@@ -1689,158 +1751,6 @@ public final class MarketScannerCoordinator {
             latencyMs: res.latencyMs,
             proxySymbolUsed: res.proxySymbolUsed
         )
-    }
-
-    // MARK: - Demo Wallet Actions (Paper-Only)
-
-    @discardableResult
-    public func placeDemoOrder(_ request: DemoOrderRequest) -> Result<DemoPosition, DemoOrderRejectionReason> {
-        let quote = livePriceService.latest(for: request.symbol)
-        let now = Date().timeIntervalSince1970
-        let asset = WatchlistDefaults.descriptor(for: request.symbol)
-        let activeProfile = settings.activeStrategyProfile
-        let matchedSig = request.signalId.flatMap { sid in signals.first { $0.fingerprint == sid || $0.id == sid } }
-            ?? signals.first { $0.symbol == request.symbol }
-        let resolvedOFStatus: String = {
-            if !request.orderFlowStatus.isEmpty && request.orderFlowStatus != "off" {
-                return request.orderFlowStatus
-            }
-            if request.marketClass != .crypto { return "non_crypto" }
-            if !settings.payload.isOrderFlowEnabled { return "off" }
-            if let liveSymbol = liveOrderFlowService.activeSymbol,
-               liveSymbol == request.symbol,
-               let liveEval = liveOrderFlowService.latestAssessment,
-               liveEval.alignment != .unavailable {
-                return liveEval.alignment.rawValue
-            }
-            return matchedSig?.orderFlowStatus ?? "unavailable"
-        }()
-        let stampedRequest = DemoOrderRequest(
-            id: request.id,
-            signalId: request.signalId,
-            symbol: request.symbol,
-            marketClass: request.marketClass,
-            timeframe: request.timeframe,
-            direction: request.direction,
-            orderType: request.orderType,
-            entryPrice: request.entryPrice,
-            entryLow: request.entryLow,
-            entryHigh: request.entryHigh,
-            stopLoss: request.stopLoss,
-            target1: request.target1,
-            target2: request.target2,
-            exitTarget: request.exitTarget,
-            riskPercent: request.riskPercent,
-            leverage: request.leverage,
-            contractSpec: request.contractSpec,
-            limitExpiryEpochSeconds: request.limitExpiryEpochSeconds,
-            allowStalePriceFill: request.allowStalePriceFill,
-            feesEnabled: request.feesEnabled,
-            activeStrategyProfileKey: request.activeStrategyProfileKey.isEmpty ? activeProfile.profileKey : request.activeStrategyProfileKey,
-            enabledStrategyIDsCSV: request.enabledStrategyIDsCSV.isEmpty ? activeProfile.enabledStrategyIDsCSV : request.enabledStrategyIDsCSV,
-            orderFlowStatus: resolvedOFStatus
-        )
-        let result = DemoWalletEngine.placeOrder(
-            wallet: demoWallet,
-            request: stampedRequest,
-            liveQuotePrice: quote?.price,
-            liveQuoteEpochSeconds: quote?.asOfEpochSeconds,
-            nowEpochSeconds: now,
-            asset: asset
-        )
-        switch result {
-        case .success(let (updatedWallet, pos)):
-            demoWallet = updatedWallet
-            store.saveDemoWallet(updatedWallet)
-            acquireActivePositionsLiveFeed()
-            recomputeCalibration()
-            return .success(pos)
-        case .failure(let err):
-            return .failure(err)
-        }
-    }
-
-    public func closeDemoPositionManually(positionId: String, exitPrice: Double? = nil) -> Bool {
-        guard let pos = demoWallet.positions.first(where: { $0.id == positionId }) else { return false }
-        let price = exitPrice
-            ?? livePriceService.latest(for: pos.symbol)?.price
-            ?? signals.first(where: { $0.symbol == pos.symbol })?.recentCandles.last?.close
-            ?? pos.filledPrice
-            ?? pos.entryPrice
-        guard let (updatedWallet, _) = DemoWalletEngine.closePositionManually(
-            wallet: demoWallet,
-            positionId: positionId,
-            exitPrice: price,
-            nowEpochSeconds: Date().timeIntervalSince1970
-        ) else {
-            return false
-        }
-        demoWallet = updatedWallet
-        store.saveDemoWallet(updatedWallet)
-        acquireActivePositionsLiveFeed()
-        return true
-    }
-
-    public func moveDemoStopLossToBreakeven(positionId: String) -> Result<DemoPosition, DemoOrderRejectionReason> {
-        let res = DemoWalletEngine.moveStopLossToBreakeven(wallet: demoWallet, positionId: positionId)
-        switch res {
-        case .success(let (updatedWallet, pos)):
-            demoWallet = updatedWallet
-            store.saveDemoWallet(updatedWallet)
-            return .success(pos)
-        case .failure(let err):
-            return .failure(err)
-        }
-    }
-
-    public func updateDemoStopLoss(positionId: String, newStopLoss: Double) -> Result<DemoPosition, DemoOrderRejectionReason> {
-        let res = DemoWalletEngine.updateStopLoss(wallet: demoWallet, positionId: positionId, newStopLoss: newStopLoss)
-        switch res {
-        case .success(let (updatedWallet, pos)):
-            demoWallet = updatedWallet
-            store.saveDemoWallet(updatedWallet)
-            return .success(pos)
-        case .failure(let err):
-            return .failure(err)
-        }
-    }
-
-    public func updateDemoTargets(
-        positionId: String,
-        newTarget1: Double,
-        newTarget2: Double?,
-        newExitTarget: DemoExitTarget? = nil
-    ) -> Result<DemoPosition, DemoOrderRejectionReason> {
-        let res = DemoWalletEngine.updateTargets(
-            wallet: demoWallet,
-            positionId: positionId,
-            newTarget1: newTarget1,
-            newTarget2: newTarget2,
-            newExitTarget: newExitTarget
-        )
-        switch res {
-        case .success(let (updatedWallet, pos)):
-            demoWallet = updatedWallet
-            store.saveDemoWallet(updatedWallet)
-            return .success(pos)
-        case .failure(let err):
-            return .failure(err)
-        }
-    }
-
-    public func adjustDemoWalletBalance(to newBalanceUSD: Double) {
-        let updated = DemoWalletEngine.adjustBalance(
-            wallet: demoWallet,
-            newBalanceUSD: newBalanceUSD,
-            nowEpochSeconds: Date().timeIntervalSince1970
-        )
-        demoWallet = updated
-        store.saveDemoWallet(updated)
-    }
-
-    public func exportDemoWalletTransactionsCSV() -> URL? {
-        let csv = BackupArchiveService.buildDemoWalletTransactionsCSV(transactions: demoWallet.transactions)
-        return BackupArchiveService.writeCSVToTemporaryFile(content: csv, filename: "Confluence_Demo_Wallet.csv")
     }
 
     // MARK: - Twelve Data Quota Check & Feed Health

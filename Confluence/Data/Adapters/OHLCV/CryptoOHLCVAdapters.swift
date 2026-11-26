@@ -46,6 +46,24 @@ public struct CryptoOHLCVRouter: Sendable {
         self.twelveData = twelveData ?? TwelveDataAdapter(http: http)
     }
 
+    private enum CryptoVenue: Sendable {
+        case binanceVision
+        case okx
+        case kraken
+        case bybit
+        case twelveData
+
+        var shortLabel: String {
+            switch self {
+            case .binanceVision: return "Binance"
+            case .okx: return "OKX"
+            case .kraken: return "Kraken"
+            case .bybit: return "Bybit"
+            case .twelveData: return "Twelve Data"
+            }
+        }
+    }
+
     public func fetchCandles(
         asset: AssetDescriptor,
         timeframe: Timeframe,
@@ -55,16 +73,16 @@ public struct CryptoOHLCVRouter: Sendable {
         twelveDataKey: String? = nil,
         onLog: ProviderLogHook? = nil
     ) async throws -> OHLCVFetchResult {
-        let order: [CryptoExchangePreference]
+        let order: [CryptoVenue]
         switch primary {
         case .auto, .binanceVision:
-            order = [.binanceVision, .okx, .kraken]
+            order = [.binanceVision, .okx, .kraken, .bybit]
         case .okx:
-            order = [.okx, .binanceVision, .kraken]
+            order = [.okx, .binanceVision, .bybit, .kraken]
         case .kraken:
-            order = [.kraken, .binanceVision, .okx]
+            order = [.kraken, .binanceVision, .okx, .bybit]
         case .twelveData:
-            order = [.twelveData, .binanceVision, .okx, .kraken]
+            order = [.twelveData, .binanceVision, .okx, .bybit, .kraken]
         }
 
         var errors: [String] = []
@@ -73,12 +91,14 @@ public struct CryptoOHLCVRouter: Sendable {
             do {
                 let result: OHLCVFetchResult
                 switch venue {
-                case .auto, .binanceVision:
+                case .binanceVision:
                     result = try await fetchBinanceVision(asset: asset, timeframe: timeframe, limit: limit, endTimeEpochSeconds: endTimeEpochSeconds)
                 case .okx:
                     result = try await fetchOKX(asset: asset, timeframe: timeframe, limit: limit, endTimeEpochSeconds: endTimeEpochSeconds)
                 case .kraken:
                     result = try await fetchKraken(asset: asset, timeframe: timeframe)
+                case .bybit:
+                    result = try await fetchBybit(asset: asset, timeframe: timeframe, limit: limit, endTimeEpochSeconds: endTimeEpochSeconds)
                 case .twelveData:
                     guard let key = twelveDataKey, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw NetworkAdapterError.missingAPIKey("Twelve Data")
@@ -175,6 +195,7 @@ public struct CryptoOHLCVRouter: Sendable {
         let bar: String
         switch timeframe {
         case .m15: bar = "15m"
+        case .m30: bar = "30m"
         case .h1: bar = "1H"
         case .h4: bar = "4H"
         case .d1: bar = "1Dutc"
@@ -231,6 +252,7 @@ public struct CryptoOHLCVRouter: Sendable {
         let intervalMins: Int
         switch timeframe {
         case .m15: intervalMins = 15
+        case .m30: intervalMins = 30
         case .h1: intervalMins = 60
         case .h4: intervalMins = 240
         case .d1: intervalMins = 1440
@@ -277,6 +299,74 @@ public struct CryptoOHLCVRouter: Sendable {
             throw NetworkAdapterError.decodingFailed("Kraken returned 0 valid candles")
         }
         return OHLCVFetchResult(candles: out, providerName: "Kraken", latencyMs: res.latencyMs)
+    }
+
+    private func fetchBybit(
+        asset: AssetDescriptor,
+        timeframe: Timeframe,
+        limit: Int,
+        endTimeEpochSeconds: TimeInterval? = nil
+    ) async throws -> OHLCVFetchResult {
+        let sym = asset.binanceSymbol ?? "\(asset.baseCurrency)\(asset.quoteCurrency)"
+        let bybitInterval: String
+        switch timeframe {
+        case .m15: bybitInterval = "15"
+        case .m30: bybitInterval = "30"
+        case .h1: bybitInterval = "60"
+        case .h4: bybitInterval = "240"
+        case .d1: bybitInterval = "D"
+        }
+        var urlStr = "https://api.bybit.com/v5/market/kline?category=spot&symbol=\(sym)&interval=\(bybitInterval)&limit=\(min(max(limit, 1), 500))"
+        if let endSec = endTimeEpochSeconds {
+            let endMs = Int64(endSec * 1000.0)
+            urlStr += "&end=\(endMs)"
+        }
+        guard let url = URL(string: urlStr) else { throw NetworkAdapterError.invalidURL(urlStr) }
+
+        var req = URLRequest(url: url)
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        let res = try await http.send(req, maxRetries: 1)
+
+        struct BybitResponse: Decodable {
+            struct ResultObj: Decodable {
+                let list: [[String]]?
+            }
+            let retCode: Int
+            let result: ResultObj?
+        }
+        let decoded = try JSONDecoder().decode(BybitResponse.self, from: res.data)
+        guard decoded.retCode == 0, let rows = decoded.result?.list else {
+            throw NetworkAdapterError.decodingFailed("Bybit retCode=\(decoded.retCode)")
+        }
+
+        let nowSec = (res.serverDate ?? Date()).timeIntervalSince1970
+        var out: [Candle] = []
+        out.reserveCapacity(rows.count)
+        // Bybit returns newest-first; normalize to ascending UTC
+        for row in rows.reversed() where row.count >= 6 {
+            guard let tsMs = Double(row[0]),
+                  let o = Double(row[1]),
+                  let h = Double(row[2]),
+                  let l = Double(row[3]),
+                  let c = Double(row[4]),
+                  let v = Double(row[5])
+            else { continue }
+            guard tsMs.isFinite, o.isFinite, h.isFinite, l.isFinite, c.isFinite, v.isFinite,
+                  o > 0, h > 0, l > 0, c > 0, h >= l, v >= 0 else { continue }
+            let openSec = tsMs / 1000.0
+            let closeSec = openSec + timeframe.seconds
+            out.append(Candle(
+                openTimeEpochSeconds: openSec,
+                closeTimeEpochSeconds: closeSec,
+                open: o, high: h, low: l, close: c,
+                volume: v, isClosed: closeSec <= nowSec
+            ))
+        }
+        out.sort { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
+        guard !out.isEmpty else {
+            throw NetworkAdapterError.decodingFailed("Bybit returned 0 valid candles")
+        }
+        return OHLCVFetchResult(candles: out, providerName: "Bybit", latencyMs: res.latencyMs)
     }
 
     private func asDouble(_ any: Any) -> Double? {

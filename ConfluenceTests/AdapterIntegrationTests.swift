@@ -483,7 +483,7 @@ final class AdapterIntegrationTests: XCTestCase {
         XCTAssertTrue(markerResult.hasExitBar)
         XCTAssertEqual(markerResult.markers.count, 2)
         XCTAssertEqual(markerResult.markers[0].text, "ENTRY LONG")
-        XCTAssertTrue(markerResult.markers[1].text?.hasPrefix("T2 WIN") == true)
+        XCTAssertTrue(markerResult.markers[1].text.hasPrefix("T2 WIN"))
     }
 
     // MARK: - v1.3 Additive Migration, Permanent Signal Deletion & Native Crash Log Tests

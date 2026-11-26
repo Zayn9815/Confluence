@@ -1,13 +1,12 @@
 import SwiftUI
 import UIKit
-import LightweightCharts
 import SignalEngine
 
 /// Pure deterministic helper that snaps Trade Replay Entry & Exit timestamps onto the exact
-/// sorted closed candles present on the chart, producing v5.2.0 `SeriesMarker` pins.
+/// sorted closed candles present on the chart, producing engine-agnostic `ChartReplayMarker` pins.
 public enum TradeReplayMarkerBuilder {
     public struct BuildResult: Sendable {
-        public let markers: [SeriesMarker]
+        public let markers: [ChartReplayMarker]
         public let hasEntryBar: Bool
         public let hasExitBar: Bool
     }
@@ -38,19 +37,19 @@ public enum TradeReplayMarkerBuilder {
             return sorted.min { abs($0.closeTimeEpochSeconds - targetClose) < abs($1.closeTimeEpochSeconds - targetClose) }
         }
 
-        var raw: [(ts: TimeInterval, marker: SeriesMarker)] = []
+        var raw: [(ts: TimeInterval, marker: ChartReplayMarker)] = []
         var hasEntry = false
         var hasExit = false
 
         if let entryBar = snapCandle(forCloseEpoch: trade.entryEpochSeconds) {
             hasEntry = true
             let isLong = (trade.direction == .long)
-            let entryMarker = SeriesMarker(
-                time: .utc(timestamp: entryBar.openTimeEpochSeconds),
+            let entryMarker = ChartReplayMarker(
+                id: "entry-\(trade.fingerprint)",
+                timeEpochSeconds: entryBar.openTimeEpochSeconds,
                 position: isLong ? .belowBar : .aboveBar,
                 shape: isLong ? .arrowUp : .arrowDown,
-                color: ChartColor(hex: 0xD4AF37),
-                id: "entry-\(trade.fingerprint)",
+                colorHex: 0xDEB853,
                 text: isLong ? "ENTRY LONG" : "ENTRY SHORT",
                 size: 1.5
             )
@@ -63,75 +62,75 @@ public enum TradeReplayMarkerBuilder {
             hasExit = true
             let isLong = (trade.direction == .long)
             let rText = String(format: "%+.2fR", trade.netRMultiple)
-            let exitMarker: SeriesMarker
+            let exitMarker: ChartReplayMarker
             switch trade.status {
             case .tp2Win:
-                exitMarker = SeriesMarker(
-                    time: .utc(timestamp: exitBar.openTimeEpochSeconds),
+                exitMarker = ChartReplayMarker(
+                    id: "exit-\(trade.fingerprint)",
+                    timeEpochSeconds: exitBar.openTimeEpochSeconds,
                     position: isLong ? .aboveBar : .belowBar,
                     shape: .circle,
-                    color: ChartColor(hex: 0x10B981),
-                    id: "exit-\(trade.fingerprint)",
+                    colorHex: 0x10B981,
                     text: "T2 WIN \(rText)",
                     size: 1.6
                 )
             case .tp1Win:
-                exitMarker = SeriesMarker(
-                    time: .utc(timestamp: exitBar.openTimeEpochSeconds),
+                exitMarker = ChartReplayMarker(
+                    id: "exit-\(trade.fingerprint)",
+                    timeEpochSeconds: exitBar.openTimeEpochSeconds,
                     position: isLong ? .aboveBar : .belowBar,
                     shape: .circle,
-                    color: ChartColor(hex: 0x10B981),
-                    id: "exit-\(trade.fingerprint)",
+                    colorHex: 0x10B981,
                     text: "T1 WIN \(rText)",
                     size: 1.6
                 )
             case .slLoss:
-                exitMarker = SeriesMarker(
-                    time: .utc(timestamp: exitBar.openTimeEpochSeconds),
+                exitMarker = ChartReplayMarker(
+                    id: "exit-\(trade.fingerprint)",
+                    timeEpochSeconds: exitBar.openTimeEpochSeconds,
                     position: isLong ? .belowBar : .aboveBar,
                     shape: .square,
-                    color: ChartColor(hex: 0xEF4444),
-                    id: "exit-\(trade.fingerprint)",
+                    colorHex: 0xEF4444,
                     text: "SL HIT \(rText)",
                     size: 1.6
                 )
             case .expired:
-                exitMarker = SeriesMarker(
-                    time: .utc(timestamp: exitBar.openTimeEpochSeconds),
+                exitMarker = ChartReplayMarker(
+                    id: "exit-\(trade.fingerprint)",
+                    timeEpochSeconds: exitBar.openTimeEpochSeconds,
                     position: .aboveBar,
                     shape: .square,
-                    color: ChartColor(hex: 0x9CA7BA),
-                    id: "exit-\(trade.fingerprint)",
+                    colorHex: 0x9CA7BA,
                     text: "EXPIRED",
                     size: 1.2
                 )
             case .notFilled:
-                exitMarker = SeriesMarker(
-                    time: .utc(timestamp: exitBar.openTimeEpochSeconds),
+                exitMarker = ChartReplayMarker(
+                    id: "exit-\(trade.fingerprint)",
+                    timeEpochSeconds: exitBar.openTimeEpochSeconds,
                     position: .aboveBar,
                     shape: .square,
-                    color: ChartColor(hex: 0x9CA7BA),
-                    id: "exit-\(trade.fingerprint)",
+                    colorHex: 0x9CA7BA,
                     text: "NOT FILLED",
                     size: 1.2
                 )
             case .invalidated:
-                exitMarker = SeriesMarker(
-                    time: .utc(timestamp: exitBar.openTimeEpochSeconds),
+                exitMarker = ChartReplayMarker(
+                    id: "exit-\(trade.fingerprint)",
+                    timeEpochSeconds: exitBar.openTimeEpochSeconds,
                     position: .aboveBar,
                     shape: .square,
-                    color: ChartColor(hex: 0xF59E0B),
-                    id: "exit-\(trade.fingerprint)",
+                    colorHex: 0xF59E0B,
                     text: "INVALIDATED",
                     size: 1.2
                 )
             case .open, .pending:
-                exitMarker = SeriesMarker(
-                    time: .utc(timestamp: exitBar.openTimeEpochSeconds),
+                exitMarker = ChartReplayMarker(
+                    id: "exit-\(trade.fingerprint)",
+                    timeEpochSeconds: exitBar.openTimeEpochSeconds,
                     position: .aboveBar,
                     shape: .circle,
-                    color: ChartColor(hex: 0xD4AF37),
-                    id: "exit-\(trade.fingerprint)",
+                    colorHex: 0xDEB853,
                     text: trade.status.rawValue,
                     size: 1.2
                 )
@@ -144,12 +143,11 @@ public enum TradeReplayMarkerBuilder {
     }
 }
 
-/// Tap-to-open Full-Screen Interactive Chart powered by `tradingview/LightweightChartsIOS` (v5.2.0).
+/// Tap-to-open Full-Screen Interactive Chart powered by `ConfluenceChartContainerView`
+/// (`CandleKit`, `DGCharts`, native multi-pane `Swift Trading View`, or persistent `TradingView Web`).
 /// - Auto-fetches 500 bars on open and lazy-loads older history on pan-left (up to 5,000 bars via `HistoryMerge`).
-/// - Plots live forming candles via native `series.update(bar:)` (display-only; never touches `SignalEngine`).
-/// - Preserves ALL signal & psychology overlays (Entry, Stop loss, Target 1, Target 2, active Traps, Live price, Breakeven)
-///   with clean `autoscaleInfoProvider` + `scaleMargins` (never stretching Y-axis on extreme >20% lines).
-/// - Includes Reset view, collapsible Risk strip, labeled "Trade" button, and live Demo position actions.
+/// - Plots live forming candles via display-only `LiveCandleAggregator` (never touches `SignalEngine`).
+/// - Includes timeframe bar (`15m | 30m | 1H | 4H | 1D`), Reset view, collapsible Risk strip, and clean read-only chrome.
 public struct FullScreenChartSheet: View {
     let symbol: String
     let marketClass: MarketClass
@@ -162,7 +160,7 @@ public struct FullScreenChartSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage(ChartEngineOption.appStorageKey) private var storedChartEngineRaw: String = ChartEngineOption.lightweightCharts.rawValue
+    @AppStorage(ChartEngineOption.appStorageKey) private var storedChartEngineRaw: String = ChartEngineOption.candleKit.rawValue
 
     @State private var sheetInstanceId: String = UUID().uuidString
     @State private var session: ChartSessionController
@@ -171,13 +169,15 @@ public struct FullScreenChartSheet: View {
     @State private var proxySymbolUsed: String? = nil
     @State private var loadError: String? = nil
     @State private var showRiskStrip: Bool = true
-
-    @State private var isTradeSheetPresented: Bool = false
-    @State private var journalDraft: JournalEntrySnapshot? = nil
-    @State private var journalDraftIsExisting: Bool = false
-    @State private var editingPosition: DemoPosition? = nil
-    @State private var actionFeedback: String? = nil
     @State private var chartViewMode: DefaultChartViewMode
+
+    private static let dailyUTCFormat = Date.VerbatimFormatStyle(
+        format: "\(month: .abbreviated) \(day: .defaultDigits) UTC",
+        locale: Locale(identifier: "en_US_POSIX"),
+        timeZone: TimeZone(secondsFromGMT: 0) ?? .gmt,
+        calendar: Calendar(identifier: .gregorian)
+    )
+    private static let dailyLocalFormat: Date.FormatString = "\(month: .abbreviated) \(day: .defaultDigits)"
 
     public init(
         signal: TradeSignal,
@@ -241,8 +241,7 @@ public struct FullScreenChartSheet: View {
 
     private var activeChartEngine: ChartEngineOption {
         coordinator?.settings.payload.chartEngine
-            ?? ChartEngineOption(rawValue: storedChartEngineRaw)
-            ?? .lightweightCharts
+            ?? ChartEngineOption.fromStoredRawValue(storedChartEngineRaw)
     }
 
     private var activeOrderFlowSummary: ChartOrderFlowSummary? {
@@ -267,9 +266,6 @@ public struct FullScreenChartSheet: View {
             ?? sourceSignal?.recentCandles.last?.openTimeEpochSeconds
             ?? sourceSignal?.barCloseEpochSeconds
             ?? session.closedCandles.last?.openTimeEpochSeconds
-        let bePrice: Double? = (activeDemoPosition?.isStopLossAtBreakeven == true)
-            ? activeDemoPosition?.stopLoss
-            : nil
         return ChartSignalOverlayModel.build(
             symbol: symbol,
             marketClass: marketClass,
@@ -278,7 +274,7 @@ public struct FullScreenChartSheet: View {
             levels: effectiveLevels,
             overlays: shouldShowSignalLevels ? overlays : ChartOverlayData(),
             entryTimestamp: entryTS,
-            breakevenPrice: bePrice,
+            breakevenPrice: nil,
             livePrice: activeQuote?.price,
             orderFlowSummary: activeOrderFlowSummary
         )
@@ -304,10 +300,6 @@ public struct FullScreenChartSheet: View {
         return coordinator?.livePriceService.latest(for: symbol)
     }
 
-    private var activeDemoPosition: DemoPosition? {
-        coordinator?.demoWallet.activePositions.first { $0.symbol == symbol }
-    }
-
     private var currentReferencePrice: Double? {
         activeQuote?.price ?? session.formingCandle?.close ?? session.closedCandles.last?.close ?? levels?.entryMid
     }
@@ -320,32 +312,8 @@ public struct FullScreenChartSheet: View {
         )
     }
 
-    /// Combines signal levels with any live edits made to an active Demo position on this symbol.
     private var effectiveLevels: TradeLevels? {
         guard shouldShowSignalLevels else { return nil }
-        if let pos = activeDemoPosition {
-            let entry = pos.filledPrice ?? pos.entryPrice
-            let riskPct = abs(entry - pos.stopLoss) / max(entry, 1e-9) * 100.0
-            let rew1Pct = abs(pos.target1 - entry) / max(entry, 1e-9) * 100.0
-            let t2Val = pos.target2 ?? pos.target1
-            let rew2Pct = abs(t2Val - entry) / max(entry, 1e-9) * 100.0
-            let rr1 = riskPct > 1e-9 ? rew1Pct / riskPct : 0
-            let rr2 = riskPct > 1e-9 ? rew2Pct / riskPct : 0
-            return TradeLevels(
-                entryLow: pos.entryLow,
-                entryHigh: pos.entryHigh,
-                entryMid: entry,
-                stopLoss: pos.stopLoss,
-                tp1: pos.target1,
-                tp2: t2Val,
-                riskPercent: riskPct,
-                reward1Percent: rew1Pct,
-                reward2Percent: rew2Pct,
-                riskRewardRatio: rr1,
-                tp2RiskRewardRatio: rr2,
-                isTP2Enabled: pos.target2 != nil
-            )
-        }
         return levels
     }
 
@@ -359,11 +327,17 @@ public struct FullScreenChartSheet: View {
         let use24 = coordinator?.settings.payload.use24HourTime ?? true
         let useUTC = coordinator?.settings.payload.useUTCTimeZone ?? true
         if session.timeframe == .d1 {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = useUTC ? "MMM d 'UTC'" : "MMM d"
-            formatter.timeZone = useUTC ? TimeZone(secondsFromGMT: 0) : TimeZone.current
-            return "Closed \(formatter.string(from: Date(timeIntervalSince1970: last.closeTimeEpochSeconds)))"
+            let date = Date(timeIntervalSince1970: last.closeTimeEpochSeconds)
+            if useUTC {
+                return "Closed \(Self.dailyUTCFormat.format(date))"
+            }
+            let localStyle = Date.VerbatimFormatStyle(
+                format: Self.dailyLocalFormat,
+                locale: Locale(identifier: "en_US_POSIX"),
+                timeZone: TimeZone.current,
+                calendar: Calendar(identifier: .gregorian)
+            )
+            return "Closed \(localStyle.format(date))"
         }
         return "Closed \(TimeDisplayFormatter.formatShortTime(epochSeconds: last.closeTimeEpochSeconds, use24Hour: use24, useUTC: useUTC))"
     }
@@ -386,12 +360,6 @@ public struct FullScreenChartSheet: View {
                     Divider().overlay(palette.border)
                 } else if let quote = activeQuote {
                     liveQuoteOnlyBar(quote: quote, precision: prec)
-                    Divider().overlay(palette.border)
-                }
-
-                // Active Demo Position quick-action bar (Close / Breakeven / Edit SL & Targets)
-                if let pos = activeDemoPosition, !isReplayMode {
-                    activePositionActionBar(pos: pos, precision: prec)
                     Divider().overlay(palette.border)
                 }
 
@@ -455,7 +423,7 @@ public struct FullScreenChartSheet: View {
                 } else if effectiveChartViewMode == .tradingView && effectiveLevels != nil {
                     HStack(spacing: 6) {
                         Image(systemName: "info.circle")
-                            .foregroundStyle(palette.macroIceBlue)
+                            .foregroundStyle(palette.secondaryInk)
                         Text("Switch back to Confluence chart to view Entry, Stop loss, Target & Trap lines directly on candles.")
                             .font(.caption2)
                             .foregroundStyle(palette.secondaryInk)
@@ -463,10 +431,10 @@ public struct FullScreenChartSheet: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 5)
-                    .background(palette.macroIceBlue.opacity(0.10))
+                    .background(palette.elevatedSurface)
                 }
 
-                // Inline Load Error / Action Feedback
+                // Inline Load Error
                 if let err = loadError, effectiveChartViewMode == .confluence {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -480,23 +448,9 @@ public struct FullScreenChartSheet: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(palette.shortCrimson.opacity(0.14))
-                } else if let msg = actionFeedback {
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(palette.longEmerald)
-                        Text(msg)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(palette.primaryInk)
-                        Spacer()
-                        Button("Dismiss") { actionFeedback = nil }
-                            .font(.caption2.weight(.semibold))
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(palette.longEmerald.opacity(0.14))
                 }
 
-                // Main Interactive Chart Surface (Confluence LightweightCharts vs Lazy TradingView Widget)
+                // Main Interactive Chart Surface
                 ZStack {
                     if effectiveChartViewMode == .tradingView {
                         TradingViewWidgetView(
@@ -594,21 +548,6 @@ public struct FullScreenChartSheet: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if coordinator != nil && !isReplayMode && effectiveLevels != nil {
-                        Button {
-                            isTradeSheetPresented = true
-                        } label: {
-                            Text("Trade")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(palette.canvas)
-                                .padding(.horizontal, 11)
-                                .padding(.vertical, 5)
-                                .background(palette.champagneGold, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                         .fontWeight(.semibold)
                 }
@@ -643,50 +582,6 @@ public struct FullScreenChartSheet: View {
                 guard let q = newQuote, !isReplayMode else { return }
                 session.ingestLiveQuote(q)
             }
-            .sheet(isPresented: $isTradeSheetPresented) {
-                if let coord = coordinator, let lv = effectiveLevels {
-                    QuickChartTradeSheet(
-                        symbol: symbol,
-                        marketClass: marketClass,
-                        timeframe: session.timeframe,
-                        direction: sourceSignal?.direction ?? (lv.tp1 >= lv.entryMid ? .long : .short),
-                        levels: lv,
-                        sourceSignal: sourceSignal,
-                        coordinator: coord,
-                        palette: palette,
-                        onOpenJournalDraft: { draft, isExisting in
-                            journalDraft = draft
-                            journalDraftIsExisting = isExisting
-                        },
-                        onDemoPlaced: { pos in
-                            actionFeedback = "Demo \(pos.direction.rawValue.uppercased()) \(pos.symbol) placed (\(pos.status == .open ? "Filled" : "Limit"))."
-                        }
-                    )
-                }
-            }
-            .sheet(item: $journalDraft) { draft in
-                if let coord = coordinator {
-                    JournalEntryEditorSheet(
-                        entry: draft,
-                        isExisting: journalDraftIsExisting,
-                        coordinator: coord,
-                        palette: palette
-                    )
-                }
-            }
-            .sheet(item: $editingPosition) { pos in
-                if let coord = coordinator {
-                    EditDemoLevelsSheet(
-                        position: pos,
-                        precision: prec,
-                        coordinator: coord,
-                        palette: palette,
-                        onSaved: { msg in
-                            actionFeedback = msg
-                        }
-                    )
-                }
-            }
         }
         .interactiveDismissDisabled(true)
     }
@@ -699,7 +594,7 @@ public struct FullScreenChartSheet: View {
         let text = quote?.statusBadgeText(nowEpochSeconds: now) ?? "OFFLINE"
         let color: Color = {
             switch freshness {
-            case .live: return quote?.isStreaming == true ? palette.longEmerald : palette.macroIceBlue
+            case .live: return quote?.isStreaming == true ? palette.longEmerald : palette.secondaryInk
             case .delayed: return palette.trapAmber
             case .offline: return palette.shortCrimson
             }
@@ -736,12 +631,7 @@ public struct FullScreenChartSheet: View {
         precision prec: ChartPricePrecision,
         scaleResult: ChartScaleResult?
     ) -> some View {
-        let walletBalance = coordinator?.demoWallet.cashBalanceUSD ?? DemoWallet.defaultStartingBalanceUSD
-        let riskPctAccount = coordinator?.settings.payload.defaultRiskPercent ?? 1.0
-        let riskUSD = walletBalance * (riskPctAccount / 100.0)
-        let reward1USD = riskUSD * max(lv.riskRewardRatio, 0)
-
-        return VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 if let q = activeQuote {
                     Text(prec.format(q.price))
@@ -770,25 +660,25 @@ public struct FullScreenChartSheet: View {
 
             if showRiskStrip {
                 HStack(spacing: 10) {
-                    levelPill("Entry", prec.format(lv.entryMid), sub: nil, palette.champagneGold)
+                    levelPill("Entry", prec.format(lv.entryMid), sub: "R:R 1:\(String(format: "%.1f", lv.riskRewardRatio))", palette.champagneGold)
                     levelPill(
                         "Stop loss",
                         prec.format(lv.stopLoss),
-                        sub: "-\(String(format: "%.2f", lv.riskPercent))% · -$\(String(format: "%.0f", riskUSD))",
+                        sub: "-\(String(format: "%.2f", lv.riskPercent))%",
                         palette.shortCrimson
                     )
                     levelPill(
                         "Target 1",
                         prec.format(lv.tp1),
-                        sub: "+\(String(format: "%.2f", lv.reward1Percent))% · +$\(String(format: "%.0f", reward1USD))",
+                        sub: "+\(String(format: "%.2f", lv.reward1Percent))%",
                         palette.longEmerald
                     )
                     if lv.isTP2Enabled {
                         levelPill(
                             "Target 2",
                             prec.format(lv.tp2),
-                            sub: "1:\(String(format: "%.1f", lv.tp2RiskRewardRatio))",
-                            palette.macroIceBlue
+                            sub: "+\(String(format: "%.2f", lv.reward2Percent))% · 1:\(String(format: "%.1f", lv.tp2RiskRewardRatio))",
+                            palette.longEmerald
                         )
                     }
                 }
@@ -812,64 +702,6 @@ public struct FullScreenChartSheet: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(palette.surface)
-    }
-
-    private func activePositionActionBar(pos: DemoPosition, precision prec: ChartPricePrecision) -> some View {
-        let mark = activeQuote?.price ?? session.closedCandles.last?.close ?? pos.entryPrice
-        let pnl = pos.status == .open ? DemoWalletEngine.pnlUSD(for: pos, markPrice: mark) : 0.0
-        let rMult = pos.status == .open ? DemoWalletEngine.rMultiple(for: pos, markPrice: mark) : 0.0
-        let pnlColor = pnl >= 0 ? palette.longEmerald : palette.shortCrimson
-
-        return HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Demo \(pos.direction.rawValue.uppercased()) · \(pos.status == .open ? "OPEN" : "LIMIT")")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(palette.champagneGold)
-                Text("\(pnl >= 0 ? "+" : "-")$\(String(format: "%.2f", abs(pnl))) (\(String(format: "%+.2fR", rMult)))")
-                    .font(.caption.weight(.bold).monospacedDigit())
-                    .foregroundStyle(pnlColor)
-            }
-            Spacer()
-            if pos.status == .open && !pos.isStopLossAtBreakeven {
-                Button("Move SL to BE") {
-                    if let coord = coordinator {
-                        switch coord.moveDemoStopLossToBreakeven(positionId: pos.id) {
-                        case .success:
-                            actionFeedback = "Stop loss moved to breakeven (\(prec.format(pos.filledPrice ?? pos.entryPrice)))."
-                        case .failure(let err):
-                            loadError = err.userMessage
-                        }
-                    }
-                }
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(palette.macroIceBlue)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(palette.macroIceBlue.opacity(0.14), in: Capsule())
-            }
-            Button("Edit") {
-                editingPosition = pos
-            }
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(palette.primaryInk)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(palette.elevatedSurface, in: Capsule())
-
-            Button("Close now") {
-                if coordinator?.closeDemoPositionManually(positionId: pos.id) == true {
-                    actionFeedback = "Demo position closed at \(prec.format(mark))."
-                }
-            }
-            .font(.caption2.weight(.bold))
-            .foregroundStyle(palette.shortCrimson)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(palette.shortCrimson.opacity(0.14), in: Capsule())
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(palette.elevatedSurface.opacity(0.65))
     }
 
     private func replayOutcomeBanner(
@@ -908,7 +740,7 @@ public struct FullScreenChartSheet: View {
             accent = palette.trapAmber; icon = "exclamationmark.triangle"
             headline = "INVALIDATED BEFORE FILL"
         case .pending:
-            accent = palette.macroIceBlue; icon = "clock"
+            accent = palette.secondaryInk; icon = "clock"
             headline = "PENDING FILL · \(trade.direction.rawValue.uppercased())"
         case .open:
             accent = palette.champagneGold; icon = "hourglass"
@@ -941,7 +773,7 @@ public struct FullScreenChartSheet: View {
 
     private var chartControlsBar: some View {
         HStack(spacing: 6) {
-            // Timeframe pills
+            // Timeframe pills (15m | 30m | 1H | 4H | 1D)
             HStack(spacing: 4) {
                 ForEach(Timeframe.allCases, id: \.self) { tf in
                     let isSelected = (session.timeframe == tf)
@@ -953,7 +785,7 @@ public struct FullScreenChartSheet: View {
                         Text(tf.displayLabel)
                             .font(.caption2.weight(.bold).monospacedDigit())
                             .foregroundStyle(isSelected ? palette.canvas : palette.secondaryInk)
-                            .padding(.horizontal, 8)
+                            .padding(.horizontal, 7)
                             .padding(.vertical, 5)
                             .background(isSelected ? palette.champagneGold : palette.elevatedSurface, in: Capsule())
                     }
@@ -964,7 +796,7 @@ public struct FullScreenChartSheet: View {
 
             Spacer()
 
-            // Reset button (fits content + scrolls to real time + restores autoscale)
+            // Reset button (fits content + scrolls to real time + restores Y-scale)
             Button {
                 session.requestResetView()
             } label: {
@@ -1084,311 +916,5 @@ public struct FullScreenChartSheet: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-// MARK: - Quick In-Chart Trade & Edit Sheets
-
-private struct QuickChartTradeSheet: View {
-    let symbol: String
-    let marketClass: MarketClass
-    let timeframe: Timeframe
-    let direction: TradeDirection
-    let levels: TradeLevels
-    let sourceSignal: TradeSignal?
-    @Bindable var coordinator: MarketScannerCoordinator
-    let palette: ConfluencePalette
-    let onOpenJournalDraft: (JournalEntrySnapshot, Bool) -> Void
-    let onDemoPlaced: (DemoPosition) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var mode: Int = 0 // 0 = Demo, 1 = Log real trade
-    @State private var orderType: DemoOrderType = .market
-    @State private var exitTarget: DemoExitTarget = .target1
-    @State private var riskPercent: Double = 1.0
-    @State private var allowStaleOverride: Bool = false
-    @State private var errorMessage: String? = nil
-    @State private var showStaleConfirm: Bool = false
-
-    var body: some View {
-        let quote = coordinator.livePriceService.latest(for: symbol)
-        let leverage = DemoMarginSpec.defaultLeverage(for: marketClass)
-
-        NavigationStack {
-            Form {
-                Section {
-                    Picker("Mode", selection: $mode) {
-                        Text("Demo trade").tag(0)
-                        Text("Log real trade").tag(1)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                if mode == 0 {
-                    Section("Paper wallet") {
-                        HStack {
-                            Text("Free margin")
-                            Spacer()
-                            Text("$\(String(format: "%.2f", coordinator.demoWallet.freeMarginUSD))")
-                                .fontWeight(.semibold).monospacedDigit()
-                        }
-                        HStack {
-                            Text("Leverage (\(marketClass.displayName))")
-                            Spacer()
-                            Text("\(String(format: "%.0f", leverage))x").monospacedDigit()
-                        }
-                        if let q = quote {
-                            HStack {
-                                Text("Live price")
-                                Spacer()
-                                Text("\(ChartPricePrecision.resolve(symbol: symbol, marketClass: marketClass, referencePrice: q.price).format(q.price)) · \(q.statusBadgeText())")
-                                    .monospacedDigit()
-                            }
-                        }
-                    }
-
-                    Section("Order setup") {
-                        Picker("Order type", selection: $orderType) {
-                            Text("Market (live price)").tag(DemoOrderType.market)
-                            Text("Limit (entry level)").tag(DemoOrderType.limit)
-                        }
-                        Picker("Exit target", selection: $exitTarget) {
-                            Text("Target 1").tag(DemoExitTarget.target1)
-                            if levels.isTP2Enabled {
-                                Text("Target 2").tag(DemoExitTarget.target2)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        VStack(alignment: .leading) {
-                            HStack {
-                                Text("Risk per trade")
-                                Spacer()
-                                Text("\(String(format: "%.1f", riskPercent))%")
-                                    .monospacedDigit()
-                            }
-                            Slider(value: $riskPercent, in: 0.5...5.0, step: 0.5)
-                        }
-                    }
-
-                    if let err = errorMessage {
-                        Section {
-                            Text(err)
-                                .font(.caption)
-                                .foregroundStyle(palette.shortCrimson)
-                            if showStaleConfirm {
-                                Toggle("Confirm fill using stale price (>60s)", isOn: $allowStaleOverride)
-                                    .font(.caption)
-                            }
-                        }
-                    }
-
-                    Section {
-                        Button {
-                            submitDemoOrder()
-                        } label: {
-                            Text("Place Demo \(direction.rawValue.uppercased())")
-                                .frame(maxWidth: .infinity)
-                                .fontWeight(.bold)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(direction == .long ? palette.longEmerald : palette.shortCrimson)
-                    }
-                } else {
-                    Section {
-                        Text("Log this setup in your personal real-trade journal (no broker connection or order execution).")
-                            .font(.caption)
-                            .foregroundStyle(palette.secondaryInk)
-                        Button("Open Trade Journal Entry") {
-                            let existing = sourceSignal.flatMap { coordinator.journalEntry(forSignalFingerprint: $0.fingerprint) }
-                            let draft: JournalEntrySnapshot
-                            if let existing {
-                                draft = existing
-                            } else if let sig = sourceSignal {
-                                draft = coordinator.makeJournalDraft(from: sig)
-                            } else {
-                                draft = JournalEntrySnapshot(
-                                    symbol: symbol,
-                                    marketClass: marketClass,
-                                    timeframe: timeframe,
-                                    direction: direction,
-                                    plannedEntry: levels.entryMid,
-                                    stopLoss: levels.stopLoss,
-                                    tp1: levels.tp1,
-                                    tp2: levels.isTP2Enabled ? levels.tp2 : nil
-                                )
-                            }
-                            dismiss()
-                            onOpenJournalDraft(draft, existing != nil)
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Trade \(symbol)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-        }
-    }
-
-    private func submitDemoOrder() {
-        errorMessage = nil
-        showStaleConfirm = false
-        let now = Date().timeIntervalSince1970
-        let fillBars = PassiveOutcomeEvaluator.defaultFillWindowBars(for: timeframe)
-        let expiry = now + Double(fillBars) * timeframe.seconds
-
-        let req = DemoOrderRequest(
-            signalId: sourceSignal?.id,
-            symbol: symbol,
-            marketClass: marketClass,
-            timeframe: timeframe,
-            direction: direction,
-            orderType: orderType,
-            entryPrice: levels.entryMid,
-            entryLow: levels.entryLow,
-            entryHigh: levels.entryHigh,
-            stopLoss: levels.stopLoss,
-            target1: levels.tp1,
-            target2: levels.isTP2Enabled ? levels.tp2 : nil,
-            exitTarget: exitTarget,
-            riskPercent: riskPercent,
-            limitExpiryEpochSeconds: orderType == .limit ? expiry : nil,
-            allowStalePriceFill: allowStaleOverride,
-            feesEnabled: coordinator.settings.payload.demoWalletFeesEnabled
-        )
-
-        switch coordinator.placeDemoOrder(req) {
-        case .success(let pos):
-            dismiss()
-            onDemoPlaced(pos)
-        case .failure(let err):
-            errorMessage = err.userMessage
-            if case .staleLiveQuote = err {
-                showStaleConfirm = true
-            } else if case .marketClosed(_, true) = err {
-                orderType = .limit
-            }
-        }
-    }
-}
-
-private struct EditDemoLevelsSheet: View {
-    let position: DemoPosition
-    let precision: ChartPricePrecision
-    @Bindable var coordinator: MarketScannerCoordinator
-    let palette: ConfluencePalette
-    let onSaved: (String) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var slText: String
-    @State private var t1Text: String
-    @State private var t2Text: String
-    @State private var exitTarget: DemoExitTarget
-    @State private var errorMessage: String? = nil
-
-    init(
-        position: DemoPosition,
-        precision: ChartPricePrecision,
-        coordinator: MarketScannerCoordinator,
-        palette: ConfluencePalette,
-        onSaved: @escaping (String) -> Void
-    ) {
-        self.position = position
-        self.precision = precision
-        self.coordinator = coordinator
-        self.palette = palette
-        self.onSaved = onSaved
-        _slText = State(initialValue: precision.format(position.stopLoss))
-        _t1Text = State(initialValue: precision.format(position.target1))
-        _t2Text = State(initialValue: position.target2.map { precision.format($0) } ?? "")
-        _exitTarget = State(initialValue: position.exitTarget)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Levels (\(position.symbol) · \(position.direction.rawValue.uppercased()))") {
-                    HStack {
-                        Text("Stop loss")
-                        Spacer()
-                        TextField("Stop loss", text: $slText)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    HStack {
-                        Text("Target 1")
-                        Spacer()
-                        TextField("Target 1", text: $t1Text)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    HStack {
-                        Text("Target 2 (optional)")
-                        Spacer()
-                        TextField("Optional", text: $t2Text)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    Picker("Exit target", selection: $exitTarget) {
-                        Text("Target 1").tag(DemoExitTarget.target1)
-                        Text("Target 2").tag(DemoExitTarget.target2)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                if let err = errorMessage {
-                    Section {
-                        Text(err)
-                            .font(.caption)
-                            .foregroundStyle(palette.shortCrimson)
-                    }
-                }
-            }
-            .navigationTitle("Edit Stop loss & Targets")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { saveEdits() }
-                }
-            }
-        }
-    }
-
-    private func saveEdits() {
-        errorMessage = nil
-        guard let newSL = Double(slText), let newT1 = Double(t1Text) else {
-            errorMessage = "Enter valid numeric values for Stop loss and Target 1."
-            return
-        }
-        let newT2: Double? = t2Text.trimmingCharacters(in: .whitespaces).isEmpty ? nil : Double(t2Text)
-        if !t2Text.trimmingCharacters(in: .whitespaces).isEmpty && newT2 == nil {
-            errorMessage = "Target 2 must be a valid number."
-            return
-        }
-
-        if case .failure(let err) = coordinator.updateDemoStopLoss(positionId: position.id, newStopLoss: newSL) {
-            errorMessage = err.userMessage
-            return
-        }
-        if case .failure(let err) = coordinator.updateDemoTargets(
-            positionId: position.id,
-            newTarget1: newT1,
-            newTarget2: newT2,
-            newExitTarget: exitTarget
-        ) {
-            errorMessage = err.userMessage
-            return
-        }
-        dismiss()
-        onSaved("Updated Stop loss and targets for \(position.symbol).")
     }
 }

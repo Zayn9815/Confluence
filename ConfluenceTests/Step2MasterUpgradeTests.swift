@@ -12,9 +12,13 @@ final class Step2MasterUpgradeTests: XCTestCase {
         let decoded = try JSONDecoder().decode(ChartEngineOption.self, from: validJSON)
         XCTAssertEqual(decoded, .tradingViewWeb)
 
+        let legacyJSON = Data("\"lightweightCharts\"".utf8)
+        let legacyMigrated = try JSONDecoder().decode(ChartEngineOption.self, from: legacyJSON)
+        XCTAssertEqual(legacyMigrated, .candleKit)
+
         let unknownJSON = Data("\"removed_future_engine_v9\"".utf8)
         let fallback = try JSONDecoder().decode(ChartEngineOption.self, from: unknownJSON)
-        XCTAssertEqual(fallback, .lightweightCharts)
+        XCTAssertEqual(fallback, .candleKit)
     }
 
     // MARK: - CryptoOrderFlowVenueSymbols & Hard Non-Crypto Gate
@@ -67,13 +71,15 @@ final class Step2MasterUpgradeTests: XCTestCase {
         let synced = TradingViewWebSessionManager.buildSyncURL(
             symbol: "BTC/USDT",
             timeframe: .h4,
-            existingURL: existing
+            existingURL: existing,
+            isDark: true
         )
         XCTAssertEqual(synced.host, "www.tradingview.com")
         XCTAssertEqual(synced.path, "/chart/AbCdEf12")
         XCTAssertTrue(synced.absoluteString.contains("BINANCE"))
         XCTAssertTrue(synced.absoluteString.contains("BTCUSDT"))
         XCTAssertTrue(synced.absoluteString.contains("interval=240"))
+        XCTAssertTrue(synced.absoluteString.contains("theme=dark"))
     }
 
     // MARK: - SideStore Dynamic Bundle ID Backup Acceptance & tvLastChartURL Round-Trip
@@ -89,7 +95,7 @@ final class Step2MasterUpgradeTests: XCTestCase {
             outcomes: [],
             tradeLedger: [],
             journalEntries: [],
-            demoWallet: DemoWallet(),
+            trackedJournalEntries: [],
             tvLastChartURL: "https://www.tradingview.com/chart/MyLayout1/?symbol=BINANCE:BTCUSDT&interval=60"
         )
         let encoded = try JSONEncoder().encode(archive)
@@ -109,7 +115,7 @@ final class Step2MasterUpgradeTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PersistedSettingsPayload.self, from: legacyJSON)
         XCTAssertFalse(decoded.isOrderFlowEnabled)
         XCTAssertFalse(decoded.tradingViewPreferDesktop)
-        XCTAssertEqual(decoded.chartEngine, .lightweightCharts)
+        XCTAssertEqual(decoded.chartEngine, .candleKit)
     }
 
     @MainActor

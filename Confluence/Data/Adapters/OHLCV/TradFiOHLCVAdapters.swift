@@ -183,7 +183,8 @@ public struct TradFiOHLCVRouter: Sendable {
             throw NetworkAdapterError.invalidURL("Missing Yahoo symbol for \(asset.symbol)")
         }
 
-        // Yahoo has no native 4h interval; fetch 1h over 60d and causally resample to UTC 4h
+        // Yahoo has no native 4h interval; fetch 1h over 60d and causally resample to UTC 4h.
+        // For 30m, try native 30m first; if empty/failed, automatically fetch 15m and resample via CandleHygieneEngine.resample15MTo30M.
         let yahooInterval: String
         let yahooRange: String
         let windowSeconds: TimeInterval
@@ -191,6 +192,8 @@ public struct TradFiOHLCVRouter: Sendable {
         switch timeframe {
         case .m15:
             yahooInterval = "15m"; yahooRange = "30d"; windowSeconds = 25 * 86_400; needs4HResample = false
+        case .m30:
+            yahooInterval = "30m"; yahooRange = "30d"; windowSeconds = 25 * 86_400; needs4HResample = false
         case .h1:
             yahooInterval = "1h"; yahooRange = "60d"; windowSeconds = 55 * 86_400; needs4HResample = false
         case .h4:
@@ -239,6 +242,19 @@ public struct TradFiOHLCVRouter: Sendable {
                 throw urlErr
             } catch {
                 lastErr = error
+            }
+        }
+
+        // Automatic 15m -> 30m causal resampling fallback when Yahoo native 30m fails or returns empty
+        if timeframe == .m30 {
+            let m15Res = try await fetchYahooFinance(asset: asset, timeframe: .m15, endTimeEpochSeconds: endTimeEpochSeconds)
+            let serverNow = Date().timeIntervalSince1970
+            let resampled = CandleHygieneEngine.resample15MTo30M(
+                m15Candles: m15Res.candles,
+                serverNowEpochSeconds: serverNow
+            )
+            if !resampled.isEmpty {
+                return OHLCVFetchResult(candles: resampled, providerName: "Yahoo Finance (15m→30m)", latencyMs: m15Res.latencyMs)
             }
         }
         throw lastErr

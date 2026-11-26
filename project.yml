@@ -16,15 +16,9 @@ packages:
   PopupView:
     url: https://github.com/exyte/PopupView
     from: 5.0.9
-  LightweightChartsIOS:
-    url: https://github.com/tradingview/LightweightChartsIOS
-    from: 5.2.0
   DGCharts:
     url: https://github.com/ChartsOrg/Charts
     from: 5.1.0
-  SwiftTradingView:
-    url: https://github.com/sergiikhliustin/swift-trading-view
-    from: 1.1.0
   CandleKit:
     url: https://github.com/LalanaChami/CandleKit
     from: 0.2.0
@@ -76,12 +70,8 @@ targets:
         product: Pow
       - package: PopupView
         product: PopupView
-      - package: LightweightChartsIOS
-        product: LightweightCharts
       - package: DGCharts
         product: DGCharts
-      - package: SwiftTradingView
-        product: SwiftTradingView
       - package: CandleKit
         product: CandleKit
       - package: CandleKit

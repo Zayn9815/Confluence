@@ -14,7 +14,7 @@ public enum TradFiLiveFeedMode: String, Codable, Sendable, CaseIterable, Identif
 
     public var displayLabel: String {
         switch self {
-        case .autoStreamWithBackup: return "Auto — live stream with backup (Recommended)"
+        case .autoStreamWithBackup: return "Auto — live stream with backup"
         case .liveStreamOnly: return "Live stream only"
         case .poll10s: return "Every 10 seconds (Battery saver)"
         case .off: return "Off (manual refresh only)"
@@ -31,7 +31,7 @@ public enum CryptoLiveFeedMode: String, Codable, Sendable, CaseIterable, Identif
 
     public var displayLabel: String {
         switch self {
-        case .liveStream: return "Live stream (Recommended)"
+        case .liveStream: return "Live stream"
         case .poll3s: return "Every 3 seconds (Battery saver)"
         case .off: return "Off"
         }
@@ -46,7 +46,7 @@ public enum DefaultChartViewMode: String, Codable, Sendable, CaseIterable, Ident
 
     public var displayLabel: String {
         switch self {
-        case .confluence: return "Confluence chart (Recommended)"
+        case .confluence: return "Confluence chart"
         case .tradingView: return "TradingView chart"
         }
     }

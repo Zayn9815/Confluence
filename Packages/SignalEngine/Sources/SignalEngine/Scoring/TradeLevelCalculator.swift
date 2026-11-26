@@ -30,6 +30,15 @@ public enum TradeLevelCalculator {
         let safeATR = max(validATR, lastBar.close * 0.0005, Double.leastNormalMagnitude)
         let close = lastBar.close
 
+        let entryZoneScale: Double
+        switch timeframe {
+        case .m15: entryZoneScale = 0.90
+        case .m30: entryZoneScale = 0.95
+        case .h1: entryZoneScale = 1.00
+        case .h4: entryZoneScale = 1.08
+        case .d1: entryZoneScale = 1.15
+        }
+
         // Entry Zone anchored around current close or active FVG/OB edge
         let entryLow: Double
         let entryHigh: Double
@@ -42,26 +51,26 @@ public enum TradeLevelCalculator {
                 $0.direction == .long
                 && $0.isUnmitigated
                 && $0.top <= close * 1.005
-                && $0.bottom <= close + safeATR * 0.15
+                && $0.bottom <= close + safeATR * 0.15 * entryZoneScale
             }) {
-                entryLow = min(close, max(fvg.bottom, close - safeATR * 0.6))
-                entryHigh = min(max(fvg.top, close), close + safeATR * 0.15)
+                entryLow = min(close, max(fvg.bottom, close - safeATR * 0.6 * entryZoneScale))
+                entryHigh = min(max(fvg.top, close), close + safeATR * 0.15 * entryZoneScale)
             } else {
-                entryLow = close - safeATR * 0.25
-                entryHigh = close + safeATR * 0.10
+                entryLow = close - safeATR * 0.25 * entryZoneScale
+                entryHigh = close + safeATR * 0.10 * entryZoneScale
             }
         } else {
             if let fvg = ict.fvgs.last(where: {
                 $0.direction == .short
                 && $0.isUnmitigated
                 && $0.bottom >= close * 0.995
-                && $0.top >= close - safeATR * 0.15
+                && $0.top >= close - safeATR * 0.15 * entryZoneScale
             }) {
-                entryLow = max(min(fvg.bottom, close), close - safeATR * 0.15)
-                entryHigh = max(close, min(fvg.top, close + safeATR * 0.6))
+                entryLow = max(min(fvg.bottom, close), close - safeATR * 0.15 * entryZoneScale)
+                entryHigh = max(close, min(fvg.top, close + safeATR * 0.6 * entryZoneScale))
             } else {
-                entryLow = close - safeATR * 0.10
-                entryHigh = close + safeATR * 0.25
+                entryLow = close - safeATR * 0.10 * entryZoneScale
+                entryHigh = close + safeATR * 0.25 * entryZoneScale
             }
         }
         let orderedLow = min(entryLow, entryHigh)
@@ -115,9 +124,29 @@ public enum TradeLevelCalculator {
             )
         }
 
-        // Structure / ATR Mode (Default)
+        // Structure / ATR Mode (Default) — exhaustive timeframe scaling
+        let atrBufferMult: Double
+        let atrTP2Multiplier: Double
+        switch timeframe {
+        case .m15:
+            atrBufferMult = 0.22
+            atrTP2Multiplier = 8.0
+        case .m30:
+            atrBufferMult = 0.25
+            atrTP2Multiplier = 9.0
+        case .h1:
+            atrBufferMult = 0.28
+            atrTP2Multiplier = 10.0
+        case .h4:
+            atrBufferMult = 0.32
+            atrTP2Multiplier = 11.0
+        case .d1:
+            atrBufferMult = 0.35
+            atrTP2Multiplier = 12.0
+        }
+
         let stopLoss: Double
-        let atrBuffer = safeATR * 0.25
+        let atrBuffer = safeATR * atrBufferMult
         if direction == .long {
             let recentSwingLow = ict.swings.reversed().first(where: { !$0.isHigh && $0.price.isFinite && $0.price < entryMid })?.price
             let recentOBLow = ict.orderBlocks.reversed().first(where: { $0.direction == .long && $0.bottom.isFinite && $0.bottom < entryMid })?.bottom
@@ -141,7 +170,6 @@ public enum TradeLevelCalculator {
         let minTargetDist = riskDistance * minRR
         let maxTP1RR = min(max(minRR * 1.6, 3.5), 4.0)
         let maxTP2RR = min(max(minRR * 2.2, 4.5), 6.0)
-        let atrTP2Multiplier: Double = (timeframe == .m15) ? 8.0 : 10.0
         let maxTP1Dist = max(minTargetDist, min(riskDistance * max(maxTP1RR, minRR), safeATR * (atrTP2Multiplier * 0.7)))
         let maxTP2Dist = max(minTargetDist * 1.25, min(riskDistance * maxTP2RR, safeATR * atrTP2Multiplier))
         let defaultTP2Dist = min(maxTP2Dist, riskDistance * max(minRR * 1.65, 3.3))
@@ -222,6 +250,123 @@ public enum TradeLevelCalculator {
             riskRewardRatio: rr1,
             tp2RiskRewardRatio: rr2,
             isTP2Enabled: enableTP2Target
+        )
+    }
+
+    /// Synthesizes deterministic ATR-anchored Entry Zone / SL / TP1 / TP2 for any actionable `BehavioralTrap`
+    /// so Trap Alerts always have concrete auditable trade levels for automatic Journal tracking.
+    public static func synthesizeTrapLevels(
+        trap: BehavioralTrap,
+        candles: [Candle],
+        atr: Double,
+        marketClass: MarketClass,
+        timeframe: Timeframe
+    ) -> TradeLevels? {
+        guard trap.level.isFinite, trap.level > 0,
+              trap.extremePrice.isFinite, trap.extremePrice > 0
+        else { return nil }
+
+        let direction = trap.direction.institutionalDirection
+        guard direction == .long || direction == .short else { return nil }
+
+        let refClose: Double = {
+            if let last = candles.last, last.close.isFinite, last.close > 0 {
+                return last.close
+            }
+            return trap.level
+        }()
+
+        let validATR = (atr.isFinite && atr > 0) ? atr : (candles.last?.rangeSize ?? (refClose * 0.002))
+        let safeATR = max(validATR, refClose * 0.0005, Double.leastNormalMagnitude)
+
+        let atrBufferMult: Double
+        let atrTP2Multiplier: Double
+        switch timeframe {
+        case .m15:
+            atrBufferMult = 0.22
+            atrTP2Multiplier = 8.0
+        case .m30:
+            atrBufferMult = 0.25
+            atrTP2Multiplier = 9.0
+        case .h1:
+            atrBufferMult = 0.28
+            atrTP2Multiplier = 10.0
+        case .h4:
+            atrBufferMult = 0.32
+            atrTP2Multiplier = 11.0
+        case .d1:
+            atrBufferMult = 0.35
+            atrTP2Multiplier = 12.0
+        }
+
+        let atrBuffer = safeATR * atrBufferMult
+        let clampedTrapRef = min(refClose + safeATR * 0.45, max(refClose - safeATR * 0.45, trap.level))
+        let entryLow: Double
+        let entryHigh: Double
+        if direction == .long {
+            entryLow = min(refClose, clampedTrapRef) - safeATR * 0.15
+            entryHigh = max(refClose, clampedTrapRef) + safeATR * 0.10
+        } else {
+            entryLow = min(refClose, clampedTrapRef) - safeATR * 0.10
+            entryHigh = max(refClose, clampedTrapRef) + safeATR * 0.15
+        }
+        let orderedLow = max(min(entryLow, entryHigh), refClose * 0.05)
+        let orderedHigh = max(entryLow, entryHigh)
+        let entryMid = (orderedLow + orderedHigh) * 0.5
+        guard entryMid.isFinite, entryMid > 0 else { return nil }
+        let minStopDist = max(Double.leastNormalMagnitude, entryMid * 1e-12)
+
+        let maxSLFraction = max(0.005, marketClass.defaultMaxStopLossPercent / 100.0)
+        let stopLoss: Double
+        if direction == .long {
+            let rawSL = min(trap.extremePrice - atrBuffer, entryMid - safeATR * 0.65)
+            let floorSL = max(entryMid * (1.0 - maxSLFraction), entryMid * 0.05)
+            stopLoss = min(entryMid - safeATR * 0.35, max(rawSL, floorSL))
+        } else {
+            let rawSL = max(trap.extremePrice + atrBuffer, entryMid + safeATR * 0.65)
+            let capSL = entryMid * (1.0 + maxSLFraction)
+            stopLoss = max(entryMid + safeATR * 0.35, min(rawSL, capSL))
+        }
+
+        let riskDistance = abs(entryMid - stopLoss)
+        guard riskDistance.isFinite, riskDistance > minStopDist else { return nil }
+
+        let tp1Dist = min(max(riskDistance * 2.0, safeATR * 1.2), safeATR * (atrTP2Multiplier * 0.7))
+        let tp2Dist = min(max(tp1Dist + riskDistance * 1.0, riskDistance * 3.2), safeATR * atrTP2Multiplier)
+
+        let tp1: Double
+        let tp2: Double
+        if direction == .long {
+            tp1 = entryMid + tp1Dist
+            tp2 = entryMid + max(tp2Dist, tp1Dist + riskDistance * 0.5)
+        } else {
+            let floor = entryMid * 0.05
+            tp1 = max(floor, entryMid - tp1Dist)
+            tp2 = max(floor, min(tp1, entryMid - max(tp2Dist, tp1Dist + riskDistance * 0.5)))
+        }
+
+        let reward1Dist = abs(tp1 - entryMid)
+        let reward2Dist = abs(tp2 - entryMid)
+        let riskPct = (riskDistance / entryMid) * 100.0
+        let reward1Pct = (reward1Dist / entryMid) * 100.0
+        let reward2Pct = (reward2Dist / entryMid) * 100.0
+        let rr1 = reward1Dist / riskDistance
+        let rr2 = reward2Dist / riskDistance
+        guard riskPct.isFinite, reward1Pct.isFinite, reward2Pct.isFinite, rr1.isFinite, rr2.isFinite else { return nil }
+
+        return TradeLevels(
+            entryLow: orderedLow,
+            entryHigh: orderedHigh,
+            entryMid: entryMid,
+            stopLoss: stopLoss,
+            tp1: tp1,
+            tp2: tp2,
+            riskPercent: riskPct,
+            reward1Percent: reward1Pct,
+            reward2Percent: reward2Pct,
+            riskRewardRatio: rr1,
+            tp2RiskRewardRatio: rr2,
+            isTP2Enabled: true
         )
     }
 }

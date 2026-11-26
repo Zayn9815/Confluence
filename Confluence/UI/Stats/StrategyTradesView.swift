@@ -99,8 +99,9 @@ public struct StrategyTradesView: View {
                         }
                     }
                     .padding(.horizontal, 14)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 16)
                 }
+                .safeAreaPadding(.bottom, 96)
                 .background(palette.canvas)
             }
         }
@@ -136,7 +137,7 @@ public struct StrategyTradesView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 let wrText: String = {
-                    let pct = "\(Int((s.winRate * 100).rounded()))%"
+                    let pct = String(format: "%.1f%%", s.winRate * 100.0)
                     if let ci = s.winRateCI {
                         return "\(pct) (\(ci.percentRangeLabel))"
                     }
@@ -145,7 +146,7 @@ public struct StrategyTradesView: View {
                 statPill("WIN RATE (95% CI)", wrText, s.winRate >= 0.5 ? palette.longEmerald : palette.shortCrimson)
                 statPill("EXPECTANCY", String(format: "%+.2fR", s.expectancyR), s.expectancyR >= 0 ? palette.champagneGold : palette.shortCrimson)
                 statPill("RECORD", "\(s.wins)W / \(s.losses)L", palette.primaryInk)
-                statPill("BRIER", String(format: "%.3f", s.brierContribution), palette.macroIceBlue)
+                statPill("BRIER", String(format: "%.3f", s.brierContribution), palette.champagneGold)
             }
             if !s.bestPairs.isEmpty || !s.worstPairs.isEmpty {
                 HStack(spacing: 8) {
@@ -228,7 +229,7 @@ public struct StrategyTradesView: View {
                     levelPair("SL", prec.format(trade.levels.stopLoss), palette.shortCrimson)
                     levelPair("TP1", prec.format(trade.levels.tp1), palette.longEmerald)
                     if trade.levels.isTP2Enabled {
-                        levelPair("TP2", prec.format(trade.levels.tp2), palette.macroIceBlue)
+                        levelPair("TP2", prec.format(trade.levels.tp2), palette.longEmerald)
                     }
                 }
 
@@ -281,7 +282,7 @@ public struct StrategyTradesView: View {
         case .tp1Win, .tp2Win: return palette.longEmerald
         case .slLoss: return palette.shortCrimson
         case .open: return palette.champagneGold
-        case .pending: return palette.macroIceBlue
+        case .pending: return palette.secondaryInk
         case .invalidated: return palette.trapAmber
         case .notFilled, .expired: return palette.tertiaryInk
         }

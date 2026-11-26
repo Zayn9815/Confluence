@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import PopupView
 import SignalEngine
 
@@ -92,13 +93,16 @@ public struct ConfluenceRootView: View {
                 coordinator.pendingDeepLink = nil
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            coordinator.trimNonVisibleCaches()
+        }
         .popup(isPresented: isBannerPresented) {
             if let banner = coordinator.activeBanner {
                 floatingBannerView(banner)
             }
         } customize: { params in
             params
-                .type(.floater(verticalPadding: 12, horizontalPadding: 14, useSafeAreaInset: true))
+                .type(.floater(verticalPadding: 16, horizontalPadding: 14, useSafeAreaInset: true))
                 .position(.top)
                 .animation(.spring(response: 0.38, dampingFraction: 0.85))
                 .autohideIn(4.5)
@@ -112,7 +116,7 @@ public struct ConfluenceRootView: View {
             switch banner.kind {
             case .strongSignal(let dir): return dir == .long ? palette.longEmerald : (dir == .short ? palette.shortCrimson : palette.champagneGold)
             case .trapAlert: return palette.trapAmber
-            case .macroRelease: return palette.macroIceBlue
+            case .macroRelease: return palette.champagneGold
             }
         }()
 
@@ -153,5 +157,6 @@ public struct ConfluenceRootView: View {
             .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
         }
         .buttonStyle(.plain)
+        .safeAreaPadding(.top, 4)
     }
 }

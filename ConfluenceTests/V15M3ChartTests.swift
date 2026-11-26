@@ -102,10 +102,10 @@ final class V15M3ChartTests: XCTestCase {
         XCTAssertEqual(ctrl.fitRequestToken, initialFitToken + 1)
     }
 
-    func testChartAutoscaleScriptBuilderProducesValidProviderJS() {
-        let js = ChartAutoscaleScriptBuilder.makeProviderJS(corePrices: [59_000, 58_000, 61_500])
-        XCTAssertTrue(js.contains("function(original)"))
-        XCTAssertTrue(js.contains("59000.00000000"))
-        XCTAssertTrue(js.contains("0.2000"))
+    func testChartEngineOptionDefaultsToCandleKitAndMigratesRemovedEngines() {
+        XCTAssertEqual(ChartEngineOption.allCases, [.candleKit, .dgCharts, .swiftTradingView, .tradingViewWeb])
+        XCTAssertEqual(ChartEngineOption.fromStoredRawValue("lightweightCharts"), .candleKit)
+        XCTAssertEqual(ChartEngineOption.fromStoredRawValue("dgCharts"), .dgCharts)
+        XCTAssertEqual(ChartEngineOption.fromStoredRawValue("unknown_engine"), .candleKit)
     }
 }

@@ -3,175 +3,268 @@ import SignalEngine
 
 public enum JournalFilterTab: String, CaseIterable, Identifiable {
     case all = "All"
-    case open = "Open"
+    case open = "Live"
     case wins = "Wins"
     case losses = "Losses"
+    case expired = "Expired"
     public var id: String { rawValue }
 }
 
-public enum JournalSourceFilter: String, CaseIterable, Identifiable {
-    case all = "All"
-    case demo = "Demo"
-    case real = "Real"
-    public var id: String { rawValue }
+// MARK: - Isolated Live Tick Metrics Leaf (Zero Parent Card Re-evaluation on Ticks)
+
+private struct JournalLiveMetricsLeafView: View {
+    let entry: TrackedJournalTrade
+    let journalCoordinator: SignalJournalCoordinator
+    let precision: ChartPricePrecision
+    let palette: ConfluencePalette
+
+    var body: some View {
+        let tick = journalCoordinator.liveTicksByEntryID[entry.id]
+        let price = tick?.price ?? entry.currentPrice
+        let pct = tick?.pnlPercent ?? entry.livePnLPercent
+        let rMult: Double = entry.status.isOpen
+            ? (tick?.rMultiple ?? entry.liveRMultiple)
+            : (entry.realizedR ?? entry.liveRMultiple)
+        let isPositive = rMult >= 0
+        let tone = entry.status == .pending
+            ? palette.secondaryInk
+            : (isPositive ? palette.longEmerald : palette.shortCrimson)
+
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(entry.status.isOpen ? "Live \(precision.format(price))" : "Last \(precision.format(price))")
+                    .font(.caption2.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(palette.secondaryInk)
+                Spacer()
+                if entry.status == .pending {
+                    Text("Waiting for entry fill")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(palette.tertiaryInk)
+                } else if entry.status == .expired {
+                    Text("0.00R · Unfilled")
+                        .font(.caption2.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(palette.tertiaryInk)
+                } else {
+                    Text("\(String(format: "%+.2fR", rMult)) · \(String(format: "%+.2f%%", pct))")
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .foregroundStyle(tone)
+                }
+            }
+
+            // Compact SL — Entry — Live — TP1 — TP2 visual progress track
+            levelProgressTrack(currentPrice: price, isPositive: isPositive)
+        }
+    }
+
+    private func levelProgressTrack(currentPrice: Double, isPositive: Bool) -> some View {
+        let farTarget = entry.hasDistinctTP2 ? entry.target2 : entry.target1
+        let minP = min(entry.stopLoss, farTarget)
+        let maxP = max(entry.stopLoss, farTarget)
+        let span = max(maxP - minP, 1e-9)
+
+        func normalized(_ p: Double) -> Double {
+            let raw = entry.direction == .short
+                ? (maxP - p) / span
+                : (p - minP) / span
+            return min(1.0, max(0.0, raw))
+        }
+
+        let entryFrac = normalized(entry.anchorEntryPrice)
+        let tp1Frac = normalized(entry.target1)
+        let liveFrac = normalized(currentPrice)
+
+        return VStack(spacing: 4) {
+            GeometryReader { geo in
+                let w = max(1, geo.size.width)
+                let fillStart = min(entryFrac, liveFrac) * w
+                let fillWidth = max(3, abs(liveFrac - entryFrac) * w)
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(palette.border.opacity(0.45))
+                        .frame(height: 5)
+                    if entry.status != .pending && entry.status != .expired {
+                        Capsule()
+                            .fill(isPositive ? palette.longEmerald : palette.shortCrimson)
+                            .frame(width: fillWidth, height: 5)
+                            .offset(x: fillStart)
+                    }
+                    // Entry marker
+                    Rectangle()
+                        .fill(palette.champagneGold)
+                        .frame(width: 2, height: 10)
+                        .offset(x: max(0, min(w - 2, entryFrac * w)))
+                    // TP1 marker when TP2 is distinct
+                    if entry.hasDistinctTP2 {
+                        Rectangle()
+                            .fill(palette.longEmerald)
+                            .frame(width: 2, height: 10)
+                            .offset(x: max(0, min(w - 2, tp1Frac * w)))
+                    }
+                    // Live dot
+                    Circle()
+                        .fill(entry.status == .pending ? palette.secondaryInk : (isPositive ? palette.longEmerald : palette.shortCrimson))
+                        .frame(width: 8, height: 8)
+                        .offset(x: max(0, min(w - 8, liveFrac * w - 4)))
+                }
+            }
+            .frame(height: 10)
+
+            HStack(spacing: 4) {
+                Text("SL \(precision.format(entry.stopLoss))")
+                    .foregroundStyle(palette.shortCrimson)
+                Spacer()
+                Text("E \(precision.format(entry.anchorEntryPrice))")
+                    .foregroundStyle(palette.champagneGold)
+                Spacer()
+                Text("T1 \(precision.format(entry.target1))")
+                    .foregroundStyle(palette.longEmerald)
+                if entry.hasDistinctTP2 {
+                    Text("· T2 \(precision.format(entry.target2))")
+                        .foregroundStyle(palette.longEmerald.opacity(0.9))
+                }
+            }
+            .font(.system(size: 9.5, weight: .medium).monospacedDigit())
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+        }
+    }
 }
 
-/// Unified Trade Journal supporting All / Demo / Real filter chips, live P/L rows (R, %, $),
-/// Stop loss -> Target 1 progress bars, OFFLINE freshness badges, and non-auto-closing
-/// Apply / Dismiss level alerts for manual real trades.
+// MARK: - 100% Automatic 3-Section Live Signal Journal View
+
+/// 100% Automatic 3-Section Signal Journal (`Strong Signals` | `Weak & Filtered` | `Trap Alerts`).
+/// Zero manual entry buttons, zero Demo Wallet rows, battery-safe <= 2 Hz live tracking.
 public struct TradeJournalView: View {
     @Bindable public var coordinator: MarketScannerCoordinator
     public let palette: ConfluencePalette
 
-    @State private var sourceFilter: JournalSourceFilter = .all
+    @State private var selectedSection: JournalSection = .strongSignals
     @State private var statusFilter: JournalFilterTab = .all
-    @State private var editingEntry: JournalEntrySnapshot?
-    @State private var showPlaceTrade: Bool = false
+    @State private var orderFlowPayload: OrderFlowSheetPayload? = nil
 
     public init(coordinator: MarketScannerCoordinator, palette: ConfluencePalette) {
         self.coordinator = coordinator
         self.palette = palette
     }
 
-    private var filteredRealEntries: [JournalEntrySnapshot] {
-        guard sourceFilter != .demo else { return [] }
-        return coordinator.journalEntries.filter { e in
-            switch statusFilter {
-            case .all: return true
-            case .open: return e.outcome == .open
-            case .wins: return e.outcome == .win
-            case .losses: return e.outcome == .loss
-            }
-        }
+    private var sectionEntries: [TrackedJournalTrade] {
+        coordinator.journalCoordinator.entries(for: selectedSection)
     }
 
-    private var filteredDemoPositions: [DemoPosition] {
-        guard sourceFilter != .real else { return [] }
-        return coordinator.demoWallet.positions.filter { pos in
+    private var filteredEntries: [TrackedJournalTrade] {
+        sectionEntries.filter { entry in
             switch statusFilter {
             case .all: return true
-            case .open: return pos.status.isActive
-            case .wins: return pos.status == .closedTarget1 || pos.status == .closedTarget2 || (pos.status == .closedManual && pos.realizedPnLUSD > 0)
-            case .losses: return pos.status == .closedStopLoss || (pos.status == .closedManual && pos.realizedPnLUSD < 0)
+            case .open: return entry.status.isOpen
+            case .wins: return entry.status.isCountedWin
+            case .losses: return entry.status.isCountedLoss
+            case .expired: return entry.status == .expired
             }
         }
     }
 
     public var body: some View {
-        let stats = coordinator.journalSummary
+        let stat = coordinator.journalCoordinator.stat(for: selectedSection)
         let use24h = coordinator.settings.payload.use24HourTime
         let useUTC = coordinator.settings.payload.useUTCTimeZone
-        let now = Date().timeIntervalSince1970
 
         ScrollView {
             VStack(spacing: 12) {
-                // My Execution vs System Comparison Card
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("MY EXECUTION VS. SYSTEM")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(palette.tertiaryInk)
-                        Spacer()
+                // 1. 3-Section Selector Bar with live/total badge counts
+                HStack(spacing: 6) {
+                    ForEach(JournalSection.allCases) { section in
+                        let isSelected = (selectedSection == section)
+                        let secStat = coordinator.journalCoordinator.stat(for: section)
+                        let totalCount = coordinator.journalCoordinator.entries(for: section).count
+                        let liveBadge = secStat.liveCount + secStat.pendingCount
                         Button {
-                            showPlaceTrade = true
+                            selectedSection = section
                         } label: {
-                            Label("New Trade", systemImage: "plus")
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(palette.canvas)
-                                .padding(.horizontal, 9)
-                                .padding(.vertical, 4)
-                                .background(palette.champagneGold, in: Capsule())
+                            VStack(spacing: 2) {
+                                Text(shortSectionTitle(section))
+                                    .font(.caption2.weight(.bold))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                Text(liveBadge > 0 ? "\(liveBadge) live · \(totalCount)" : "\(totalCount) total")
+                                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                                    .opacity(isSelected ? 0.9 : 0.75)
+                            }
+                            .foregroundStyle(isSelected ? palette.canvas : palette.primaryInk)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 7)
+                            .frame(maxWidth: .infinity)
+                            .background(isSelected ? palette.champagneGold : palette.surface, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .strokeBorder(isSelected ? Color.clear : palette.border, lineWidth: 0.75)
+                            )
                         }
                         .buttonStyle(.plain)
-                    }
-
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                        journalMetric(
-                            title: "MY WIN RATE",
-                            value: stats.myWinRate.map { "\(Int(($0 * 100).rounded()))%" } ?? "—",
-                            sub: stats.myWinRateCI.map { "95% CI \($0.formattedSummary)" } ?? "\(stats.winsCount)W / \(stats.lossesCount)L",
-                            accent: (stats.myWinRate ?? 0.5) >= 0.5 ? palette.longEmerald : palette.shortCrimson
-                        )
-                        journalMetric(
-                            title: "MY AVG R vs SYSTEM",
-                            value: stats.myAvgR.map { String(format: "%+.2fR", $0) } ?? "—",
-                            sub: "System: \(stats.systemAvgR.map { String(format: "%+.2fR", $0) } ?? "N/A")",
-                            accent: (stats.myAvgR ?? 0) >= 0 ? palette.champagneGold : palette.shortCrimson
-                        )
-                    }
-
-                    HStack {
-                        Text("\(stats.totalTaken) real · \(coordinator.demoWallet.positions.count) demo")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(palette.secondaryInk)
-                        Spacer()
-                        if let ratio = stats.takenRatio {
-                            Text("Taken Ratio: \(Int((ratio * 100).rounded()))%")
-                                .font(.caption2.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(palette.macroIceBlue)
-                        }
                     }
                 }
-                .padding(12)
+
+                // 2. Section Summary Strip (Live, Pending, Win Rate, Avg R)
+                HStack(spacing: 8) {
+                    summaryCell("LIVE", "\(stat.liveCount)", palette.champagneGold)
+                    summaryCell("PENDING", "\(stat.pendingCount)", palette.secondaryInk)
+                    summaryCell(
+                        "WIN RATE",
+                        stat.totalResolved > 0 ? String(format: "%.1f%%", stat.winRate * 100.0) : "—",
+                        stat.totalResolved > 0 ? (stat.winRate >= 0.5 ? palette.longEmerald : palette.shortCrimson) : palette.tertiaryInk
+                    )
+                    summaryCell(
+                        "AVG R",
+                        stat.totalResolved > 0 ? String(format: "%+.2fR", stat.averageR) : "—",
+                        stat.totalResolved > 0 ? (stat.averageR >= 0 ? palette.longEmerald : palette.shortCrimson) : palette.tertiaryInk
+                    )
+                }
+                .padding(10)
                 .institutionalCard(palette: palette)
 
-                // Source Chips: All / Demo / Real
+                // 3. Status Filter Chips + CSV ShareLink
                 HStack(spacing: 6) {
-                    ForEach(JournalSourceFilter.allCases) { src in
-                        let selected = (sourceFilter == src)
-                        Button {
-                            sourceFilter = src
-                        } label: {
-                            Text(src.rawValue)
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(selected ? palette.canvas : palette.primaryInk)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 5)
-                                .background(selected ? palette.macroIceBlue : palette.elevatedSurface, in: Capsule())
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(JournalFilterTab.allCases) { tab in
+                                let selected = (statusFilter == tab)
+                                Button {
+                                    statusFilter = tab
+                                } label: {
+                                    Text(tab.rawValue)
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundStyle(selected ? palette.canvas : palette.secondaryInk)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(selected ? palette.champagneGold : palette.elevatedSurface, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .buttonStyle(.plain)
                     }
-                    Spacer()
-                    if let csvURL = coordinator.exportJournalCSVURL(), !coordinator.journalEntries.isEmpty {
+
+                    if let csvURL = coordinator.exportJournalCSVURL(), !coordinator.journalCoordinator.allEntries.isEmpty {
                         ShareLink(item: csvURL) {
                             Label("CSV", systemImage: "square.and.arrow.up")
                                 .font(.caption2.weight(.bold))
-                                .foregroundStyle(palette.macroIceBlue)
+                                .foregroundStyle(palette.primaryInk)
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 5)
                                 .background(palette.elevatedSurface, in: Capsule())
+                                .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
                         }
                     }
                 }
 
-                // Status Filter Chips: All / Open / Wins / Losses
-                HStack(spacing: 6) {
-                    ForEach(JournalFilterTab.allCases) { tab in
-                        let selected = (statusFilter == tab)
-                        Button {
-                            statusFilter = tab
-                        } label: {
-                            Text(tab.rawValue)
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(selected ? palette.canvas : palette.secondaryInk)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(selected ? palette.champagneGold : palette.elevatedSurface, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    Spacer()
-                }
-
-                if filteredDemoPositions.isEmpty && filteredRealEntries.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "book.closed")
+                // 4. Automatic Tracked Signal Feed (LazyVStack with deterministic IDs)
+                if filteredEntries.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "waveform.path.ecg.rectangle")
                             .font(.title2)
                             .foregroundStyle(palette.champagneGold)
-                        Text("No Trades Logged Yet")
+                        Text("No \(selectedSection.displayName) Logged Yet")
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(palette.primaryInk)
-                        Text("Tap \"New Trade\" above or \"Trade\" on any interactive chart to place a paper Demo trade or log a real trade.")
+                        Text("Confluence automatically records and tracks every scanned Strong Signal, Weak/Filtered setup, and Trap Alert live against market prices — zero manual entry required.")
                             .font(.caption)
                             .foregroundStyle(palette.secondaryInk)
                             .multilineTextAlignment(.center)
@@ -181,326 +274,163 @@ public struct TradeJournalView: View {
                     .institutionalCard(palette: palette)
                 } else {
                     LazyVStack(spacing: 10) {
-                        ForEach(filteredDemoPositions) { pos in
-                            demoJournalRow(pos, use24h: use24h, useUTC: useUTC, now: now)
-                        }
-                        ForEach(filteredRealEntries) { entry in
-                            realJournalRow(entry, use24h: use24h, useUTC: useUTC, now: now)
+                        ForEach(filteredEntries) { entry in
+                            journalCard(entry, use24h: use24h, useUTC: useUTC)
+                                .id(entry.id)
                         }
                     }
                 }
             }
             .padding(14)
         }
+        .safeAreaPadding(.bottom, 96)
         .background(palette.canvas)
         .onAppear {
             coordinator.acquireActivePositionsLiveFeed()
         }
-        .sheet(item: $editingEntry) { item in
-            JournalEntryEditorSheet(
-                entry: item,
-                isExisting: true,
-                coordinator: coordinator,
-                palette: palette
-            )
-        }
-        .sheet(isPresented: $showPlaceTrade) {
-            PlaceDemoTradeSheet(
-                coordinator: coordinator,
+        .sheet(item: $orderFlowPayload) { payload in
+            OrderFlowInsightSheet(
+                payload: payload,
                 palette: palette,
-                onOpenJournalDraft: { draft, _ in
-                    editingEntry = draft
-                }
+                use24HourTime: use24h,
+                useUTCTimeZone: useUTC
             )
         }
     }
 
-    private func journalMetric(title: String, value: String, sub: String, accent: Color) -> some View {
+    private func shortSectionTitle(_ section: JournalSection) -> String {
+        switch section {
+        case .strongSignals: return "Strong"
+        case .weakAndFiltered: return "Weak / Filtered"
+        case .trapAlerts: return "Trap Alerts"
+        }
+    }
+
+    private func summaryCell(_ title: String, _ value: String, _ accent: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: 8.5, weight: .bold))
                 .foregroundStyle(palette.tertiaryInk)
             Text(value)
-                .font(.title3.weight(.bold).monospacedDigit())
+                .font(.subheadline.weight(.bold).monospacedDigit())
                 .foregroundStyle(accent)
-            Text(sub)
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(palette.secondaryInk)
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
-        .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(palette.elevatedSurface.opacity(0.65), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    private func demoJournalRow(_ pos: DemoPosition, use24h: Bool, useUTC: Bool, now: TimeInterval) -> some View {
-        let quote = coordinator.livePriceService.latest(for: pos.symbol)
-        let entry = pos.filledPrice ?? pos.entryPrice
-        let prec = ChartPricePrecision.resolve(symbol: pos.symbol, marketClass: pos.marketClass, referencePrice: entry)
-        let mark = pos.status.isActive ? (quote?.price ?? entry) : (pos.exitPrice ?? entry)
-        let pnlUSD = pos.status.isActive ? (pos.status == .open ? DemoWalletEngine.pnlUSD(for: pos, markPrice: mark) : 0) : pos.realizedPnLUSD
-        let metrics = LivePositionRowMetrics.compute(
-            direction: pos.direction,
-            entryPrice: entry,
-            stopLoss: pos.stopLoss,
-            initialStopLoss: pos.initialStopLoss,
-            target1: pos.target1,
-            liveQuote: quote,
-            fallbackPrice: mark,
-            pnlUSD: pnlUSD,
-            marginUSD: pos.marginReservedUSD,
-            nowEpochSeconds: now
+    private func journalCard(_ entry: TrackedJournalTrade, use24h: Bool, useUTC: Bool) -> some View {
+        let prec = ChartPricePrecision.resolve(
+            symbol: entry.symbol,
+            marketClass: entry.assetClass,
+            referencePrice: entry.anchorEntryPrice
         )
-        let displayR: Double = pos.status.isActive ? (pos.status == .open ? metrics.rMultiple : 0.0) : pos.rMultiple
-        let displayPct: Double = (pos.status == .pendingLimit) ? 0.0 : metrics.returnPercent
-        let pnlColor = pnlUSD >= 0 ? palette.longEmerald : palette.shortCrimson
+        let statusTone = statusColor(for: entry.status)
 
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("DEMO")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(palette.macroIceBlue)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(palette.macroIceBlue.opacity(0.15), in: Capsule())
-                Text("\(pos.symbol) · \(pos.timeframe.displayLabel)")
+        return VStack(alignment: .leading, spacing: 8) {
+            // Header Row: Symbol + TF + Direction + Score + Status Pill
+            HStack(spacing: 6) {
+                Text(entry.symbol)
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(palette.primaryInk)
-                Text(pos.direction.rawValue.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(palette.color(for: pos.direction))
-                Spacer()
-                if pos.status.isActive && metrics.freshness == .offline {
-                    Text("OFFLINE")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(palette.shortCrimson)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(palette.shortCrimson.opacity(0.15), in: Capsule())
-                } else {
-                    Text(pos.status.isActive ? (pos.status == .open ? "OPEN" : "LIMIT") : "CLOSED")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(pos.status.isActive ? palette.champagneGold : pnlColor)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background((pos.status.isActive ? palette.champagneGold : pnlColor).opacity(0.15), in: Capsule())
+                    .lineLimit(1)
+
+                Text(entry.timeframe.displayLabel)
+                    .font(.system(size: 10, weight: .bold).monospacedDigit())
+                    .foregroundStyle(palette.secondaryInk)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(palette.elevatedSurface, in: Capsule())
+
+                Text(entry.direction.rawValue.uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(palette.color(for: entry.direction))
+
+                Text("\(Int(entry.score.rounded()))")
+                    .font(.system(size: 10, weight: .bold).monospacedDigit())
+                    .foregroundStyle(palette.champagneGold)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(palette.champagneGold.opacity(0.14), in: Capsule())
+
+                Spacer(minLength: 4)
+
+                Text(entry.status.badgeLabel)
+                    .font(.system(size: 9.5, weight: .heavy))
+                    .foregroundStyle(statusTone)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(statusTone.opacity(0.15), in: Capsule())
+            }
+
+            // Filter Reason pill (Weak & Filtered / Trap Alerts) + Tappable Crypto Order Flow Sign
+            if entry.filterReason != nil || (entry.assetClass == .crypto && entry.orderFlowSummary != nil) {
+                ConfluenceFlowLayout(horizontalSpacing: 6, verticalSpacing: 5) {
+                    if let reason = entry.filterReason, !reason.isEmpty {
+                        Text(reason)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(entry.section == .trapAlerts ? palette.trapAmber : palette.secondaryInk)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background((entry.section == .trapAlerts ? palette.trapAmber.opacity(0.14) : palette.elevatedSurface), in: Capsule())
+                    }
+
+                    if entry.assetClass == .crypto, let ofSummary = entry.orderFlowSummary {
+                        OrderFlowSignPill(summary: ofSummary, palette: palette) {
+                            orderFlowPayload = OrderFlowSheetPayload(
+                                id: "journal_\(entry.id)",
+                                symbol: entry.symbol,
+                                timeframe: entry.timeframe,
+                                direction: entry.direction,
+                                summary: ofSummary,
+                                entry: entry.anchorEntryPrice,
+                                stopLoss: entry.stopLoss,
+                                target1: entry.target1,
+                                target2: entry.hasDistinctTP2 ? entry.target2 : nil,
+                                isHistoricalSnapshot: true
+                            )
+                        }
+                    }
                 }
             }
 
-            HStack(spacing: 8) {
-                Text(pos.status.isActive ? "Live \(prec.format(mark))" : "Exit \(prec.format(mark))")
-                    .foregroundStyle(palette.secondaryInk)
-                Spacer()
-                Text("\(pnlUSD >= 0 ? "+" : "-")$\(String(format: "%.2f", abs(pnlUSD)))")
-                    .fontWeight(.bold)
-                    .foregroundStyle(pnlColor)
-                Text("(\(String(format: "%+.2fR", displayR)) · \(String(format: "%+.1f%%", displayPct)))")
-                    .foregroundStyle(pnlColor)
-            }
-            .font(.caption2.monospacedDigit())
+            // Isolated Live Metrics & SL — Entry — Live — TP1 — TP2 Track
+            JournalLiveMetricsLeafView(
+                entry: entry,
+                journalCoordinator: coordinator.journalCoordinator,
+                precision: prec,
+                palette: palette
+            )
 
-            if pos.status.isActive {
-                progressBar(
-                    progress: metrics.stopToTargetProgress,
-                    entryFraction: metrics.entryMarkerFraction,
-                    stopLabel: "Stop loss \(prec.format(pos.stopLoss))",
-                    targetLabel: "Target 1 \(prec.format(pos.target1))",
-                    isProfit: pnlUSD >= 0
-                )
-            }
-
+            // Footer Timestamp
             HStack {
-                Text(TimeDisplayFormatter.formatDateTime(epochSeconds: pos.createdAtEpochSeconds, use24Hour: use24h, useUTC: useUTC))
+                Text("Captured \(TimeDisplayFormatter.formatDateTime(epochSeconds: entry.createdAt, use24Hour: use24h, useUTC: useUTC))")
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundStyle(palette.tertiaryInk)
                 Spacer()
-                if pos.status.isActive {
-                    Button("Close now") {
-                        _ = coordinator.closeDemoPositionManually(positionId: pos.id)
-                    }
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(palette.shortCrimson)
+                if let closedAt = entry.closedAt {
+                    Text("Closed \(TimeDisplayFormatter.formatShortTime(epochSeconds: closedAt, use24Hour: use24h, useUTC: useUTC))")
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(palette.tertiaryInk)
+                } else if entry.isWinLocked {
+                    Text("WIN LOCKED · Runner")
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(palette.longEmerald)
                 }
             }
         }
         .padding(12)
-        .institutionalCard(palette: palette)
+        .institutionalCard(palette: palette, accentBorder: entry.status == .winTrackingTP2 ? palette.longEmerald.opacity(0.45) : nil)
     }
 
-    private func realJournalRow(_ entry: JournalEntrySnapshot, use24h: Bool, useUTC: Bool, now: TimeInterval) -> some View {
-        let dec = PriceFormatHelper.decimals(for: entry.symbol, marketClass: entry.marketClass, referencePrice: entry.plannedEntry)
-        let entryPrice = entry.actualFillPrice ?? entry.plannedEntry
-        let quote = (entry.outcome == .open) ? coordinator.livePriceService.latest(for: entry.symbol) : nil
-        let liveMetrics = (entry.outcome == .open)
-            ? LivePositionRowMetrics.compute(
-                direction: entry.direction,
-                entryPrice: entryPrice,
-                stopLoss: entry.stopLoss,
-                target1: entry.tp1,
-                liveQuote: quote,
-                fallbackPrice: entryPrice,
-                nowEpochSeconds: now
-            )
-            : nil
-        let suggestion = coordinator.manualTradeSuggestions[entry.id]
-
-        let color: Color = {
-            switch entry.outcome {
-            case .win: return palette.longEmerald
-            case .loss: return palette.shortCrimson
-            case .open: return palette.champagneGold
-            case .breakeven, .scratched: return palette.secondaryInk
-            }
-        }()
-
-        return VStack(alignment: .leading, spacing: 6) {
-            Button {
-                editingEntry = entry
-            } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("REAL")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(palette.champagneGold)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(palette.champagneGold.opacity(0.15), in: Capsule())
-                        Text("\(entry.symbol) · \(entry.timeframe.displayLabel)")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(palette.primaryInk)
-                        Text(entry.direction.rawValue.uppercased())
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(palette.color(for: entry.direction))
-                        Spacer()
-                        if let m = liveMetrics, m.freshness == .offline {
-                            Text("OFFLINE")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(palette.shortCrimson)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(palette.shortCrimson.opacity(0.14), in: Capsule())
-                        }
-                        Text(entry.outcome.rawValue)
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(color)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(color.opacity(0.15), in: Capsule())
-                    }
-
-                    HStack(spacing: 8) {
-                        Text("Entry \(PriceFormatHelper.format(entryPrice, decimals: dec))")
-                        if let q = quote {
-                            Text("Live \(PriceFormatHelper.format(q.price, decimals: dec))")
-                        } else if let ex = entry.exitPrice {
-                            Text("Exit \(PriceFormatHelper.format(ex, decimals: dec))")
-                        }
-                        Spacer()
-                        if let m = liveMetrics {
-                            let c = m.rMultiple >= 0 ? palette.longEmerald : palette.shortCrimson
-                            Text("\(String(format: "%+.2fR", m.rMultiple)) · \(String(format: "%+.2f%%", m.returnPercent))")
-                                .fontWeight(.bold)
-                                .foregroundStyle(c)
-                        } else if let r = entry.effectiveRMultiple {
-                            Text(String(format: "%+.2fR", r))
-                                .fontWeight(.bold)
-                                .foregroundStyle(r >= 0 ? palette.longEmerald : palette.shortCrimson)
-                        }
-                    }
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(palette.secondaryInk)
-
-                    if let m = liveMetrics {
-                        progressBar(
-                            progress: m.stopToTargetProgress,
-                            entryFraction: m.entryMarkerFraction,
-                            stopLabel: "Stop loss \(PriceFormatHelper.format(entry.stopLoss, decimals: dec))",
-                            targetLabel: "Target 1 \(PriceFormatHelper.format(entry.tp1, decimals: dec))",
-                            isProfit: m.rMultiple >= 0
-                        )
-                    }
-
-                    if !entry.notes.isEmpty {
-                        Text(entry.notes)
-                            .font(.caption2)
-                            .foregroundStyle(palette.tertiaryInk)
-                            .lineLimit(2)
-                    }
-
-                    HStack {
-                        Text(TimeDisplayFormatter.formatDateTime(epochSeconds: entry.takenAt.timeIntervalSince1970, use24Hour: use24h, useUTC: useUTC))
-                            .font(.system(size: 10).monospacedDigit())
-                            .foregroundStyle(palette.tertiaryInk)
-                        Spacer()
-                        Text("Tap to edit")
-                            .font(.system(size: 10))
-                            .foregroundStyle(palette.tertiaryInk)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-
-            // Manual trades NEVER auto-close: surface non-destructive Apply / Dismiss chip when level hit
-            if let sug = suggestion {
-                HStack(spacing: 8) {
-                    Image(systemName: "bell.badge.fill")
-                        .font(.caption2)
-                        .foregroundStyle(palette.champagneGold)
-                    Text(sug.message)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(palette.primaryInk)
-                    Spacer()
-                    Button("Apply") {
-                        coordinator.applyManualTradeSuggestion(sug)
-                    }
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(palette.canvas)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(palette.longEmerald, in: Capsule())
-
-                    Button("Dismiss") {
-                        coordinator.dismissManualTradeSuggestion(entryId: entry.id)
-                    }
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(palette.secondaryInk)
-                }
-                .padding(8)
-                .background(palette.champagneGold.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-        }
-        .padding(12)
-        .institutionalCard(palette: palette)
-    }
-
-    private func progressBar(
-        progress: Double,
-        entryFraction: Double,
-        stopLabel: String,
-        targetLabel: String,
-        isProfit: Bool
-    ) -> some View {
-        VStack(spacing: 3) {
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(palette.border.opacity(0.4)).frame(height: 5)
-                    Capsule()
-                        .fill(isProfit ? palette.longEmerald : palette.shortCrimson)
-                        .frame(width: max(4, geo.size.width * progress), height: 5)
-                    Rectangle()
-                        .fill(palette.champagneGold)
-                        .frame(width: 2, height: 9)
-                        .offset(x: max(0, min(geo.size.width - 2, geo.size.width * entryFraction)))
-                }
-            }
-            .frame(height: 9)
-
-            HStack {
-                Text(stopLabel).foregroundStyle(palette.shortCrimson)
-                Spacer()
-                Text(targetLabel).foregroundStyle(palette.longEmerald)
-            }
-            .font(.system(size: 10).monospacedDigit())
+    private func statusColor(for status: JournalTradeStatus) -> Color {
+        switch status {
+        case .pending: return palette.secondaryInk
+        case .live: return palette.champagneGold
+        case .winTrackingTP2, .winTP1, .winTP2: return palette.longEmerald
+        case .loss: return palette.shortCrimson
+        case .expired: return palette.tertiaryInk
         }
     }
 }

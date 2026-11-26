@@ -131,40 +131,41 @@ final class V15M4WalletScheduleStatsTests: XCTestCase {
             isLegacyImmediateFill: false,
             origin: .scanner
         )
-        let newsOut = SignalOutcomeRecord(
-            signalId: "sig-news-1",
+        let trapOut = SignalOutcomeRecord(
+            signalId: "sig-trap-1",
             symbol: "XAU/USD",
             marketClass: .metals,
-            category: .strongSignal,
+            category: .trapAlert,
             direction: .long,
             predictedProbability: 0.74,
             status: .hitTP2,
             netReturnPercent: 2.5,
             rMultiple: 2.5,
-            strategyIds: ["macro_surprise_catalyst"],
-            hadMacroCatalyst: true,
+            strategyIds: ["trap_bull_bear_sweep"],
+            hadMacroCatalyst: false,
             resolvedAtEpochSeconds: 1_776_175_200,
             lifecycleStatus: .resolved,
             isLegacyImmediateFill: false,
-            origin: .news
+            origin: .scanner
         )
         store.updateOutcome(strongOut)
         store.updateOutcome(weakOut)
-        store.updateOutcome(newsOut)
+        store.updateOutcome(trapOut)
 
         let coord = MarketScannerCoordinator(settings: settings, store: store)
         XCTAssertEqual(coord.originWinRates.count, 3)
 
         let strongCard = coord.originWinRates.first { $0.group == .strongSignals }
-        let trapsCard = coord.originWinRates.first { $0.group == .trapsAndFiltered }
-        let newsCard = coord.originWinRates.first { $0.group == .newsSetups }
+        let weakCard = coord.originWinRates.first { $0.group == .weakAndFiltered }
+        let trapCard = coord.originWinRates.first { $0.group == .trapAlerts }
 
         XCTAssertEqual(strongCard?.wins, 1)
         XCTAssertEqual(strongCard?.losses, 0)
-        XCTAssertEqual(trapsCard?.losses, 1) // weakOut tracked even with Show Weak OFF
-        XCTAssertEqual(trapsCard?.positiveCountLabel, "Worked")
-        XCTAssertEqual(trapsCard?.negativeCountLabel, "Failed")
-        XCTAssertEqual(newsCard?.wins, 1)
+        XCTAssertEqual(weakCard?.losses, 1) // weakOut tracked even with Show Weak OFF
+        XCTAssertEqual(trapCard?.wins, 1)
+
+        // 3 automatic Journal sections always populated
+        XCTAssertEqual(coord.journalSectionStats.map(\.section), [.strongSignals, .weakAndFiltered, .trapAlerts])
 
         // Bucket 60-69 is empty -> "No trades yet"
         let bucket60 = coord.strengthBuckets.first { $0.id == "60_69" }

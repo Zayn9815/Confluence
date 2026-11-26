@@ -179,280 +179,6 @@ final class V15EngineTests: XCTestCase {
         XCTAssertEqual(result!.offScaleOverlays.first?.label, "Target 2")
     }
 
-    // MARK: - DemoWalletEngineTests
-
-    func testDemoWalletMarketSafeguardsStaleQuoteAndClosedMarket() {
-        let wallet = DemoWallet(startingBalanceUSD: 1_000)
-        // Saturday 12:00 UTC -> Forex market closed
-        let saturdayUTC: TimeInterval = 1_776_513_600 // 2026-04-18 12:00 UTC (Saturday)
-        let fxReq = DemoOrderRequest(
-            symbol: "EUR/USD",
-            marketClass: .forex,
-            direction: .long,
-            orderType: .market,
-            entryPrice: 1.1000,
-            stopLoss: 1.0950,
-            target1: 1.1100
-        )
-        let closedRes = DemoWalletEngine.placeOrder(
-            wallet: wallet,
-            request: fxReq,
-            liveQuotePrice: 1.1000,
-            liveQuoteEpochSeconds: saturdayUTC - 5,
-            nowEpochSeconds: saturdayUTC
-        )
-        if case .failure(.marketClosed(_, let suggestLimit)) = closedRes {
-            XCTAssertTrue(suggestLimit)
-        } else {
-            XCTFail("Expected marketClosed rejection on Saturday FX market order")
-        }
-
-        // Crypto is 24/7, but quote older than 60s must be rejected unless allowStalePriceFill == true
-        let btcReq = DemoOrderRequest(
-            symbol: "BTC/USDT",
-            marketClass: .crypto,
-            direction: .long,
-            orderType: .market,
-            entryPrice: 60_000,
-            stopLoss: 59_000,
-            target1: 62_000,
-            allowStalePriceFill: false
-        )
-        let staleRes = DemoWalletEngine.placeOrder(
-            wallet: wallet,
-            request: btcReq,
-            liveQuotePrice: 60_000,
-            liveQuoteEpochSeconds: saturdayUTC - 75,
-            nowEpochSeconds: saturdayUTC
-        )
-        if case .failure(.staleLiveQuote(let age)) = staleRes {
-            XCTAssertEqual(age, 75, accuracy: 0.1)
-        } else {
-            XCTFail("Expected staleLiveQuote rejection when quote age > 60s")
-        }
-
-        // Explicit confirmation overrides stale check
-        let confirmedReq = DemoOrderRequest(
-            symbol: "BTC/USDT",
-            marketClass: .crypto,
-            direction: .long,
-            orderType: .market,
-            entryPrice: 60_000,
-            stopLoss: 59_000,
-            target1: 62_000,
-            allowStalePriceFill: true
-        )
-        let okRes = DemoWalletEngine.placeOrder(
-            wallet: wallet,
-            request: confirmedReq,
-            liveQuotePrice: 60_100,
-            liveQuoteEpochSeconds: saturdayUTC - 75,
-            nowEpochSeconds: saturdayUTC
-        )
-        if case .success((_, let pos)) = okRes {
-            // Fills cleanly at observed live price with zero synthetic spread
-            XCTAssertEqual(pos.filledPrice, 60_100)
-        } else {
-            XCTFail("Expected confirmed stale fill to succeed")
-        }
-    }
-
-    func testDemoWalletMarginReserveClampAndPerAssetPnL() {
-        let now: TimeInterval = 1_776_175_200 // Tuesday 14:00 UTC (all markets open)
-        let wallet = DemoWallet(startingBalanceUSD: 1_000)
-
-        // Crypto 1x with 5% risk on tight stop requires > $1,000 notional -> must clamp to free margin ($1,000)
-        let btcReq = DemoOrderRequest(
-            symbol: "BTC/USDT",
-            marketClass: .crypto,
-            direction: .long,
-            orderType: .market,
-            entryPrice: 60_000,
-            stopLoss: 59_700, // 0.5% stop -> 5% risk needs $10,000 notional -> clamped to $1,000 at 1x
-            target1: 60_600,
-            riskPercent: 5.0
-        )
-        let res = DemoWalletEngine.placeOrder(
-            wallet: wallet,
-            request: btcReq,
-            liveQuotePrice: 60_000,
-            liveQuoteEpochSeconds: now - 2,
-            nowEpochSeconds: now
-        )
-        guard case .success((let w1, let pos)) = res else {
-            XCTFail("Expected clamped BTC trade to open")
-            return
-        }
-        XCTAssertTrue(pos.wasClampedToFreeMargin)
-        XCTAssertEqual(pos.marginReservedUSD, 1_000, accuracy: 0.01)
-        XCTAssertEqual(w1.freeMarginUSD, 0, accuracy: 0.01)
-
-        // Close manually at +1% (+$10 on $1,000 notional)
-        guard let (w2, closed) = DemoWalletEngine.closePositionManually(
-            wallet: w1,
-            positionId: pos.id,
-            exitPrice: 60_600,
-            nowEpochSeconds: now + 60
-        ) else {
-            XCTFail("Expected manual close to succeed")
-            return
-        }
-        XCTAssertEqual(closed.realizedPnLUSD, 10.0, accuracy: 0.05)
-        XCTAssertEqual(w2.reservedMarginUSD, 0, accuracy: 0.01)
-        XCTAssertEqual(w2.cashBalanceUSD, 1_010.0, accuracy: 0.05)
-
-        // Gold (Metals, 20x, 100 oz/lot) P&L check
-        let goldReq = DemoOrderRequest(
-            symbol: "XAU/USD",
-            marketClass: .metals,
-            direction: .long,
-            orderType: .market,
-            entryPrice: 2_500,
-            stopLoss: 2_490, // $10/oz stop
-            target1: 2_520,  // $20/oz target (+2R)
-            riskPercent: 1.0 // $10.10 risk -> 1.01 oz -> 0.0101 lots
-        )
-        guard case .success((_, let goldPos)) = DemoWalletEngine.placeOrder(
-            wallet: w2,
-            request: goldReq,
-            liveQuotePrice: 2_500,
-            liveQuoteEpochSeconds: now + 65,
-            nowEpochSeconds: now + 70
-        ) else {
-            XCTFail("Expected gold order to open")
-            return
-        }
-        let goldTargetPnL = DemoWalletEngine.pnlUSD(for: goldPos, markPrice: 2_520)
-        XCTAssertEqual(goldTargetPnL, 20.20, accuracy: 0.1)
-    }
-
-    func testDemoWalletLimitFillBarSLOnlyAndSameBarSLFirst() {
-        let base: TimeInterval = 1_776_175_200
-        let wallet = DemoWallet(startingBalanceUSD: 1_000)
-
-        let limitReq = DemoOrderRequest(
-            symbol: "BTC/USDT",
-            marketClass: .crypto,
-            direction: .long,
-            orderType: .limit,
-            entryPrice: 60_000,
-            entryLow: 59_900,
-            entryHigh: 60_100,
-            stopLoss: 59_000,
-            target1: 62_000,
-            target2: 64_000,
-            exitTarget: .target1,
-            riskPercent: 1.0,
-            limitExpiryEpochSeconds: base + 4 * 3_600
-        )
-        guard case .success((let w1, let pos)) = DemoWalletEngine.placeOrder(
-            wallet: wallet,
-            request: limitReq,
-            liveQuotePrice: 60_500,
-            liveQuoteEpochSeconds: base,
-            nowEpochSeconds: base
-        ) else {
-            XCTFail("Expected limit order to be placed")
-            return
-        }
-        XCTAssertEqual(pos.status, .pendingLimit)
-
-        // Fill bar touches BOTH entry and target1 (not SL) -> must remain OPEN (TP ignored on fill bar!)
-        let fillBar = makeBar(openTime: base + 3_600, open: 60_200, high: 62_500, low: 59_950, close: 61_000)
-        let r1 = DemoWalletEngine.evaluateClosedBar(wallet: w1, positionId: pos.id, bar: fillBar)
-        XCTAssertEqual(r1.position?.status, .open)
-
-        // Next bar touches BOTH SL (59_000) and Target 1 (62_000) -> Pessimistic Same-Bar SL-First!
-        let whipsawBar = makeBar(openTime: base + 2 * 3_600, open: 61_000, high: 62_500, low: 58_800, close: 61_800)
-        let r2 = DemoWalletEngine.evaluateClosedBar(wallet: r1.wallet, positionId: pos.id, bar: whipsawBar)
-        XCTAssertEqual(r2.position?.status, .closedStopLoss)
-        XCTAssertEqual(r2.position?.exitPrice, 59_000)
-
-        // Test limit expiry
-        let expReq = DemoOrderRequest(
-            symbol: "BTC/USDT",
-            marketClass: .crypto,
-            direction: .long,
-            orderType: .limit,
-            entryPrice: 55_000,
-            stopLoss: 54_000,
-            target1: 57_000,
-            limitExpiryEpochSeconds: base + 3_600
-        )
-        guard case .success((let wExp, let pExp)) = DemoWalletEngine.placeOrder(
-            wallet: wallet,
-            request: expReq,
-            liveQuotePrice: 60_000,
-            liveQuoteEpochSeconds: base,
-            nowEpochSeconds: base
-        ) else {
-            XCTFail("Expected second limit order")
-            return
-        }
-        let lateBar = makeBar(openTime: base + 3_600, open: 60_000, high: 60_500, low: 59_500, close: 60_100)
-        let rExp = DemoWalletEngine.evaluateClosedBar(wallet: wExp, positionId: pExp.id, bar: lateBar)
-        XCTAssertEqual(rExp.position?.status, .expired)
-        XCTAssertEqual(rExp.wallet.reservedMarginUSD, 0, accuracy: 0.01)
-    }
-
-    func testDemoWalletEditSLTargetsAndBreakevenValidation() {
-        let now: TimeInterval = 1_776_175_200
-        let wallet = DemoWallet(startingBalanceUSD: 1_000)
-        let req = DemoOrderRequest(
-            symbol: "BTC/USDT",
-            marketClass: .crypto,
-            direction: .long,
-            orderType: .market,
-            entryPrice: 60_000,
-            stopLoss: 59_000,
-            target1: 62_000,
-            target2: 64_000
-        )
-        guard case .success((let w1, let pos)) = DemoWalletEngine.placeOrder(
-            wallet: wallet,
-            request: req,
-            liveQuotePrice: 60_000,
-            liveQuoteEpochSeconds: now,
-            nowEpochSeconds: now
-        ) else {
-            XCTFail("Expected open trade")
-            return
-        }
-
-        // Invalid SL above entry for Long -> rejected
-        if case .success = DemoWalletEngine.updateStopLoss(wallet: w1, positionId: pos.id, newStopLoss: 60_500) {
-            XCTFail("SL above entry for Long must fail")
-        }
-
-        // Move SL to breakeven -> succeeds
-        guard case .success((let w2, let pBE)) = DemoWalletEngine.moveStopLossToBreakeven(wallet: w1, positionId: pos.id) else {
-            XCTFail("Expected breakeven SL to succeed")
-            return
-        }
-        XCTAssertEqual(pBE.stopLoss, 60_000)
-        XCTAssertTrue(pBE.isStopLossAtBreakeven)
-
-        // Invalid Target 2 <= Target 1 -> rejected
-        if case .success = DemoWalletEngine.updateTargets(wallet: w2, positionId: pos.id, newTarget1: 62_500, newTarget2: 62_000) {
-            XCTFail("Target 2 <= Target 1 for Long must fail")
-        }
-
-        // Valid targets update
-        guard case .success((_, let pT)) = DemoWalletEngine.updateTargets(
-            wallet: w2,
-            positionId: pos.id,
-            newTarget1: 62_500,
-            newTarget2: 65_000,
-            newExitTarget: .target2
-        ) else {
-            XCTFail("Expected valid targets update")
-            return
-        }
-        XCTAssertEqual(pT.target1, 62_500)
-        XCTAssertEqual(pT.target2, 65_000)
-        XCTAssertEqual(pT.exitTarget, .target2)
-    }
-
     // MARK: - ScanSchedulePolicyTests
 
     func testScanSchedulePolicyLowPowerAndUsageMath() {
@@ -487,7 +213,7 @@ final class V15EngineTests: XCTestCase {
             makeOutcome(id: "s5", category: .strongSignal, origin: .scanner, score: 79.99, status: .hitSL),
             makeOutcome(id: "s6", category: .strongSignal, origin: .scanner, score: 80.00, status: .hitTP2),
             makeOutcome(id: "w1", category: .weakSignal, origin: .scanner, score: 62.00, status: .hitSL),
-            makeOutcome(id: "n1", category: .strongSignal, origin: .news, score: 74.00, status: .hitTP1)
+            makeOutcome(id: "t1", category: .trapAlert, origin: .scanner, score: 74.00, status: .hitTP1)
         ]
         let trapItems: [TrapOutcomeSummaryItem] = [
             TrapOutcomeSummaryItem(id: "trap_1", outcome: .respected),
@@ -504,18 +230,17 @@ final class V15EngineTests: XCTestCase {
         XCTAssertEqual(strong.totalResolved, 6)
         XCTAssertNotNil(strong.winRateCI)
 
-        let traps = byOrigin[1]
-        XCTAssertEqual(traps.group, .trapsAndFiltered)
-        XCTAssertEqual(traps.positiveCountLabel, "Worked")
-        XCTAssertEqual(traps.negativeCountLabel, "Failed")
-        XCTAssertEqual(traps.wins, 1)   // trap_1 respected
-        XCTAssertEqual(traps.losses, 2) // w1 hitSL + trap_2 invalidated
-        XCTAssertEqual(traps.totalResolved, 3)
+        let weak = byOrigin[1]
+        XCTAssertEqual(weak.group, .weakAndFiltered)
+        XCTAssertEqual(weak.wins, 0)
+        XCTAssertEqual(weak.losses, 1)
+        XCTAssertEqual(weak.totalResolved, 1)
 
-        let news = byOrigin[2]
-        XCTAssertEqual(news.group, .newsSetups)
-        XCTAssertEqual(news.wins, 1)
-        XCTAssertEqual(news.losses, 0)
+        let traps = byOrigin[2]
+        XCTAssertEqual(traps.group, .trapAlerts)
+        XCTAssertEqual(traps.wins, 2)   // t1 hitTP1 + trap_1 respected
+        XCTAssertEqual(traps.losses, 1) // trap_2 invalidated
+        XCTAssertEqual(traps.totalResolved, 3)
 
         // Exact bucket boundaries: 59.99 -> 50-59; 60 & 69.99 -> 60-69; 70 & 79.99 -> 70-79; 80 -> 80+
         let strongOnly = records.filter { $0.origin == .scanner && $0.category == .strongSignal }

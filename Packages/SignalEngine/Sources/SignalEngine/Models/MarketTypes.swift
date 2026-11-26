@@ -50,13 +50,25 @@ public enum MarketClass: String, Codable, Sendable, CaseIterable, Hashable {
 
 public enum Timeframe: String, Codable, Sendable, CaseIterable, Hashable {
     case m15 = "15m"
+    case m30 = "30m"
     case h1 = "1h"
     case h4 = "4h"
     case d1 = "1d"
 
+    public var minutes: Int {
+        switch self {
+        case .m15: return 15
+        case .m30: return 30
+        case .h1: return 60
+        case .h4: return 240
+        case .d1: return 1_440
+        }
+    }
+
     public var seconds: TimeInterval {
         switch self {
         case .m15: return 900
+        case .m30: return 1_800
         case .h1: return 3_600
         case .h4: return 14_400
         case .d1: return 86_400
@@ -66,6 +78,7 @@ public enum Timeframe: String, Codable, Sendable, CaseIterable, Hashable {
     public var displayLabel: String {
         switch self {
         case .m15: return "15m"
+        case .m30: return "30m"
         case .h1: return "1H"
         case .h4: return "4H"
         case .d1: return "1D"

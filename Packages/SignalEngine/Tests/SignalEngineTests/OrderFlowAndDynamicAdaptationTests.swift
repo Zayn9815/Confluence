@@ -225,8 +225,9 @@ final class OrderFlowAndDynamicAdaptationTests: XCTestCase {
             snapshot: tinySnap, marketClass: .crypto, isOrderFlowEnabled: true, isLiveEvaluation: true,
             candidateDirection: .long, nowEpochSeconds: now
         )
-        XCTAssertEqual(tinyEval.divergence, .none)
-        XCTAssertEqual(tinyEval.absorptionState, .none)
+        XCTAssertEqual(tinyEval.divergence, .notEvaluated)
+        XCTAssertEqual(tinyEval.absorptionState, .notEvaluated)
+        XCTAssertFalse(tinyEval.isStrongConflict)
 
         // 2. Institutional Passive Bullish Absorption: 24 heavy aggressive sells (`isBuyerMaker == true`), price holds/rises near confirmed Bid Wall
         let absorptionTrades = (0..<24).map { i in
@@ -255,7 +256,7 @@ final class OrderFlowAndDynamicAdaptationTests: XCTestCase {
         XCTAssertEqual(absorbEval.alignment, .conflicting)
         XCTAssertNotNil(absorbEval.warningNote)
 
-        // REST snapshot (not live WS) must NEVER mark a wall confirmed (anti-spoofing)
+        // REST snapshot (not live WS) must NEVER mark a wall confirmed (anti-spoofing) and marks divergence/absorption .notEvaluated
         let restSnap = OrderFlowSnapshot(
             timestampEpochSeconds: now, venue: "OKX", isLiveWebSocket: false,
             midPrice: 100.0, bestBid: 99.99, bestAsk: 100.01, spreadBps: 2.0,
@@ -266,6 +267,8 @@ final class OrderFlowAndDynamicAdaptationTests: XCTestCase {
             snapshot: restSnap, marketClass: .crypto, isOrderFlowEnabled: true, isLiveEvaluation: true,
             candidateDirection: .long, entryPrice: 100.00, takeProfit1: 100.50, nowEpochSeconds: now
         )
+        XCTAssertEqual(restEval.divergence, .notEvaluated)
+        XCTAssertEqual(restEval.absorptionState, .notEvaluated)
         XCTAssertEqual(restEval.nearestBidWall?.isConfirmed, false)
         XCTAssertEqual(restEval.nearestAskWall?.isConfirmed, false)
         XCTAssertFalse(restEval.confirmedWallBlocksTP1)

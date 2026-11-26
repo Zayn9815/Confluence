@@ -16,7 +16,6 @@ public struct DataDiagnosticsAboutSettingsView: View {
     @State private var preparedBackupURL: URL?
     @State private var preparedLedgerCSVURL: URL?
     @State private var preparedJournalCSVURL: URL?
-    @State private var preparedDemoWalletCSVURL: URL?
 
     public init(coordinator: MarketScannerCoordinator, palette: ConfluencePalette) {
         self.coordinator = coordinator
@@ -101,25 +100,13 @@ public struct DataDiagnosticsAboutSettingsView: View {
 
                 if let journalCSV = preparedJournalCSVURL {
                     ShareLink(item: journalCSV) {
-                        Label("Share Trade Journal (Spreadsheet)", systemImage: "square.and.arrow.up")
+                        Label("Share Signal Journal (Spreadsheet)", systemImage: "square.and.arrow.up")
                     }
                 } else {
                     Button {
                         preparedJournalCSVURL = coordinator.exportJournalCSVURL()
                     } label: {
-                        Label("Export Trade Journal (Spreadsheet)", systemImage: "book.pages")
-                    }
-                }
-
-                if let demoWalletCSV = preparedDemoWalletCSVURL {
-                    ShareLink(item: demoWalletCSV) {
-                        Label("Share Demo Wallet History (Spreadsheet)", systemImage: "square.and.arrow.up")
-                    }
-                } else {
-                    Button {
-                        preparedDemoWalletCSVURL = coordinator.exportDemoWalletTransactionsCSV()
-                    } label: {
-                        Label("Export Demo Wallet History (Spreadsheet)", systemImage: "wallet.pass")
+                        Label("Export Signal Journal (Spreadsheet)", systemImage: "book.pages")
                     }
                 }
 
@@ -131,7 +118,7 @@ public struct DataDiagnosticsAboutSettingsView: View {
             } header: {
                 SettingsSectionHeader(SettingHelpKey.backupAndRestore.copy.label, helpKey: .backupAndRestore)
             } footer: {
-                Text("Backups include settings, signals, outcomes, trade ledger, journal entries, and Demo Wallet history (`schemaVersion = 2`, previous v1 files remain importable). Keychain keys are NEVER exported, and every file passes through SecretRedactor.")
+                Text("Backups include settings, signals, outcomes, trade ledger, and automatic Signal Journal entries (`schemaVersion = 2`, previous v1 files remain importable). Keychain keys are NEVER exported, and every file passes through SecretRedactor.")
             }
 
             Section {
@@ -182,7 +169,7 @@ public struct DataDiagnosticsAboutSettingsView: View {
                     HStack(spacing: 12) {
                         Image(systemName: "info.circle.fill")
                             .font(.body.weight(.semibold))
-                            .foregroundStyle(palette.macroIceBlue)
+                            .foregroundStyle(palette.champagneGold)
                             .frame(width: 26)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("About Confluence & Developer")

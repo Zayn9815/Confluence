@@ -110,10 +110,10 @@ final class V15M2ServicesTests: XCTestCase {
         XCTAssertTrue(active4.isEmpty)
     }
 
-    // MARK: - TradeMonitor Tests (Auto-Close Exit Price + Manual Apply/Dismiss + Outcome Derivation)
+    // MARK: - TradeMonitor Tests (Outcome Derivation + Manual Alerts)
 
-    func testTradeMonitorDemoReconcileManualAlertsAndOutcomeDerivation() {
-        // 1. Journal outcome derivation fixes "OPEN + Exit + R" bug
+    func testTradeMonitorJournalOutcomeDerivationAndManualAlerts() {
+        // 1. Journal outcome derivation
         XCTAssertEqual(
             TradeMonitor.deriveJournalOutcome(direction: .long, entryPrice: 100, exitPrice: 106, stopLoss: 98, currentOutcome: .open),
             .win
@@ -127,29 +127,8 @@ final class V15M2ServicesTests: XCTestCase {
             .open
         )
 
-        // 2. Demo position auto-closes cleanly at exact Target 1 level on tick
-        let now: TimeInterval = 1_776_175_200 // Tuesday 14:00 UTC
-        let req = DemoOrderRequest(
-            id: "demo-1",
-            symbol: "BTC/USDT",
-            marketClass: .crypto,
-            direction: .long,
-            orderType: .market,
-            entryPrice: 60_000,
-            stopLoss: 59_000,
-            target1: 62_000
-        )
-        guard case .success((let w1, _)) = DemoWalletEngine.placeOrder(
-            wallet: DemoWallet(),
-            request: req,
-            liveQuotePrice: 60_000,
-            liveQuoteEpochSeconds: now,
-            nowEpochSeconds: now
-        ) else {
-            XCTFail("Expected demo order to open")
-            return
-        }
-
+        // 2. Manual journal trades emit non-destructive Apply/Dismiss suggestion
+        let now: TimeInterval = 1_776_175_200
         let targetQuote = LivePriceQuote(
             symbol: "BTC/USDT",
             price: 62_150,
@@ -157,12 +136,6 @@ final class V15M2ServicesTests: XCTestCase {
             sourceLabel: "Binance Live",
             isStreaming: true
         )
-        let (w2, events) = TradeMonitor.reconcileDemoWalletOnTick(wallet: w1, quote: targetQuote)
-        XCTAssertEqual(events.count, 1)
-        XCTAssertEqual(w2.positions.first?.status, .closedTarget1)
-        XCTAssertEqual(w2.positions.first?.exitPrice, 62_000) // Exact Target 1 level
-
-        // 3. Manual journal trades NEVER auto-close; instead they emit an Apply/Dismiss suggestion
         let manualEntry = JournalEntrySnapshot(
             id: "j-manual-1",
             symbol: "BTC/USDT",
@@ -192,18 +165,18 @@ final class V15M2ServicesTests: XCTestCase {
         XCTAssertTrue(dismissedAlerts.isEmpty)
     }
 
-    // MARK: - On-Disk SwiftData v1.4 -> v1.5 Additive Migration Test (9 -> 12 tables)
+    // MARK: - On-Disk SwiftData v1.5 -> v1.6 Additive Migration Test (12 -> 13 tables)
 
     @MainActor
-    func testSwiftDataV14ToV15AdditiveMigrationPreservesDataAndPersistsDemoWallet() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("confluence_v15_mig_\(UUID().uuidString)")
+    func testSwiftDataV15ToV16AdditiveMigrationPreservesLegacyTablesAndPersistsTrackedJournal() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("confluence_v16_mig_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let storeURL = dir.appendingPathComponent("confluence_v15.store")
+        let storeURL = dir.appendingPathComponent("confluence_v16.store")
 
-        // 1. Seed a 9-table v1.4 on-disk store (without DemoWalletRecord/DemoPositionRecord/DemoWalletTransactionRecord)
+        // 1. Seed a 12-table v1.5 on-disk store (including legacy Demo tables, without TrackedSignalJournalEntry)
         do {
-            let v14Schema = Schema([
+            let v15Schema = Schema([
                 PersistedSignalRecord.self,
                 StoredNotificationItem.self,
                 DiagnosticLogEntry.self,
@@ -212,13 +185,16 @@ final class V15M2ServicesTests: XCTestCase {
                 TradeReplayCandleCache.self,
                 PersistedOutcomeRecord.self,
                 CrashLogEntry.self,
-                JournalEntry.self
+                JournalEntry.self,
+                DemoWalletRecord.self,
+                DemoPositionRecord.self,
+                DemoWalletTransactionRecord.self
             ])
-            let v14Config = ModelConfiguration(schema: v14Schema, url: storeURL)
-            let v14Container = try ModelContainer(for: v14Schema, configurations: [v14Config])
-            let ctx = ModelContext(v14Container)
+            let v15Config = ModelConfiguration(schema: v15Schema, url: storeURL)
+            let v15Container = try ModelContainer(for: v15Schema, configurations: [v15Config])
+            let ctx = ModelContext(v15Container)
             ctx.insert(JournalEntry(
-                id: "j-v14-keep",
+                id: "j-v15-keep",
                 symbol: "EUR/USD",
                 marketRaw: MarketClass.forex.rawValue,
                 timeframeRaw: Timeframe.h1.rawValue,
@@ -227,47 +203,53 @@ final class V15M2ServicesTests: XCTestCase {
                 stopLoss: 1.095,
                 tp1: 1.11
             ))
+            ctx.insert(DemoWalletRecord(id: "primary", cashBalanceUSD: 1_250))
             try ctx.save()
         }
 
-        // 2. Reopen with v1.5 12-table ConfluenceDataStore -> zero quarantine, journal preserved
+        // 2. Reopen with 13-table ConfluenceDataStore -> zero quarantine, existing rows preserved
         let store = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
         XCTAssertFalse(store.didQuarantineCorruptStore)
-        XCTAssertEqual(store.fetchJournalEntries().first?.id, "j-v14-keep")
+        XCTAssertEqual(store.fetchJournalEntries().first?.id, "j-v15-keep")
 
-        // 3. Save DemoWallet and verify round-trip across disk reopen
+        // 3. Persist TrackedJournalTrade and verify round-trip across disk reopen
         let now: TimeInterval = 1_776_175_200
-        let req = DemoOrderRequest(
-            id: "demo-disk-1",
+        let tracked = TrackedJournalTrade(
+            id: "tj-disk-1",
             symbol: "BTC/USDT",
-            marketClass: .crypto,
+            assetClass: .crypto,
+            timeframe: .m30,
             direction: .long,
-            orderType: .market,
+            section: .strongSignals,
+            status: .live,
+            score: 84.0,
+            signalBarTimestamp: now,
+            entryZoneLow: 59_900,
+            entryZoneHigh: 60_100,
             entryPrice: 60_000,
+            fillPrice: 60_000,
             stopLoss: 59_000,
-            target1: 62_000
+            target1: 62_000,
+            target2: 63_500,
+            isTP2Enabled: true,
+            currentPrice: 60_500,
+            livePnLPercent: 0.83,
+            liveRMultiple: 0.50,
+            createdAt: now,
+            filledAt: now
         )
-        guard case .success((let wallet, _)) = DemoWalletEngine.placeOrder(
-            wallet: DemoWallet(startingBalanceUSD: 1_000),
-            request: req,
-            liveQuotePrice: 60_000,
-            liveQuoteEpochSeconds: now,
-            nowEpochSeconds: now
-        ) else {
-            XCTFail("Expected demo order to open")
-            return
-        }
-        store.saveDemoWallet(wallet)
+        store.upsertTrackedJournalEntry(tracked)
 
         let reopened = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
         XCTAssertFalse(reopened.didQuarantineCorruptStore)
-        let loaded = reopened.loadDemoWallet()
-        XCTAssertEqual(loaded.positions.count, 1)
-        XCTAssertEqual(loaded.positions.first?.id, "demo-disk-1")
-        XCTAssertEqual(loaded.transactions.count, wallet.transactions.count)
+        let loaded = reopened.loadTrackedJournalEntries()
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded.first?.id, "tj-disk-1")
+        XCTAssertEqual(loaded.first?.timeframe, .m30)
+        XCTAssertEqual(loaded.first?.section, .strongSignals)
     }
 
-    // MARK: - Backup v2 Round-Trip + Legacy v1 Import + SecretRedactor Tests
+    // MARK: - Backup v2 Round-Trip + Legacy Archive Import + SecretRedactor Tests
 
     @MainActor
     func testBackupV2RoundTripLegacyV1ImportAndSecretRedactor() throws {
@@ -279,16 +261,44 @@ final class V15M2ServicesTests: XCTestCase {
         XCTAssertTrue(scrubbed.contains("[REDACTED_API_KEY]"))
         XCTAssertTrue(scrubbed.contains("[REDACTED_OPENROUTER_KEY]"))
 
-        // 2. Backup v2 round-trip includes DemoWallet & CSV export
+        // 2. Backup v2 round-trip includes TrackedJournalTrade entries & CSV export
         let store = ConfluenceDataStore(inMemory: true)
         let settings = AppSettingsStore()
-        var wallet = DemoWallet(startingBalanceUSD: 1_500)
-        wallet = DemoWalletEngine.adjustBalance(wallet: wallet, newBalanceUSD: 1_750, nowEpochSeconds: 1_776_175_200)
-        store.saveDemoWallet(wallet)
+        let now: TimeInterval = 1_776_175_200
+        let sampleTracked = TrackedJournalTrade(
+            id: "tj-backup-1",
+            symbol: "ETH/USDT",
+            assetClass: .crypto,
+            timeframe: .m30,
+            direction: .short,
+            section: .weakAndFiltered,
+            status: .winTP1,
+            score: 62.0,
+            signalBarTimestamp: now,
+            entryZoneLow: 3_000,
+            entryZoneHigh: 3_010,
+            entryPrice: 3_005,
+            fillPrice: 3_005,
+            stopLoss: 3_065,
+            target1: 2_885,
+            target2: 2_825,
+            isTP2Enabled: true,
+            currentPrice: 2_885,
+            livePnLPercent: 3.99,
+            liveRMultiple: 2.0,
+            realizedR: 2.0,
+            isWinLocked: true,
+            createdAt: now,
+            filledAt: now,
+            tp1HitAt: now + 1_800,
+            closedAt: now + 3_600,
+            filterReason: "Score 62 < 70"
+        )
+        store.upsertTrackedJournalEntry(sampleTracked)
 
         let archive = BackupArchiveService.buildArchive(settings: settings.payload, store: store, appVersion: "1.5.0")
         XCTAssertEqual(archive.schemaVersion, 2)
-        XCTAssertEqual(archive.demoWallet?.cashBalanceUSD, 1_750)
+        XCTAssertEqual(archive.trackedJournalEntries.count, 1)
         let encoded = try BackupArchiveService.encodeRedactedArchiveData(archive)
 
         let targetStore = ConfluenceDataStore(inMemory: true)
@@ -300,14 +310,15 @@ final class V15M2ServicesTests: XCTestCase {
             dataStore: targetStore
         )
         XCTAssertEqual(summary.schemaVersion, 2)
-        XCTAssertTrue(summary.demoWalletRestored)
-        XCTAssertEqual(targetStore.loadDemoWallet().cashBalanceUSD, 1_750)
+        XCTAssertEqual(targetStore.loadTrackedJournalEntries().first?.id, "tj-backup-1")
 
-        let csv = BackupArchiveService.buildDemoWalletTransactionsCSV(transactions: wallet.transactions)
-        XCTAssertTrue(csv.contains("balanceAdjustment"))
+        let csv = BackupArchiveService.buildTrackedJournalCSV(entries: [sampleTracked])
+        XCTAssertTrue(csv.contains("ETH/USDT"))
+        XCTAssertTrue(csv.contains("weak_and_filtered"))
+        XCTAssertTrue(csv.contains("win_tp1"))
 
-        // 3. Legacy v1 archive (without demoWallet key) still decodes and imports cleanly
-        let legacyV1JSON = """
+        // 3. Legacy v1/v2 archive (omitting trackedJournalEntries, even with obsolete demoWallet key) decodes cleanly
+        let legacyJSON = """
         {
           "schemaVersion": 1,
           "exportedAtISO8601": "2026-04-01T00:00:00Z",
@@ -317,11 +328,12 @@ final class V15M2ServicesTests: XCTestCase {
           "signals": [],
           "outcomes": [],
           "tradeLedger": [],
-          "journalEntries": []
+          "journalEntries": [],
+          "demoWallet": { "cashBalanceUSD": 1000 }
         }
         """
-        let decodedV1 = try BackupArchiveService.decodeAndValidateArchive(from: Data(legacyV1JSON.utf8))
-        XCTAssertEqual(decodedV1.schemaVersion, 1)
-        XCTAssertNil(decodedV1.demoWallet)
+        let decodedLegacy = try BackupArchiveService.decodeAndValidateArchive(from: Data(legacyJSON.utf8))
+        XCTAssertEqual(decodedLegacy.schemaVersion, 1)
+        XCTAssertTrue(decodedLegacy.trackedJournalEntries.isEmpty)
     }
 }

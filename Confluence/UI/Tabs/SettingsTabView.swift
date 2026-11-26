@@ -54,7 +54,7 @@ public struct SettingsTabView: View {
                     } label: {
                         settingsRow(
                             icon: "antenna.radiowaves.left.and.right",
-                            color: palette.macroIceBlue,
+                            color: palette.secondaryInk,
                             title: "Markets & Data",
                             subtitle: "\(coordinator.settings.payload.enabledMarkets.count) markets · \(coordinator.settings.payload.tradFiProviderPreference.shortLabel) / \(coordinator.settings.payload.cryptoPrimaryExchange.shortLabel)"
                         )
@@ -105,6 +105,7 @@ public struct SettingsTabView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .safeAreaPadding(.bottom, 96)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

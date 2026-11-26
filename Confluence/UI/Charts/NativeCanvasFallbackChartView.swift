@@ -4,7 +4,7 @@ import SignalEngine
 
 /// High-performance 120Hz Interactive Metal-backed SwiftUI `Canvas` candlestick engine:
 /// - Smooth horizontal `DragGesture` panning with start-offset tracking + deceleration inertia.
-/// - Safe `MagnificationGesture` pinch-zoom (`visibleCount` clamped `15...220`, resetting `lastMagnification = 1.0` in `.onEnded`).
+/// - Safe `MagnifyGesture` pinch-zoom (`visibleCount` clamped `15...220`, resetting `pinchStartVisibleCount` in `.onEnded`).
 /// - Preserves `trailingOffset` across live tick updates (zero snap-back while inspecting history).
 /// - O(visible) slice math, auto-scaling Y-axis, formatted X-axis timestamps, right-axis precision pills,
 ///   tap/long-press crosshair readout with subtle haptic tick, Entry/SL/TP/Trap/Confirmed Wall lines,
@@ -18,17 +18,31 @@ public struct NativeCanvasFallbackChartView: View {
     let palette: ConfluencePalette
     let showVolumePane: Bool
     let showMovingAverages: Bool
+    let resetTrigger: Int
     let onCrosshairChange: (ChartCrosshairReadout?) -> Void
 
     @State private var visibleCount: Double = 70.0
     @State private var trailingOffset: Double = 0.0
     @State private var dragStartOffset: Double? = nil
-    @State private var lastMagnification: CGFloat = 1.0
+    @State private var pinchStartVisibleCount: Double? = nil
     @State private var inspectedVisibleIndex: Int? = nil
     @State private var isCrosshairActive: Bool = false
 
     private static let minVisibleBars: Double = 15.0
     private static let maxVisibleBars: Double = 220.0
+
+    private static let dailyAxisStyle = Date.VerbatimFormatStyle(
+        format: "\(month: .abbreviated) \(day: .defaultDigits)",
+        locale: Locale(identifier: "en_US_POSIX"),
+        timeZone: TimeZone(secondsFromGMT: 0) ?? .gmt,
+        calendar: Calendar(identifier: .gregorian)
+    )
+    private static let intradayAxisStyle = Date.VerbatimFormatStyle(
+        format: "\(month: .twoDigits)/\(day: .twoDigits) \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)",
+        locale: Locale(identifier: "en_US_POSIX"),
+        timeZone: TimeZone(secondsFromGMT: 0) ?? .gmt,
+        calendar: Calendar(identifier: .gregorian)
+    )
 
     public init(
         candles: [Candle],
@@ -39,6 +53,7 @@ public struct NativeCanvasFallbackChartView: View {
         palette: ConfluencePalette,
         showVolumePane: Bool = false,
         showMovingAverages: Bool = false,
+        resetTrigger: Int = 0,
         onCrosshairChange: @escaping (ChartCrosshairReadout?) -> Void
     ) {
         self.candles = candles
@@ -49,6 +64,7 @@ public struct NativeCanvasFallbackChartView: View {
         self.palette = palette
         self.showVolumePane = showVolumePane
         self.showMovingAverages = showMovingAverages
+        self.resetTrigger = resetTrigger
         self.onCrosshairChange = onCrosshairChange
     }
 
@@ -71,11 +87,7 @@ public struct NativeCanvasFallbackChartView: View {
 
     private func formatXAxisTimestamp(_ epoch: TimeInterval) -> String {
         let date = Date(timeIntervalSince1970: epoch)
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        f.dateFormat = (timeframe == .d1) ? "MMM d" : "MM/dd HH:mm"
-        return f.string(from: date)
+        return (timeframe == .d1) ? Self.dailyAxisStyle.format(date) : Self.intradayAxisStyle.format(date)
     }
 
     public var body: some View {
@@ -247,7 +259,7 @@ public struct NativeCanvasFallbackChartView: View {
                     drawLevel(overlayModel.stopLoss, label: "SL", color: palette.shortCrimson, dash: [])
                     drawLevel(overlayModel.takeProfit1, label: "T1", color: palette.longEmerald, dash: [])
                     if overlayModel.isTP2Enabled {
-                        drawLevel(overlayModel.takeProfit2, label: "T2", color: palette.macroIceBlue, dash: [3, 3])
+                        drawLevel(overlayModel.takeProfit2, label: "T2", color: palette.longEmerald, dash: [3, 3])
                     }
                     if let lp = overlayModel.livePrice {
                         let liveColor = lp >= refClose ? palette.longEmerald : palette.shortCrimson
@@ -339,17 +351,18 @@ public struct NativeCanvasFallbackChartView: View {
                         }
                 )
                 .simultaneousGesture(
-                    MagnificationGesture()
+                    MagnifyGesture()
                         .onChanged { value in
-                            guard value.isFinite, value > 0 else { return }
-                            let delta = value / max(lastMagnification, 0.01)
-                            lastMagnification = value
-                            let proposed = visibleCount / Double(delta)
+                            guard value.magnification.isFinite, value.magnification > 0 else { return }
+                            if pinchStartVisibleCount == nil {
+                                pinchStartVisibleCount = visibleCount
+                            }
+                            let base = pinchStartVisibleCount ?? visibleCount
+                            let proposed = base / Double(value.magnification)
                             visibleCount = max(Self.minVisibleBars, min(Self.maxVisibleBars, proposed))
                         }
                         .onEnded { _ in
-                            // CRITICAL: Reset lastMagnification to 1.0 so pinch zoom never compounds/explodes
-                            lastMagnification = 1.0
+                            pinchStartVisibleCount = nil
                         }
                 )
                 .simultaneousGesture(
@@ -396,6 +409,14 @@ public struct NativeCanvasFallbackChartView: View {
             }
         }
         .background(palette.canvas)
+        .onChange(of: resetTrigger) { _, _ in
+            trailingOffset = 0.0
+            visibleCount = 70.0
+            pinchStartVisibleCount = nil
+            inspectedVisibleIndex = nil
+            isCrosshairActive = false
+            onCrosshairChange(nil)
+        }
         .onChange(of: overlayModel.symbol) { _, _ in
             trailingOffset = 0.0
             inspectedVisibleIndex = nil

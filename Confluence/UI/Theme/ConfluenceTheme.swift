@@ -6,6 +6,7 @@ public struct ConfluencePalette: Sendable {
     public let surface: Color
     public let elevatedSurface: Color
     public let border: Color
+    public let cardShadow: Color
     public let primaryInk: Color
     public let secondaryInk: Color
     public let tertiaryInk: Color
@@ -15,6 +16,7 @@ public struct ConfluencePalette: Sendable {
     public let shortCrimson: Color
     public let champagneGold: Color
     public let trapAmber: Color
+    /// Neutral muted slate (remapped from legacy electric cyan for calm dark/light hierarchy).
     public let macroIceBlue: Color
 
     public init(
@@ -22,19 +24,21 @@ public struct ConfluencePalette: Sendable {
         surface: Color,
         elevatedSurface: Color,
         border: Color,
+        cardShadow: Color = .clear,
         primaryInk: Color,
         secondaryInk: Color,
         tertiaryInk: Color,
         longEmerald: Color = Color(hex: 0x10B981),
         shortCrimson: Color = Color(hex: 0xEF4444),
-        champagneGold: Color = Color(hex: 0xD4AF37),
+        champagneGold: Color = Color(hex: 0xDEB853),
         trapAmber: Color = Color(hex: 0xF59E0B),
-        macroIceBlue: Color = Color(hex: 0x38BDF8)
+        macroIceBlue: Color = Color(hex: 0x94A3B8)
     ) {
         self.canvas = canvas
         self.surface = surface
         self.elevatedSurface = elevatedSurface
         self.border = border
+        self.cardShadow = cardShadow
         self.primaryInk = primaryInk
         self.secondaryInk = secondaryInk
         self.tertiaryInk = tertiaryInk
@@ -53,21 +57,24 @@ public struct ConfluencePalette: Sendable {
     ) -> ConfluencePalette {
         let isLight = (colorScheme == .light)
         let longColor: Color = useColorBlindSafe
-            ? (isLight ? Color(hex: 0x0072B2) : Color(hex: 0x38BDF8)) // Okabe-Ito Blue
-            : (isLight ? Color(hex: 0x059669) : Color(hex: 0x10B981))
+            ? (isLight ? Color(hex: 0x0072B2) : Color(hex: 0x56B4E9)) // Okabe-Ito Blue / Sky Blue
+            : (isLight ? Color(hex: 0x15803D) : Color(hex: 0x10B981))
         let shortColor: Color = useColorBlindSafe
             ? (isLight ? Color(hex: 0xD55E00) : Color(hex: 0xFB923C)) // Okabe-Ito Vermilion
-            : (isLight ? Color(hex: 0xDC2626) : Color(hex: 0xEF4444))
-        let goldColor: Color = isLight ? Color(hex: 0xB48A18) : Color(hex: 0xD4AF37)
-        let amberColor: Color = useColorBlindSafe ? Color(hex: 0xE69F00) : Color(hex: 0xF59E0B)
-        let iceBlue: Color = useColorBlindSafe ? Color(hex: 0x56B4E9) : Color(hex: 0x38BDF8)
+            : (isLight ? Color(hex: 0xB91C1C) : Color(hex: 0xEF4444))
+        let goldColor: Color = isLight ? Color(hex: 0x946D16) : Color(hex: 0xDEB853)
+        let amberColor: Color = useColorBlindSafe
+            ? Color(hex: 0xE69F00)
+            : (isLight ? Color(hex: 0xB45309) : Color(hex: 0xF59E0B))
+        let mutedSlate: Color = isLight ? Color(hex: 0x475569) : Color(hex: 0x94A3B8)
 
         if isLight {
             return ConfluencePalette(
-                canvas: Color(hex: 0xF6F7F9),
+                canvas: Color(hex: 0xF4F5F7),
                 surface: Color(hex: 0xFFFFFF),
-                elevatedSurface: increaseContrast ? Color(hex: 0xE2E8F0) : Color(hex: 0xEEF1F6),
-                border: increaseContrast ? Color(hex: 0x94A3B8) : Color(hex: 0xE2E8F0),
+                elevatedSurface: increaseContrast ? Color(hex: 0xE2E8F0) : Color(hex: 0xF1F3F6),
+                border: increaseContrast ? Color(hex: 0x94A3B8) : Color.black.opacity(0.06),
+                cardShadow: Color.black.opacity(0.06),
                 primaryInk: Color(hex: 0x090D16),
                 secondaryInk: increaseContrast ? Color(hex: 0x1F2937) : Color(hex: 0x4B5563),
                 tertiaryInk: increaseContrast ? Color(hex: 0x374151) : Color(hex: 0x6B7280),
@@ -75,7 +82,7 @@ public struct ConfluencePalette: Sendable {
                 shortCrimson: shortColor,
                 champagneGold: goldColor,
                 trapAmber: amberColor,
-                macroIceBlue: iceBlue
+                macroIceBlue: mutedSlate
             )
         }
         if usePureBlackAMOLED {
@@ -83,7 +90,8 @@ public struct ConfluencePalette: Sendable {
                 canvas: Color(hex: 0x000000),
                 surface: Color(hex: 0x0E1116),
                 elevatedSurface: Color(hex: 0x161B24),
-                border: increaseContrast ? Color(hex: 0x475569) : Color(hex: 0x222733),
+                border: increaseContrast ? Color(hex: 0x475569) : Color.white.opacity(0.08),
+                cardShadow: .clear,
                 primaryInk: Color(hex: 0xFFFFFF),
                 secondaryInk: increaseContrast ? Color(hex: 0xCBD5E1) : Color(hex: 0x94A3B8),
                 tertiaryInk: increaseContrast ? Color(hex: 0x94A3B8) : Color(hex: 0x64748B),
@@ -91,14 +99,15 @@ public struct ConfluencePalette: Sendable {
                 shortCrimson: shortColor,
                 champagneGold: goldColor,
                 trapAmber: amberColor,
-                macroIceBlue: iceBlue
+                macroIceBlue: mutedSlate
             )
         }
         return ConfluencePalette(
             canvas: Color(hex: 0x0B0D11),
-            surface: Color(hex: 0x131720),
-            elevatedSurface: Color(hex: 0x1A202D),
-            border: increaseContrast ? Color(hex: 0x475569) : Color(hex: 0x232A38),
+            surface: Color(hex: 0x13161C),
+            elevatedSurface: Color(hex: 0x1A1E26),
+            border: increaseContrast ? Color(hex: 0x475569) : Color.white.opacity(0.08),
+            cardShadow: .clear,
             primaryInk: Color(hex: 0xF8FAFC),
             secondaryInk: increaseContrast ? Color(hex: 0xCBD5E1) : Color(hex: 0x9CA7BA),
             tertiaryInk: increaseContrast ? Color(hex: 0x94A3B8) : Color(hex: 0x677287),
@@ -106,7 +115,7 @@ public struct ConfluencePalette: Sendable {
             shortCrimson: shortColor,
             champagneGold: goldColor,
             trapAmber: amberColor,
-            macroIceBlue: iceBlue
+            macroIceBlue: mutedSlate
         )
     }
 
@@ -133,7 +142,7 @@ public struct ConfluencePalette: Sendable {
         switch tier {
         case .aPlusInstitutional: return champagneGold
         case .highConviction: return longEmerald
-        case .aligned: return macroIceBlue
+        case .aligned: return champagneGold
         case .trapWarning: return trapAmber
         case .weakFiltered: return secondaryInk
         }
@@ -158,6 +167,7 @@ public struct InstitutionalCardModifier: ViewModifier {
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(palette.surface)
+                    .shadow(color: palette.cardShadow, radius: 10, x: 0, y: 4)
                     .overlay(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .strokeBorder(accentBorder ?? palette.border, lineWidth: accentBorder != nil ? 1.0 : 0.75)

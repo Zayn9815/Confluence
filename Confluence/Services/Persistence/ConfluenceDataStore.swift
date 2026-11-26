@@ -74,7 +74,8 @@ public final class ConfluenceDataStore {
             JournalEntry.self,
             DemoWalletRecord.self,
             DemoPositionRecord.self,
-            DemoWalletTransactionRecord.self
+            DemoWalletTransactionRecord.self,
+            TrackedSignalJournalEntry.self
         ])
 
         let config: ModelConfiguration
@@ -850,154 +851,72 @@ public final class ConfluenceDataStore {
         }
     }
 
-    // MARK: - Demo Paper Wallet (v1.5 Purely Additive)
+    // MARK: - Automatic 3-Section Signal Journal (v1.6 Purely Additive)
 
-    public func loadDemoWallet() -> DemoWallet {
-        let walletDesc = FetchDescriptor<DemoWalletRecord>()
-        let posDesc = FetchDescriptor<DemoPositionRecord>(
+    public func loadTrackedJournalEntries() -> [TrackedJournalTrade] {
+        let desc = FetchDescriptor<TrackedSignalJournalEntry>(
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
-        let txDesc = FetchDescriptor<DemoWalletTransactionRecord>(
-            sortBy: [SortDescriptor(\.timestamp, order: .forward)]
-        )
-
-        let walletRow = (try? context.fetch(walletDesc))?.first
-        let positions = ((try? context.fetch(posDesc)) ?? []).compactMap { $0.toPosition() }
-        let transactions = ((try? context.fetch(txDesc)) ?? []).map { $0.toTransaction() }
-
-        let reconciledReserved = positions
-            .filter { $0.status.isActive && $0.marginReservedUSD.isFinite && $0.marginReservedUSD >= 0 }
-            .reduce(0.0) { $0 + $1.marginReservedUSD }
-
-        guard let w = walletRow else {
-            return DemoWallet(
-                startingBalanceUSD: DemoWallet.defaultStartingBalanceUSD,
-                cashBalanceUSD: DemoWallet.defaultStartingBalanceUSD,
-                reservedMarginUSD: reconciledReserved,
-                realizedPnLUSD: 0,
-                totalFeesPaidUSD: 0,
-                positions: positions,
-                transactions: transactions
-            )
-        }
-        let safeStart = (w.startingBalanceUSD.isFinite && w.startingBalanceUSD > 0) ? w.startingBalanceUSD : DemoWallet.defaultStartingBalanceUSD
-        let safeCash = (w.cashBalanceUSD.isFinite && w.cashBalanceUSD >= 0) ? w.cashBalanceUSD : safeStart
-        let safeRealized = w.realizedPnLUSD.isFinite ? w.realizedPnLUSD : 0
-        let safeFees = (w.totalFeesPaidUSD.isFinite && w.totalFeesPaidUSD >= 0) ? w.totalFeesPaidUSD : 0
-        return DemoWallet(
-            startingBalanceUSD: safeStart,
-            cashBalanceUSD: safeCash,
-            reservedMarginUSD: reconciledReserved,
-            realizedPnLUSD: safeRealized,
-            totalFeesPaidUSD: safeFees,
-            positions: positions,
-            transactions: transactions
-        )
+        return ((try? context.fetch(desc)) ?? []).map { $0.toTrackedTrade() }
     }
 
-    public func saveDemoWallet(_ wallet: DemoWallet) {
-        let primaryId = "primary"
-        let walletDesc = FetchDescriptor<DemoWalletRecord>(
-            predicate: #Predicate { $0.id == primaryId }
+    public func upsertTrackedJournalEntry(_ trade: TrackedJournalTrade) {
+        let targetId = trade.id
+        let desc = FetchDescriptor<TrackedSignalJournalEntry>(
+            predicate: #Predicate { $0.id == targetId }
         )
-        if let existing = try? context.fetch(walletDesc).first {
-            existing.startingBalanceUSD = wallet.startingBalanceUSD
-            existing.cashBalanceUSD = wallet.cashBalanceUSD
-            existing.reservedMarginUSD = wallet.reservedMarginUSD
-            existing.realizedPnLUSD = wallet.realizedPnLUSD
-            existing.totalFeesPaidUSD = wallet.totalFeesPaidUSD
-            existing.updatedAt = Date()
+        if let existing = try? context.fetch(desc).first {
+            existing.apply(from: trade)
         } else {
-            context.insert(DemoWalletRecord(
-                id: primaryId,
-                startingBalanceUSD: wallet.startingBalanceUSD,
-                cashBalanceUSD: wallet.cashBalanceUSD,
-                reservedMarginUSD: wallet.reservedMarginUSD,
-                realizedPnLUSD: wallet.realizedPnLUSD,
-                totalFeesPaidUSD: wallet.totalFeesPaidUSD,
-                updatedAt: Date()
-            ))
+            context.insert(TrackedSignalJournalEntry(from: trade))
         }
+        try? context.save()
+    }
 
-        // Upsert positions
-        let existingPositions = (try? context.fetch(FetchDescriptor<DemoPositionRecord>())) ?? []
-        var existingPosById: [String: DemoPositionRecord] = Dictionary(
-            existingPositions.map { ($0.id, $0) },
+    public func upsertTrackedJournalEntries(_ trades: [TrackedJournalTrade]) {
+        guard !trades.isEmpty else { return }
+        let existingRows = (try? context.fetch(FetchDescriptor<TrackedSignalJournalEntry>())) ?? []
+        var byId: [String: TrackedSignalJournalEntry] = Dictionary(
+            existingRows.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let incomingPosIds = Set(wallet.positions.map(\.id))
-        for old in existingPositions where !incomingPosIds.contains(old.id) {
-            context.delete(old)
-        }
-        for pos in wallet.positions {
-            guard let data = try? JSONEncoder().encode(pos) else { continue }
-            if let existing = existingPosById[pos.id] {
-                existing.symbol = pos.symbol
-                existing.statusRaw = pos.status.rawValue
-                existing.positionJSON = data
-                existing.closedAt = pos.closedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) }
-                existing.activeStrategyProfileKey = pos.activeStrategyProfileKey
-                existing.enabledStrategyIDsCSV = pos.enabledStrategyIDsCSV
-                existing.orderFlowStatus = pos.orderFlowStatus
+        for trade in trades {
+            if let existing = byId[trade.id] {
+                existing.apply(from: trade)
             } else {
-                let row = DemoPositionRecord(
-                    id: pos.id,
-                    symbol: pos.symbol,
-                    statusRaw: pos.status.rawValue,
-                    positionJSON: data,
-                    createdAt: Date(timeIntervalSince1970: pos.createdAtEpochSeconds),
-                    closedAt: pos.closedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) },
-                    activeStrategyProfileKey: pos.activeStrategyProfileKey,
-                    enabledStrategyIDsCSV: pos.enabledStrategyIDsCSV,
-                    orderFlowStatus: pos.orderFlowStatus
-                )
+                let row = TrackedSignalJournalEntry(from: trade)
                 context.insert(row)
-                existingPosById[pos.id] = row
+                byId[trade.id] = row
             }
         }
-
-        // Append missing transactions and prune table to latest 500 rows
-        let existingTxs = (try? context.fetch(FetchDescriptor<DemoWalletTransactionRecord>(
-            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
-        ))) ?? []
-        let existingTxIds = Set(existingTxs.map(\.id))
-        var insertedCount = 0
-        for tx in wallet.transactions.suffix(500) where !existingTxIds.contains(tx.id) {
-            context.insert(DemoWalletTransactionRecord(
-                id: tx.id,
-                timestamp: Date(timeIntervalSince1970: tx.timestampEpochSeconds),
-                kindRaw: tx.kind.rawValue,
-                symbol: tx.symbol,
-                positionId: tx.positionId,
-                amountUSD: tx.amountUSD,
-                balanceAfterUSD: tx.balanceAfterUSD,
-                note: tx.note
-            ))
-            insertedCount += 1
-        }
-        if existingTxs.count + insertedCount > 500 {
-            let keepExisting = max(0, 500 - insertedCount)
-            if existingTxs.count > keepExisting {
-                for stale in existingTxs.dropFirst(keepExisting) {
-                    context.delete(stale)
-                }
-            }
-        }
-
         try? context.save()
     }
 
-    public func clearDemoWallet() {
-        if let rows = try? context.fetch(FetchDescriptor<DemoWalletRecord>()) {
-            for r in rows { context.delete(r) }
-        }
-        if let rows = try? context.fetch(FetchDescriptor<DemoPositionRecord>()) {
-            for r in rows { context.delete(r) }
-        }
-        if let rows = try? context.fetch(FetchDescriptor<DemoWalletTransactionRecord>()) {
-            for r in rows { context.delete(r) }
+    /// Prunes closed/expired journal entries keeping the newest `keepingNewest` closed items (open trades are never pruned).
+    public func pruneClosedJournalEntries(keepingNewest limit: Int = 500) {
+        let safeLimit = max(0, limit)
+        let desc = FetchDescriptor<TrackedSignalJournalEntry>(
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        guard let allRows = try? context.fetch(desc) else { return }
+        let openStatuses: Set<String> = [
+            JournalTradeStatus.pending.rawValue,
+            JournalTradeStatus.live.rawValue,
+            JournalTradeStatus.winTrackingTP2.rawValue
+        ]
+        let closedRows = allRows.filter { !openStatuses.contains($0.statusRaw) }
+        guard closedRows.count > safeLimit else { return }
+        for stale in closedRows.dropFirst(safeLimit) {
+            context.delete(stale)
         }
         try? context.save()
+    }
+
+    public func clearTrackedJournalEntries() {
+        if let rows = try? context.fetch(FetchDescriptor<TrackedSignalJournalEntry>()) {
+            for r in rows { context.delete(r) }
+            try? context.save()
+        }
     }
 
     // MARK: - Reset & Export
@@ -1019,6 +938,9 @@ public final class ConfluenceDataStore {
             for r in rows { context.delete(r) }
         }
         if let rows = try? context.fetch(FetchDescriptor<TradeReplayCandleCache>()) {
+            for r in rows { context.delete(r) }
+        }
+        if let rows = try? context.fetch(FetchDescriptor<TrackedSignalJournalEntry>()) {
             for r in rows { context.delete(r) }
         }
         try? context.save()

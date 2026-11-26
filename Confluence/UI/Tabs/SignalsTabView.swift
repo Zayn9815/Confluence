@@ -16,10 +16,10 @@ public struct SignalsTabView: View {
 
     @State private var selectedMarket: MarketClass? = nil // nil == All
     @State private var feedFilter: SignalFeedFilter = .strong
+    @State private var expandedSignalIDs: Set<String> = []
     @State private var chartSignal: TradeSignal?
     @State private var sizerSignal: TradeSignal?
-    @State private var journalDraft: JournalEntrySnapshot?
-    @State private var journalDraftIsExisting: Bool = false
+    @State private var orderFlowPayload: OrderFlowSheetPayload?
     @State private var glossaryQuery: GlossarySheetQuery?
     @State private var preNewsTick: Date = Date()
 
@@ -64,7 +64,7 @@ public struct SignalsTabView: View {
                 if let shield = coordinator.imminentPreNewsEvent {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.shield.fill")
-                            .foregroundStyle(palette.macroIceBlue)
+                            .foregroundStyle(palette.champagneGold)
                         Text(shield.badgeText)
                             .font(.caption.weight(.semibold).monospacedDigit())
                             .foregroundStyle(palette.primaryInk)
@@ -172,7 +172,6 @@ public struct SignalsTabView: View {
                                     let brokerOffset = coordinator.settings.brokerOffset(for: sig.symbol)
                                     let adjLevels = coordinator.settings.displayLevels(for: sig)
                                     let isBrokerAdj = coordinator.settings.payload.showBrokerAdjustedLevels && brokerOffset != nil
-                                    let isTaken = coordinator.journalEntry(forSignalFingerprint: sig.fingerprint) != nil
 
                                     SignalCardView(
                                         signal: sig,
@@ -181,7 +180,6 @@ public struct SignalsTabView: View {
                                         brokerOffsetInfo: brokerOffset,
                                         isBrokerAdjusted: isBrokerAdj,
                                         correlationWarnings: coordinator.correlationWarningsByFingerprint[sig.fingerprint] ?? [],
-                                        isTakenInJournal: isTaken,
                                         use24HourTime: coordinator.settings.payload.use24HourTime,
                                         useUTCTimeZone: coordinator.settings.payload.useUTCTimeZone,
                                         palette: palette,
@@ -191,7 +189,11 @@ public struct SignalsTabView: View {
                                         hapticsEnabled: coordinator.settings.payload.hapticsEnabled,
                                         isSelecting: isSelecting,
                                         isSelected: isRowSelected,
-                                        livePrice: coordinator.livePriceService.latest(for: sig.symbol)?.price,
+                                        isExpanded: expandedSignalIDs.contains(sig.fingerprint),
+                                        livePriceService: coordinator.livePriceService,
+                                        onToggleExpand: {
+                                            toggleExpanded(sig.fingerprint)
+                                        },
                                         onToggleSelect: {
                                             toggleSelection(for: sig.fingerprint)
                                         },
@@ -199,6 +201,7 @@ public struct SignalsTabView: View {
                                             withAnimation(.easeInOut(duration: 0.2)) {
                                                 coordinator.deleteSignal(fingerprint: sig.fingerprint)
                                                 selectedFingerprints.remove(sig.fingerprint)
+                                                expandedSignalIDs.remove(sig.fingerprint)
                                             }
                                         },
                                         onToggleBrokerAdjusted: {
@@ -207,9 +210,20 @@ public struct SignalsTabView: View {
                                         onOpenPositionSizer: {
                                             sizerSignal = sig
                                         },
-                                        onMarkAsTaken: {
-                                            journalDraftIsExisting = isTaken
-                                            journalDraft = coordinator.makeJournalDraft(from: sig)
+                                        onOpenOrderFlow: { summary in
+                                            let lv = adjLevels ?? sig.levels
+                                            orderFlowPayload = OrderFlowSheetPayload(
+                                                id: "sig_\(sig.fingerprint)",
+                                                symbol: sig.symbol,
+                                                timeframe: sig.timeframe,
+                                                direction: sig.direction,
+                                                summary: summary,
+                                                entry: lv?.entryMid,
+                                                stopLoss: lv?.stopLoss,
+                                                target1: lv?.tp1,
+                                                target2: (lv?.isTP2Enabled == true) ? lv?.tp2 : nil,
+                                                isHistoricalSnapshot: false
+                                            )
                                         },
                                         onOpenGlossaryTerm: { term in
                                             glossaryQuery = GlossarySheetQuery(query: term)
@@ -225,8 +239,9 @@ public struct SignalsTabView: View {
                             }
                         }
                         .padding(.horizontal, 14)
-                        .padding(.bottom, isSelecting ? 84 : 24)
+                        .padding(.bottom, isSelecting ? 84 : 12)
                     }
+                    .safeAreaPadding(.bottom, 96)
                     .refreshable {
                         await coordinator.scanAllMarkets()
                     }
@@ -272,7 +287,7 @@ public struct SignalsTabView: View {
                     }
                 }
 
-                // Trailing: Discrete native icon-only ToolbarItems (prevents iOS 27 Liquid Glass clipping!)
+                // Trailing: Discrete native icon-only ToolbarItems
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
@@ -342,12 +357,13 @@ public struct SignalsTabView: View {
                 Button("Delete Selected (\(selectedFingerprints.count))", role: .destructive) {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         coordinator.deleteSignals(fingerprints: selectedFingerprints)
+                        expandedSignalIDs.subtract(selectedFingerprints)
                         exitSelectionMode()
                     }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Deleted signal cards are permanently removed from the feed. Your Calibration Stats and Trade Ledger history remain preserved.")
+                Text("Deleted signal cards are permanently removed from the feed. Your automatic Journal and Calibration history remain preserved.")
             }
             .confirmationDialog(
                 "Delete All \(feedFilter.rawValue)?",
@@ -357,7 +373,9 @@ public struct SignalsTabView: View {
                 Button("Delete \(feedFilter.rawValue)", role: .destructive) {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         if selectedMarket != nil {
-                            coordinator.deleteSignals(fingerprints: Set(filteredSignals.map(\.fingerprint)))
+                            let fps = Set(filteredSignals.map(\.fingerprint))
+                            coordinator.deleteSignals(fingerprints: fps)
+                            expandedSignalIDs.subtract(fps)
                         } else {
                             coordinator.deleteSignals(in: currentSignalCategory)
                         }
@@ -366,7 +384,7 @@ public struct SignalsTabView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Removes all cards from \(feedFilter.rawValue) permanently. Your Calibration Stats and Trade Ledger history remain preserved.")
+                Text("Removes all cards from \(feedFilter.rawValue) permanently. Your automatic Journal and Calibration history remain preserved.")
             }
             .confirmationDialog(
                 "Delete All Signals Across All Tabs?",
@@ -376,12 +394,13 @@ public struct SignalsTabView: View {
                 Button("Delete All Signals", role: .destructive) {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         coordinator.deleteAllSignals()
+                        expandedSignalIDs.removeAll()
                         exitSelectionMode()
                     }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Clears Strong Signals, Trap Alerts, and Weak / Filtered cards permanently. Your Calibration Stats and Trade Ledger history remain preserved.")
+                Text("Clears Strong Signals, Trap Alerts, and Weak / Filtered cards permanently. Your automatic Journal and Calibration history remain preserved.")
             }
             .sheet(item: $chartSignal) { sig in
                 FullScreenChartSheet(signal: sig, palette: palette, coordinator: coordinator)
@@ -396,12 +415,12 @@ public struct SignalsTabView: View {
                     )
                 }
             }
-            .sheet(item: $journalDraft) { draft in
-                JournalEntryEditorSheet(
-                    entry: draft,
-                    isExisting: journalDraftIsExisting,
-                    coordinator: coordinator,
-                    palette: palette
+            .sheet(item: $orderFlowPayload) { payload in
+                OrderFlowInsightSheet(
+                    payload: payload,
+                    palette: palette,
+                    use24HourTime: coordinator.settings.payload.use24HourTime,
+                    useUTCTimeZone: coordinator.settings.payload.useUTCTimeZone
                 )
             }
             .sheet(item: $glossaryQuery) { q in
@@ -420,6 +439,16 @@ public struct SignalsTabView: View {
                     try? await Task.sleep(for: .seconds(30))
                     preNewsTick = Date()
                 }
+            }
+        }
+    }
+
+    private func toggleExpanded(_ fingerprint: String) {
+        withAnimation(.snappy(duration: 0.24, extraBounce: 0.0)) {
+            if expandedSignalIDs.contains(fingerprint) {
+                expandedSignalIDs.remove(fingerprint)
+            } else {
+                expandedSignalIDs.insert(fingerprint)
             }
         }
     }

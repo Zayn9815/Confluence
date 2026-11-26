@@ -6,7 +6,8 @@ public enum PositioningAnalyzer {
     public static func analyzeOKX(
         snapshot: OKXDerivativesSnapshot,
         candles: [Candle],
-        upTo endIndex: Int? = nil
+        upTo endIndex: Int? = nil,
+        timeframe: Timeframe = .h1
     ) -> PositioningAssessment {
         let lastIdx: Int
         if candles.isEmpty {
@@ -14,7 +15,15 @@ public enum PositioningAnalyzer {
         } else {
             lastIdx = max(0, min(endIndex ?? (candles.count - 1), candles.count - 1))
         }
-        let lookbackIdx = max(0, lastIdx - 6)
+        let lookbackBars: Int
+        switch timeframe {
+        case .m15: lookbackBars = 8
+        case .m30: lookbackBars = 7
+        case .h1: lookbackBars = 6
+        case .h4: lookbackBars = 4
+        case .d1: lookbackBars = 3
+        }
+        let lookbackIdx = max(0, lastIdx - lookbackBars)
         let priceChangePct: Double
         if lastIdx > lookbackIdx && candles[lookbackIdx].close.isFinite && candles[lookbackIdx].close > 0 && candles[lastIdx].close.isFinite {
             priceChangePct = ((candles[lastIdx].close - candles[lookbackIdx].close) / candles[lookbackIdx].close) * 100.0

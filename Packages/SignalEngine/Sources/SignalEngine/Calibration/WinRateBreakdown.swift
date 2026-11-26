@@ -1,17 +1,17 @@
 import Foundation
 
 public enum WinRateOriginGroup: String, Codable, Sendable, CaseIterable, Identifiable {
-    case strongSignals
-    case trapsAndFiltered
-    case newsSetups
+    case strongSignals = "strong_signals"
+    case weakAndFiltered = "weak_and_filtered"
+    case trapAlerts = "trap_alerts"
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
-        case .strongSignals: return "Strong signals"
-        case .trapsAndFiltered: return "Traps and filtered"
-        case .newsSetups: return "News setups"
+        case .strongSignals: return "Strong Signals"
+        case .weakAndFiltered: return "Weak & Filtered"
+        case .trapAlerts: return "Trap Alerts"
         }
     }
 }
@@ -70,6 +70,47 @@ public struct OriginWinRateStat: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+public struct JournalSectionStat: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public var id: String { section.rawValue }
+    public let section: JournalSection
+    public let title: String
+    public let wins: Int
+    public let losses: Int
+    public let liveCount: Int
+    public let pendingCount: Int
+    public let expiredCount: Int
+    public let totalResolved: Int
+    public let winRate: Double
+    public let winRateCI: WilsonInterval?
+    public let averageR: Double
+
+    public init(
+        section: JournalSection,
+        title: String,
+        wins: Int,
+        losses: Int,
+        liveCount: Int,
+        pendingCount: Int,
+        expiredCount: Int = 0,
+        totalResolved: Int,
+        winRate: Double,
+        winRateCI: WilsonInterval?,
+        averageR: Double
+    ) {
+        self.section = section
+        self.title = title
+        self.wins = wins
+        self.losses = losses
+        self.liveCount = liveCount
+        self.pendingCount = pendingCount
+        self.expiredCount = expiredCount
+        self.totalResolved = totalResolved
+        self.winRate = winRate
+        self.winRateCI = winRateCI
+        self.averageR = averageR
+    }
+}
+
 public struct StrengthBucketStat: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public let label: String
@@ -115,8 +156,9 @@ public struct StrengthBucketStat: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// Breaks down win rates honestly by signal origin (Strong signals / Traps and filtered / News setups)
-/// and by raw score strength bucket, with exact Wilson 95% CI and sample size `n`.
+/// Breaks down win rates honestly across the 3 exact signal sections
+/// (Strong Signals / Weak & Filtered / Trap Alerts) and raw score strength buckets,
+/// with exact Wilson 95% CI, sample size `n`, and Crypto Order Flow edge comparison.
 public enum WinRateBreakdown {
     private struct BucketDef: Sendable {
         let id: String
@@ -132,6 +174,8 @@ public enum WinRateBreakdown {
         BucketDef(id: "80_plus", label: "80+", lower: 80.0, upper: nil)
     ]
 
+    /// 3-bucket breakdown over historical `SignalOutcomeRecord` rows aligned 1:1 with `JournalSection`:
+    /// Strong Signals, Weak & Filtered, and Trap Alerts.
     public static func byOrigin(
         records: [SignalOutcomeRecord],
         trapOutcomes: [TrapOutcomeSummaryItem] = [],
@@ -144,9 +188,8 @@ public enum WinRateBreakdown {
             return true
         }
 
-        // 1. Strong signals (scanner origin)
+        // 1. Strong Signals
         let strongResolved = eligibleByLegacy.filter {
-            $0.origin == .scanner &&
             $0.category == .strongSignal &&
             filter.isCountedInWinRateDenominator($0.status)
         }
@@ -164,55 +207,91 @@ public enum WinRateBreakdown {
             negativeCountLabel: "Losses"
         )
 
-        // 2. Traps and filtered (scanner weak/trap signals with levels + level-less TrapEvaluationHelper outcomes)
-        let trapAndWeakResolved = eligibleByLegacy.filter {
-            $0.origin == .scanner &&
-            ($0.category == .trapAlert || $0.category == .weakSignal) &&
+        // 2. Weak & Filtered
+        let weakResolved = eligibleByLegacy.filter {
+            $0.category == .weakSignal &&
             filter.isCountedInWinRateDenominator($0.status)
         }
-        let existingIds = Set(trapAndWeakResolved.map(\.signalId))
-        let levelWins = trapAndWeakResolved.filter { filter.isCountedWin($0.status) }.count
-        let levelLosses = trapAndWeakResolved.count - levelWins
-
-        let additionalTraps = trapOutcomes.filter { !existingIds.contains($0.id) && ($0.outcome == .respected || $0.outcome == .invalidated) }
-        let trapWorked = additionalTraps.filter { $0.outcome == .respected }.count
-        let trapFailed = additionalTraps.filter { $0.outcome == .invalidated }.count
-
-        let combinedWorked = levelWins + trapWorked
-        let combinedFailed = levelLosses + trapFailed
-        let combinedTotal = combinedWorked + combinedFailed
-        let trapsStat = OriginWinRateStat(
-            group: .trapsAndFiltered,
-            title: WinRateOriginGroup.trapsAndFiltered.title,
-            wins: combinedWorked,
-            losses: combinedFailed,
-            totalResolved: combinedTotal,
-            winRate: combinedTotal == 0 ? 0.0 : Double(combinedWorked) / Double(combinedTotal),
-            winRateCI: WilsonInterval.compute(wins: combinedWorked, total: combinedTotal),
-            positiveCountLabel: "Worked",
-            negativeCountLabel: "Failed"
-        )
-
-        // 3. News setups
-        let newsResolved = eligibleByLegacy.filter {
-            $0.origin == .news &&
-            filter.isCountedInWinRateDenominator($0.status)
-        }
-        let newsWins = newsResolved.filter { filter.isCountedWin($0.status) }.count
-        let newsLosses = newsResolved.count - newsWins
-        let newsStat = OriginWinRateStat(
-            group: .newsSetups,
-            title: WinRateOriginGroup.newsSetups.title,
-            wins: newsWins,
-            losses: newsLosses,
-            totalResolved: newsResolved.count,
-            winRate: newsResolved.isEmpty ? 0.0 : Double(newsWins) / Double(newsResolved.count),
-            winRateCI: WilsonInterval.compute(wins: newsWins, total: newsResolved.count),
+        let weakWins = weakResolved.filter { filter.isCountedWin($0.status) }.count
+        let weakLosses = weakResolved.count - weakWins
+        let weakStat = OriginWinRateStat(
+            group: .weakAndFiltered,
+            title: WinRateOriginGroup.weakAndFiltered.title,
+            wins: weakWins,
+            losses: weakLosses,
+            totalResolved: weakResolved.count,
+            winRate: weakResolved.isEmpty ? 0.0 : Double(weakWins) / Double(weakResolved.count),
+            winRateCI: WilsonInterval.compute(wins: weakWins, total: weakResolved.count),
             positiveCountLabel: "Wins",
             negativeCountLabel: "Losses"
         )
 
-        return [strongStat, trapsStat, newsStat]
+        // 3. Trap Alerts (trap outcome records + unique level-less TrapEvaluationHelper outcomes)
+        let trapResolved = eligibleByLegacy.filter {
+            $0.category == .trapAlert &&
+            filter.isCountedInWinRateDenominator($0.status)
+        }
+        let existingTrapIds = Set(trapResolved.map(\.signalId))
+        let levelTrapWins = trapResolved.filter { filter.isCountedWin($0.status) }.count
+        let levelTrapLosses = trapResolved.count - levelTrapWins
+
+        let additionalTraps = trapOutcomes.filter { !existingTrapIds.contains($0.id) && ($0.outcome == .respected || $0.outcome == .invalidated) }
+        let trapWorked = additionalTraps.filter { $0.outcome == .respected }.count
+        let trapFailed = additionalTraps.filter { $0.outcome == .invalidated }.count
+
+        let totalTrapWins = levelTrapWins + trapWorked
+        let totalTrapLosses = levelTrapLosses + trapFailed
+        let totalTrapResolved = totalTrapWins + totalTrapLosses
+        let trapsStat = OriginWinRateStat(
+            group: .trapAlerts,
+            title: WinRateOriginGroup.trapAlerts.title,
+            wins: totalTrapWins,
+            losses: totalTrapLosses,
+            totalResolved: totalTrapResolved,
+            winRate: totalTrapResolved == 0 ? 0.0 : Double(totalTrapWins) / Double(totalTrapResolved),
+            winRateCI: WilsonInterval.compute(wins: totalTrapWins, total: totalTrapResolved),
+            positiveCountLabel: "Wins",
+            negativeCountLabel: "Losses"
+        )
+
+        return [strongStat, weakStat, trapsStat]
+    }
+
+    /// 3-bucket breakdown directly over automatic `TrackedJournalTrade` entries.
+    /// Counts `.winTrackingTP2`, `.winTP1`, `.winTP2` as WIN; `.loss` as LOSS;
+    /// strictly excludes `.pending`, `.live`, and `.expired` from the Win Rate denominator.
+    public static func byJournalSection(
+        entries: [TrackedJournalTrade]
+    ) -> [JournalSectionStat] {
+        JournalSection.allCases.map { section in
+            let sectionItems = entries.filter { $0.section == section }
+            let winsList = sectionItems.filter { $0.status.isCountedWin }
+            let lossList = sectionItems.filter { $0.status.isCountedLoss }
+            let counted = winsList + lossList
+            let liveCount = sectionItems.filter { $0.status == .live || $0.status == .winTrackingTP2 }.count
+            let pendingCount = sectionItems.filter { $0.status == .pending }.count
+            let expiredCount = sectionItems.filter { $0.status == .expired }.count
+
+            let totalResolved = counted.count
+            let winRate = totalResolved == 0 ? 0.0 : Double(winsList.count) / Double(totalResolved)
+            let avgR = totalResolved == 0
+                ? 0.0
+                : counted.reduce(0.0) { $0 + $1.effectiveRMultiple } / Double(totalResolved)
+
+            return JournalSectionStat(
+                section: section,
+                title: section.displayName,
+                wins: winsList.count,
+                losses: lossList.count,
+                liveCount: liveCount,
+                pendingCount: pendingCount,
+                expiredCount: expiredCount,
+                totalResolved: totalResolved,
+                winRate: winRate,
+                winRateCI: WilsonInterval.compute(wins: winsList.count, total: totalResolved),
+                averageR: avgR
+            )
+        }
     }
 
     public static func byStrengthBucket(
@@ -268,7 +347,7 @@ public enum WinRateBreakdown {
     }
 
     /// Crypto-Only Order Flow Edge Delta comparing win rate and average R:R when Order Flow was
-    /// Aligned vs. Conflicting vs. Off.
+    /// Aligned vs. Conflicting vs. Off (over `SignalOutcomeRecord`).
     public static func cryptoOrderFlowEdgeDelta(
         records: [SignalOutcomeRecord],
         filter: CalibrationFilterConfig = .headlineFixed
@@ -287,6 +366,39 @@ public enum WinRateBreakdown {
         let alignedStat = computeSliceStat(label: "Order Flow Aligned", records: aligned, filter: filter)
         let conflictingStat = computeSliceStat(label: "Order Flow Conflicting", records: conflicting, filter: filter)
         let offStat = computeSliceStat(label: "Order Flow Off", records: off, filter: filter)
+
+        let wrDelta: Double? = (alignedStat.totalResolved > 0 && conflictingStat.totalResolved > 0)
+            ? (alignedStat.winRate - conflictingStat.winRate)
+            : nil
+        let rDelta: Double? = (alignedStat.totalResolved > 0 && conflictingStat.totalResolved > 0)
+            ? (alignedStat.averageR - conflictingStat.averageR)
+            : nil
+
+        return CryptoOrderFlowEdgeDelta(
+            aligned: alignedStat,
+            conflicting: conflictingStat,
+            off: offStat,
+            winRateDeltaAlignedVsConflicting: wrDelta,
+            avgRDeltaAlignedVsConflicting: rDelta
+        )
+    }
+
+    /// Crypto-Only Order Flow Edge Delta directly over automatic `TrackedJournalTrade` entries.
+    public static func cryptoOrderFlowEdgeDelta(
+        entries: [TrackedJournalTrade]
+    ) -> CryptoOrderFlowEdgeDelta {
+        let cryptoCounted = entries.filter {
+            $0.assetClass == .crypto && ($0.status.isCountedWin || $0.status.isCountedLoss)
+        }
+        let aligned = cryptoCounted.filter { $0.orderFlowStatus == OrderFlowAlignment.aligned.rawValue }
+        let conflicting = cryptoCounted.filter { $0.orderFlowStatus == OrderFlowAlignment.conflicting.rawValue }
+        let off = cryptoCounted.filter {
+            $0.orderFlowStatus == "off" || $0.orderFlowStatus == OrderFlowAlignment.unavailable.rawValue || $0.orderFlowStatus.isEmpty
+        }
+
+        let alignedStat = computeJournalSliceStat(label: "Order Flow Aligned", entries: aligned)
+        let conflictingStat = computeJournalSliceStat(label: "Order Flow Conflicting", entries: conflicting)
+        let offStat = computeJournalSliceStat(label: "Order Flow Off", entries: off)
 
         let wrDelta: Double? = (alignedStat.totalResolved > 0 && conflictingStat.totalResolved > 0)
             ? (alignedStat.winRate - conflictingStat.winRate)
@@ -323,6 +435,25 @@ public enum WinRateBreakdown {
             winRateCI: WilsonInterval.compute(wins: wins, total: total)
         )
     }
+
+    private static func computeJournalSliceStat(
+        label: String,
+        entries: [TrackedJournalTrade]
+    ) -> WinRateSliceStat {
+        let wins = entries.filter { $0.status.isCountedWin }.count
+        let total = entries.count
+        let losses = total - wins
+        let avgR = total == 0 ? 0.0 : (entries.reduce(0.0) { $0 + $1.effectiveRMultiple } / Double(total))
+        return WinRateSliceStat(
+            label: label,
+            wins: wins,
+            losses: losses,
+            totalResolved: total,
+            winRate: total == 0 ? 0.0 : Double(wins) / Double(total),
+            averageR: avgR,
+            winRateCI: WilsonInterval.compute(wins: wins, total: total)
+        )
+    }
 }
 
 public struct WinRateSliceStat: Codable, Sendable, Equatable, Hashable {
@@ -333,6 +464,10 @@ public struct WinRateSliceStat: Codable, Sendable, Equatable, Hashable {
     public let winRate: Double
     public let averageR: Double
     public let winRateCI: WilsonInterval?
+
+    public var isLowConfidence: Bool {
+        totalResolved < 30
+    }
 
     public init(
         label: String,
@@ -371,6 +506,14 @@ public struct CryptoOrderFlowEdgeDelta: Codable, Sendable, Equatable, Hashable {
     public let off: WinRateSliceStat
     public let winRateDeltaAlignedVsConflicting: Double?
     public let avgRDeltaAlignedVsConflicting: Double?
+
+    public var totalSamples: Int {
+        aligned.totalResolved + conflicting.totalResolved + off.totalResolved
+    }
+
+    public var isLowConfidence: Bool {
+        totalSamples < 30
+    }
 
     public init(
         aligned: WinRateSliceStat,

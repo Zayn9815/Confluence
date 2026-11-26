@@ -94,7 +94,7 @@ public enum SignalEngine {
         // Compute causal positioning assessment (OKX for Crypto, CFTC COT for FX/Gold/Indices/CME BTC)
         var positioning: PositioningAssessment? = nil
         if let okx = okxDerivatives, config.enabledStrategies.contains(.positioningOkx) {
-            positioning = PositioningAnalyzer.analyzeOKX(snapshot: okx, candles: entrySeries.candles)
+            positioning = PositioningAnalyzer.analyzeOKX(snapshot: okx, candles: entrySeries.candles, timeframe: timeframe)
         }
         if positioning == nil, !cftcCOTRecords.isEmpty, config.enabledStrategies.contains(.positioningCot) {
             positioning = PositioningAnalyzer.analyzeCFTCCOT(records: cftcCOTRecords, asOfEpochSeconds: serverNowEpochSeconds)

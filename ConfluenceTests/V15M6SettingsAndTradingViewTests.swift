@@ -93,6 +93,7 @@ final class V15M6SettingsAndTradingViewTests: XCTestCase {
 
         // Intervals
         XCTAssertEqual(TradingViewSymbolMapper.interval(for: .m15), "15")
+        XCTAssertEqual(TradingViewSymbolMapper.interval(for: .m30), "30")
         XCTAssertEqual(TradingViewSymbolMapper.interval(for: .h1), "60")
         XCTAssertEqual(TradingViewSymbolMapper.interval(for: .h4), "240")
         XCTAssertEqual(TradingViewSymbolMapper.interval(for: .d1), "D")
