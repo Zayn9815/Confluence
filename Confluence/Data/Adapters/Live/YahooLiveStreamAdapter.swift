@@ -212,6 +212,7 @@ public actor YahooLiveStreamAdapter {
         while !Task.isCancelled {
             do {
                 let message = try await ws.receive()
+                guard self.webSocketTask === ws else { return }
                 switch message {
                 case .string(let text):
                     if let tick = YahooPricingProtobufDecoder.decodeBase64(text) {
@@ -224,7 +225,12 @@ public actor YahooLiveStreamAdapter {
                 @unknown default:
                     break
                 }
+            } catch is CancellationError {
+                return
+            } catch let urlErr as URLError where urlErr.code == .cancelled {
+                return
             } catch {
+                guard self.webSocketTask === ws else { return }
                 if !Task.isCancelled {
                     isConnectedFlag = false
                     await onDisconnect(error.localizedDescription)

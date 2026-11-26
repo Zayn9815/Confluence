@@ -108,14 +108,18 @@ public enum AIProviderError: Error, LocalizedError, Sendable {
     }
 }
 
-/// Shared UTC-day AI call counter enforced across ALL AI providers (Gemini, DeepSeek, OpenRouter).
+/// Shared UTC-day AI call counter enforced atomically across ALL AI providers (Gemini, DeepSeek, OpenRouter).
 public enum AIDailyUsageTracker {
+    private static let lock = NSLock()
+
     private static func todayKey(prefix: String = "confluence.ai.calls") -> String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(secondsFromGMT: 0)
-        df.dateFormat = "yyyy-MM-dd"
-        return "\(prefix).\(df.string(from: Date()))"
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        let comps = cal.dateComponents([.year, .month, .day], from: Date())
+        let y = comps.year ?? 1970
+        let m = comps.month ?? 1
+        let d = comps.day ?? 1
+        return String(format: "%@.%04d-%02d-%02d", prefix, y, m, d)
     }
 
     private static func resolveDefaults(suiteName: String?) -> UserDefaults {
@@ -126,16 +130,22 @@ public enum AIDailyUsageTracker {
     }
 
     public static func currentCount(suiteName: String? = nil) -> Int {
-        resolveDefaults(suiteName: suiteName).integer(forKey: todayKey())
+        lock.lock()
+        defer { lock.unlock() }
+        return resolveDefaults(suiteName: suiteName).integer(forKey: todayKey())
     }
 
     public static func increment(suiteName: String? = nil) {
+        lock.lock()
+        defer { lock.unlock() }
         let defaults = resolveDefaults(suiteName: suiteName)
         let key = todayKey()
         defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
     }
 
     public static func resetToday(suiteName: String? = nil) {
+        lock.lock()
+        defer { lock.unlock() }
         resolveDefaults(suiteName: suiteName).removeObject(forKey: todayKey())
     }
 }
@@ -243,7 +253,12 @@ public actor OpenAICompatibleJudgeClient: AIJudgeClient {
         }
 
         if provider == .deepseek {
-            models.sort { a, _ in a.id == "deepseek-flash" }
+            models.sort { a, b in
+                let aDefault = (a.id == "deepseek-flash")
+                let bDefault = (b.id == "deepseek-flash")
+                if aDefault != bDefault { return aDefault }
+                return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+            }
         } else if provider == .openrouter {
             models.sort { a, b in
                 if a.isFree != b.isFree { return a.isFree }
@@ -290,7 +305,11 @@ public actor OpenAICompatibleJudgeClient: AIJudgeClient {
         guard let jsonData = cleanedJSON.data(using: .utf8) else {
             throw NetworkAdapterError.decodingFailed("\(provider.displayName) returned non-UTF8 text")
         }
-        return try JSONDecoder().decode(ReflexJudgment.self, from: jsonData)
+        let judgment = try JSONDecoder().decode(ReflexJudgment.self, from: jsonData)
+        guard judgment.isSchemaValid() else {
+            throw NetworkAdapterError.decodingFailed("\(provider.displayName) judgment failed bounds validation")
+        }
+        return judgment
     }
 
     public func summarizeBreakingImpact(

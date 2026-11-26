@@ -611,13 +611,24 @@ public final class LivePriceService {
     public var onQuoteReceived: ((LivePriceQuote) -> Void)?
 
     private var engine: LivePriceEngine?
+    private var lastPublishTimeBySymbol: [String: TimeInterval] = [:]
+    private let minimumUIQuoteIntervalSeconds: TimeInterval = 0.25
 
     public init(http: any HTTPTransport = URLSessionHTTPClient()) {
         self.engine = LivePriceEngine(http: http) { [weak self] quote in
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.quotes[quote.symbol] = quote
+                let now = Date().timeIntervalSince1970
+                let prev = self.quotes[quote.symbol]
+                let lastPub = self.lastPublishTimeBySymbol[quote.symbol] ?? 0
+                // Always run trade monitor callback; throttle @Observable dictionary writes to <= 4 Hz per symbol
                 self.onQuoteReceived?(quote)
+                if prev == nil || prev?.price != quote.price || (now - lastPub) >= self.minimumUIQuoteIntervalSeconds {
+                    if (now - lastPub) >= self.minimumUIQuoteIntervalSeconds || prev == nil {
+                        self.lastPublishTimeBySymbol[quote.symbol] = now
+                        self.quotes[quote.symbol] = quote
+                    }
+                }
             }
         }
     }

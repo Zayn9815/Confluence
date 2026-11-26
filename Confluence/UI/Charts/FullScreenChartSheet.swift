@@ -162,7 +162,9 @@ public struct FullScreenChartSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(ChartEngineOption.appStorageKey) private var storedChartEngineRaw: String = ChartEngineOption.lightweightCharts.rawValue
 
+    @State private var sheetInstanceId: String = UUID().uuidString
     @State private var session: ChartSessionController
     @State private var activeProviderName: String
     @State private var selectedProvider: ChartProviderChoice = .auto
@@ -233,6 +235,36 @@ public struct FullScreenChartSheet: View {
     }
     private var effectiveChartViewMode: DefaultChartViewMode {
         showTradingViewControls ? chartViewMode : .confluence
+    }
+
+    private var activeChartEngine: ChartEngineOption {
+        coordinator?.settings.payload.chartEngine
+            ?? ChartEngineOption(rawValue: storedChartEngineRaw)
+            ?? .lightweightCharts
+    }
+
+    private var activeOverlayModel: ChartSignalOverlayModel {
+        let dir: TradeDirection? = sourceSignal?.direction
+            ?? replayContext?.trade.direction
+            ?? effectiveLevels.map { $0.tp1 >= $0.entryMid ? .long : .short }
+        let entryTS: TimeInterval? = replayContext?.trade.entryEpochSeconds
+            ?? sourceSignal?.recentCandles.last?.openTimeEpochSeconds
+            ?? sourceSignal?.barCloseEpochSeconds
+            ?? session.closedCandles.last?.openTimeEpochSeconds
+        let bePrice: Double? = (activeDemoPosition?.isStopLossAtBreakeven == true)
+            ? activeDemoPosition?.stopLoss
+            : nil
+        return ChartSignalOverlayModel.build(
+            symbol: symbol,
+            marketClass: marketClass,
+            timeframe: session.timeframe,
+            direction: dir,
+            levels: effectiveLevels,
+            overlays: shouldShowSignalLevels ? overlays : ChartOverlayData(),
+            entryTimestamp: entryTS,
+            breakevenPrice: bePrice,
+            livePrice: activeQuote?.price
+        )
     }
 
     private func openInTradingView() {
@@ -457,20 +489,21 @@ public struct FullScreenChartSheet: View {
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        LightweightChartContainer(
+                        ConfluenceChartContainerView(
+                            selectedEngine: activeChartEngine,
                             closedCandles: session.closedCandles,
                             formingCandle: session.formingCandle,
+                            lastRolledOverCandle: session.lastRolledOverCandle,
+                            liveTick: session.latestLiveTick,
                             dataSetRevision: session.dataSetRevision,
                             liveUpdateToken: session.liveUpdateToken,
                             fitRequestToken: session.fitRequestToken,
-                            levels: effectiveLevels,
-                            overlays: shouldShowSignalLevels ? overlays : ChartOverlayData(),
-                            livePrice: activeQuote?.price,
-                            breakevenPrice: (activeDemoPosition?.isStopLossAtBreakeven == true) ? activeDemoPosition?.stopLoss : nil,
-                            markers: replayMarkerBuild?.markers ?? [],
+                            overlayModel: activeOverlayModel,
+                            replayMarkers: replayMarkerBuild?.markers ?? [],
                             pricePrecision: prec,
                             timeframe: session.timeframe,
                             providerTag: activeProviderName,
+                            palette: palette,
                             isDark: colorScheme == .dark,
                             onNeedOlderHistory: {
                                 Task { await loadOlderHistoryPage() }
@@ -499,7 +532,7 @@ public struct FullScreenChartSheet: View {
 
                 // Footer: Attribution + Loaded Bars + Exact Closed Candle Time
                 HStack(spacing: 8) {
-                    Text(effectiveChartViewMode == .tradingView ? "Chart by TradingView" : "TradingView Lightweight Charts")
+                    Text(effectiveChartViewMode == .tradingView ? "Chart by TradingView" : activeChartEngine.attributionLabel)
                         .font(.caption2)
                         .foregroundStyle(palette.tertiaryInk)
                         .lineLimit(1)
@@ -557,7 +590,7 @@ public struct FullScreenChartSheet: View {
             }
             .task {
                 if !isReplayMode {
-                    coordinator?.livePriceService.acquire(owner: "chart_\(symbol)", symbols: [symbol])
+                    coordinator?.livePriceService.acquire(owner: "chart_\(symbol)_\(sheetInstanceId)", symbols: [symbol])
                     if session.closedCandles.count < 120 {
                         await reloadChartData()
                     }
@@ -565,7 +598,7 @@ public struct FullScreenChartSheet: View {
             }
             .onDisappear {
                 if !isReplayMode {
-                    coordinator?.livePriceService.release(owner: "chart_\(symbol)")
+                    coordinator?.livePriceService.release(owner: "chart_\(symbol)_\(sheetInstanceId)")
                 }
             }
             .onChange(of: activeQuote) { _, newQuote in
@@ -959,8 +992,14 @@ public struct FullScreenChartSheet: View {
             activeProviderName = res.providerName
             proxySymbolUsed = res.proxySymbolUsed
             session.finishInitialLoad(candles: res.candles)
+        } catch is CancellationError {
+            session.failInitialLoad()
+        } catch let urlErr as URLError where urlErr.code == .cancelled {
+            session.failInitialLoad()
         } catch {
-            loadError = error.localizedDescription
+            if !Task.isCancelled {
+                loadError = error.localizedDescription
+            }
             session.failInitialLoad()
         }
     }
@@ -1313,337 +1352,5 @@ private struct EditDemoLevelsSheet: View {
         }
         dismiss()
         onSaved("Updated Stop loss and targets for \(position.symbol).")
-    }
-}
-
-// MARK: - LightweightCharts v5.2.0 Bridge (Mod 1 Overlays + Native update() + Paging Delegate)
-
-private struct LightweightChartContainer: UIViewRepresentable {
-    let closedCandles: [Candle]
-    let formingCandle: Candle?
-    let dataSetRevision: Int
-    let liveUpdateToken: Int
-    let fitRequestToken: Int
-    let levels: TradeLevels?
-    let overlays: ChartOverlayData
-    let livePrice: Double?
-    let breakevenPrice: Double?
-    let markers: [SeriesMarker]
-    let pricePrecision: ChartPricePrecision
-    let timeframe: Timeframe
-    let providerTag: String
-    let isDark: Bool
-    let onNeedOlderHistory: () -> Void
-
-    @MainActor
-    final class Coordinator: NSObject, TimeScaleDelegate {
-        var series: CandlestickSeries?
-        var markersPlugin: SeriesMarkersPlugin<CandlestickSeries>?
-        var priceLines: [PriceLine] = []
-        var livePriceLine: PriceLine?
-        var lastDataSignature: String = ""
-        var lastOverlaySignature: String = ""
-        var lastLiveToken: Int = -1
-        var lastFitToken: Int = -1
-        var onNeedOlderHistory: (() -> Void)?
-
-        func didVisibleTimeRangeChange(onTimeScale timeScale: TimeScaleApi, parameters: TimeRange?) {}
-
-        func didVisibleLogicalRangeChange(onTimeScale timeScale: TimeScaleApi, parameters: LogicalRange?) {
-            guard let from = parameters?.from else { return }
-            if from <= ChartPagingPolicy.triggerBarsBeforeLeftEdge {
-                onNeedOlderHistory?()
-            }
-        }
-
-        func didReceiveTimeScaleSizeChangeWithParameters(onTimeScale timeScale: TimeScaleApi, parameters: LWCChartRectangle?) {}
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeUIView(context: Context) -> LightweightCharts {
-        let bgHex: UInt32 = isDark ? 0x0B0D11 : 0xF6F7F9
-        let textHex: UInt32 = isDark ? 0x9CA7BA : 0x374151
-        let gridHex: UInt32 = isDark ? 0x1B2230 : 0xE5E7EB
-
-        let options = ChartOptions(
-            autoSize: true,
-            layout: .init(
-                background: .solid(color: ChartColor(hex: bgHex)),
-                textColor: ChartColor(hex: textHex)
-            ),
-            rightPriceScale: VisiblePriceScaleOptions(
-                autoScale: true,
-                alignLabels: true,
-                scaleMargins: PriceScaleMargins(top: 0.11, bottom: 0.11),
-                borderVisible: true,
-                entireTextOnly: true,
-                minimumWidth: pricePrecision.minimumPriceScaleWidth
-            ),
-            timeScale: TimeScaleOptions(
-                timeVisible: timeframe != .d1,
-                secondsVisible: false
-            ),
-            grid: GridOptions(
-                verticalLines: GridLineOptions(color: ChartColor(hex: gridHex)),
-                horizontalLines: GridLineOptions(color: ChartColor(hex: gridHex))
-            ),
-            handleScroll: .options(.init(
-                mouseWheel: true,
-                pressedMouseMove: true,
-                horzTouchDrag: true,
-                vertTouchDrag: true
-            )),
-            handleScale: .options(.init(
-                mouseWheel: true,
-                pinch: true,
-                axisPressedMouseMove: .enabled(true),
-                axisDoubleClickReset: .enabled(true)
-            ))
-        )
-
-        let chartView = LightweightCharts(options: options)
-        let builtInFormat = PriceFormat.builtIn(BuiltInPriceFormat(
-            type: .price,
-            precision: Double(pricePrecision.precision),
-            minMove: pricePrecision.minMove
-        ))
-        let seriesOptions = CandlestickSeriesOptions(
-            priceFormat: builtInFormat,
-            autoscaleInfoProvider: buildAutoscaleProvider(),
-            upColor: ChartColor(hex: 0x10B981),
-            downColor: ChartColor(hex: 0xEF4444),
-            wickUpColor: ChartColor(hex: 0x10B981),
-            wickDownColor: ChartColor(hex: 0xEF4444)
-        )
-
-        let series = chartView.addCandlestickSeries(options: seriesOptions)
-        context.coordinator.series = series
-        context.coordinator.onNeedOlderHistory = onNeedOlderHistory
-
-        let timeScale = chartView.timeScale()
-        timeScale.delegate = context.coordinator
-        timeScale.subscribeVisibleLogicalRangeChange()
-
-        applyFullData(to: chartView, coordinator: context.coordinator, shouldFit: true)
-        applyOverlays(to: chartView, coordinator: context.coordinator)
-        return chartView
-    }
-
-    func updateUIView(_ uiView: LightweightCharts, context: Context) {
-        let coord = context.coordinator
-        coord.onNeedOlderHistory = onNeedOlderHistory
-
-        let dataSig = "\(dataSetRevision)|\(timeframe.rawValue)|\(providerTag)|\(pricePrecision.precision)|\(isDark)"
-        let shouldFit = (coord.lastFitToken != fitRequestToken)
-
-        if coord.lastDataSignature != dataSig {
-            applyFullData(to: uiView, coordinator: coord, shouldFit: shouldFit)
-        } else if shouldFit {
-            coord.lastFitToken = fitRequestToken
-            uiView.priceScale(priceScaleId: "right").setAutoScale(on: true)
-            uiView.timeScale().fitContent()
-            uiView.timeScale().scrollToRealTime()
-        }
-
-        // Incremental display-only live candle update via native series.update(bar:)
-        if coord.lastLiveToken != liveUpdateToken, let forming = formingCandle, let series = coord.series {
-            coord.lastLiveToken = liveUpdateToken
-            series.update(bar: CandlestickData(
-                time: .utc(timestamp: forming.openTimeEpochSeconds),
-                open: forming.open,
-                high: forming.high,
-                low: forming.low,
-                close: forming.close
-            ))
-        }
-
-        let overlaySig = buildOverlaySignature()
-        if coord.lastOverlaySignature != overlaySig {
-            applyOverlays(to: uiView, coordinator: coord)
-        }
-        updateLivePriceLine(coordinator: coord)
-    }
-
-    private func buildAutoscaleProvider() -> AutoscaleInfoProvider {
-        var corePrices: [Double] = []
-        if let lv = levels {
-            corePrices.append(contentsOf: [lv.entryMid, lv.stopLoss, lv.tp1])
-            if lv.isTP2Enabled {
-                corePrices.append(lv.tp2)
-            }
-        }
-        for trap in overlays.traps where trap.isActionable {
-            corePrices.append(trap.level)
-        }
-        let js = ChartAutoscaleScriptBuilder.makeProviderJS(corePrices: corePrices, maxDeviationFraction: 0.20)
-        return AutoscaleInfoProvider(.javaScript(js))
-    }
-
-    private func buildOverlaySignature() -> String {
-        let lvSig: String
-        if let lv = levels {
-            lvSig = "\(lv.entryMid)|\(lv.stopLoss)|\(lv.tp1)|\(lv.tp2)|\(lv.isTP2Enabled)"
-        } else {
-            lvSig = "none"
-        }
-        let trapSig = overlays.traps.filter(\.isActionable).map { "\($0.direction.rawValue):\($0.level)" }.joined(separator: ",")
-        let beSig = breakevenPrice.map { String(format: "%.6f", $0) } ?? "none"
-        return "\(lvSig)|\(trapSig)|\(beSig)|\(markers.count)"
-    }
-
-    private func applyFullData(to chartView: LightweightCharts, coordinator: Coordinator, shouldFit: Bool) {
-        guard let series = coordinator.series else { return }
-        coordinator.lastDataSignature = "\(dataSetRevision)|\(timeframe.rawValue)|\(providerTag)|\(pricePrecision.precision)|\(isDark)"
-
-        let builtInFormat = PriceFormat.builtIn(BuiltInPriceFormat(
-            type: .price,
-            precision: Double(pricePrecision.precision),
-            minMove: pricePrecision.minMove
-        ))
-        series.applyOptions(options: CandlestickSeriesOptions(
-            priceFormat: builtInFormat,
-            autoscaleInfoProvider: buildAutoscaleProvider()
-        ))
-        series.priceScale().applyOptions(options: PriceScaleOptions(
-            autoScale: true,
-            alignLabels: true,
-            scaleMargins: PriceScaleMargins(top: 0.11, bottom: 0.11),
-            borderVisible: true,
-            entireTextOnly: true,
-            minimumWidth: pricePrecision.minimumPriceScaleWidth
-        ))
-
-        var allBars = closedCandles.sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
-        if let forming = formingCandle,
-           (allBars.last?.openTimeEpochSeconds ?? -1) < forming.openTimeEpochSeconds {
-            allBars.append(forming)
-        }
-
-        let data = allBars.map { bar in
-            CandlestickData(
-                time: .utc(timestamp: bar.openTimeEpochSeconds),
-                open: bar.open,
-                high: bar.high,
-                low: bar.low,
-                close: bar.close
-            )
-        }
-        series.setData(data: data)
-
-        chartView.timeScale().applyOptions(options: TimeScaleOptions(
-            timeVisible: timeframe != .d1,
-            secondsVisible: false
-        ))
-
-        if shouldFit {
-            coordinator.lastFitToken = fitRequestToken
-            chartView.timeScale().fitContent()
-        }
-    }
-
-    private func applyOverlays(to chartView: LightweightCharts, coordinator: Coordinator) {
-        guard let series = coordinator.series else { return }
-        coordinator.lastOverlaySignature = buildOverlaySignature()
-
-        for oldLine in coordinator.priceLines {
-            series.removePriceLine(line: oldLine)
-        }
-        coordinator.priceLines.removeAll()
-
-        // Preserve ALL trade overlays: Entry, Stop loss, Target 1, Target 2, Active Traps, Breakeven
-        if let lv = levels {
-            coordinator.priceLines.append(series.createPriceLine(options: PriceLineOptions(
-                price: lv.entryMid,
-                color: ChartColor(hex: 0xD4AF37),
-                lineWidth: .one,
-                lineStyle: .dashed,
-                axisLabelVisible: true,
-                title: "ENTRY"
-            )))
-            coordinator.priceLines.append(series.createPriceLine(options: PriceLineOptions(
-                price: lv.stopLoss,
-                color: ChartColor(hex: 0xEF4444),
-                lineWidth: .two,
-                lineStyle: .solid,
-                axisLabelVisible: true,
-                title: "SL"
-            )))
-            coordinator.priceLines.append(series.createPriceLine(options: PriceLineOptions(
-                price: lv.tp1,
-                color: ChartColor(hex: 0x10B981),
-                lineWidth: .two,
-                lineStyle: .solid,
-                axisLabelVisible: true,
-                title: "T1"
-            )))
-            if lv.isTP2Enabled {
-                coordinator.priceLines.append(series.createPriceLine(options: PriceLineOptions(
-                    price: lv.tp2,
-                    color: ChartColor(hex: 0x38BDF8),
-                    lineWidth: .one,
-                    lineStyle: .dashed,
-                    axisLabelVisible: true,
-                    title: "T2"
-                )))
-            }
-        }
-
-        if let be = breakevenPrice, be.isFinite, be > 0 {
-            coordinator.priceLines.append(series.createPriceLine(options: PriceLineOptions(
-                price: be,
-                color: ChartColor(hex: 0x38BDF8),
-                lineWidth: .one,
-                lineStyle: .dashed,
-                axisLabelVisible: true,
-                title: "BE"
-            )))
-        }
-
-        for trap in overlays.traps where trap.isActionable {
-            coordinator.priceLines.append(series.createPriceLine(options: PriceLineOptions(
-                price: trap.level,
-                color: ChartColor(hex: 0xF59E0B),
-                lineWidth: .one,
-                lineStyle: .dashed,
-                axisLabelVisible: true,
-                title: trap.direction.rawValue
-            )))
-        }
-
-        // Trade Replay Markers with autoScale: false so markers never stretch price axis
-        if !markers.isEmpty {
-            if let plugin = coordinator.markersPlugin {
-                plugin.setMarkers(markers)
-            } else {
-                coordinator.markersPlugin = series.createMarkersPlugin(
-                    data: markers,
-                    options: SeriesMarkersOptions(active: true, autoScale: false)
-                )
-            }
-        } else if let plugin = coordinator.markersPlugin {
-            plugin.setMarkers([])
-        }
-    }
-
-    private func updateLivePriceLine(coordinator: Coordinator) {
-        guard let series = coordinator.series else { return }
-        if let existing = coordinator.livePriceLine {
-            series.removePriceLine(line: existing)
-            coordinator.livePriceLine = nil
-        }
-        guard let lp = livePrice, lp.isFinite, lp > 0 else { return }
-        let ref = closedCandles.last?.close ?? lp
-        let colorHex: UInt32 = (lp >= ref) ? 0x10B981 : 0xEF4444
-        coordinator.livePriceLine = series.createPriceLine(options: PriceLineOptions(
-            price: lp,
-            color: ChartColor(hex: colorHex),
-            lineWidth: .one,
-            lineStyle: .dashed,
-            axisLabelVisible: true,
-            title: "LIVE"
-        ))
     }
 }

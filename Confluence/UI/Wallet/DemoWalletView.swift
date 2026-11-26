@@ -70,6 +70,7 @@ public struct DemoWalletView: View {
     public let palette: ConfluencePalette
 
     @State private var showPlaceTrade: Bool = false
+    @State private var preparedTransactionsCSVURL: URL? = nil
     @State private var showEditBalance: Bool = false
     @State private var balanceInputText: String = ""
     @State private var editingPosition: DemoPosition? = nil
@@ -158,14 +159,28 @@ public struct DemoWalletView: View {
                         }
                         .buttonStyle(.plain)
 
-                        if let url = coordinator.exportDemoWalletTransactionsCSV(), !wallet.transactions.isEmpty {
-                            ShareLink(item: url) {
-                                Label("CSV", systemImage: "square.and.arrow.up")
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(palette.macroIceBlue)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 9)
-                                    .background(palette.elevatedSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        if !wallet.transactions.isEmpty {
+                            if let url = preparedTransactionsCSVURL {
+                                ShareLink(item: url) {
+                                    Label("Share CSV", systemImage: "square.and.arrow.up")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(palette.macroIceBlue)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 9)
+                                        .background(palette.elevatedSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                }
+                            } else {
+                                Button {
+                                    preparedTransactionsCSVURL = coordinator.exportDemoWalletTransactionsCSV()
+                                } label: {
+                                    Label("CSV", systemImage: "square.and.arrow.up")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(palette.macroIceBlue)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 9)
+                                        .background(palette.elevatedSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }

@@ -69,6 +69,7 @@ public struct CryptoOHLCVRouter: Sendable {
 
         var errors: [String] = []
         for (idx, venue) in order.enumerated() {
+            try Task.checkCancellation()
             do {
                 let result: OHLCVFetchResult
                 switch venue {
@@ -94,6 +95,10 @@ public struct CryptoOHLCVRouter: Sendable {
                     onLog?("WARN", "Fallback", "\(asset.symbol) \(timeframe.displayLabel): fell back to \(result.providerName)")
                 }
                 return result
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let urlErr as URLError where urlErr.code == .cancelled {
+                throw urlErr
             } catch {
                 let reason = "\(venue.shortLabel): \(error.localizedDescription)"
                 errors.append(reason)
@@ -142,6 +147,7 @@ public struct CryptoOHLCVRouter: Sendable {
                   let closeMs = asDouble(row[6])
             else { continue }
 
+            guard o > 0, h > 0, l > 0, c > 0, h >= l, v >= 0 else { continue }
             let openSec = openMs / 1000.0
             let closeSec = (closeMs + 1.0) / 1000.0
             let isClosed = closeSec <= nowSec
@@ -151,6 +157,10 @@ public struct CryptoOHLCVRouter: Sendable {
                 open: o, high: h, low: l, close: c,
                 volume: v, isClosed: isClosed
             ))
+        }
+        out.sort { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
+        guard !out.isEmpty else {
+            throw NetworkAdapterError.decodingFailed("Binance Vision returned 0 valid candles")
         }
         return OHLCVFetchResult(candles: out, providerName: "Binance Vision", latencyMs: res.latencyMs)
     }
@@ -196,6 +206,8 @@ public struct CryptoOHLCVRouter: Sendable {
                   let c = Double(row[4]),
                   let v = Double(row[5])
             else { continue }
+            guard tsMs.isFinite, o.isFinite, h.isFinite, l.isFinite, c.isFinite, v.isFinite,
+                  o > 0, h > 0, l > 0, c > 0, h >= l, v >= 0 else { continue }
             let confirmed = (row[8] == "1")
             let openSec = tsMs / 1000.0
             out.append(Candle(
@@ -204,6 +216,10 @@ public struct CryptoOHLCVRouter: Sendable {
                 open: o, high: h, low: l, close: c,
                 volume: v, isClosed: confirmed
             ))
+        }
+        out.sort { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
+        guard !out.isEmpty else {
+            throw NetworkAdapterError.decodingFailed("OKX returned 0 valid candles")
         }
         return OHLCVFetchResult(candles: out, providerName: "OKX", latencyMs: res.latencyMs)
     }
@@ -223,10 +239,14 @@ public struct CryptoOHLCVRouter: Sendable {
         guard let url = URL(string: urlStr) else { throw NetworkAdapterError.invalidURL(urlStr) }
 
         let res = try await http.send(URLRequest(url: url), maxRetries: 1)
-        guard let root = try JSONSerialization.jsonObject(with: res.data) as? [String: Any],
-              let resultObj = root["result"] as? [String: Any]
-        else {
+        guard let root = try JSONSerialization.jsonObject(with: res.data) as? [String: Any] else {
             throw NetworkAdapterError.decodingFailed("Kraken invalid payload")
+        }
+        if let errArr = root["error"] as? [String], !errArr.isEmpty {
+            throw NetworkAdapterError.decodingFailed("Kraken error: \(errArr.joined(separator: ", "))")
+        }
+        guard let resultObj = root["result"] as? [String: Any] else {
+            throw NetworkAdapterError.decodingFailed("Kraken missing result")
         }
 
         let nowSec = (res.serverDate ?? Date()).timeIntervalSince1970
@@ -241,6 +261,7 @@ public struct CryptoOHLCVRouter: Sendable {
                       let c = asDouble(row[4]),
                       let v = asDouble(row[6])
                 else { continue }
+                guard o > 0, h > 0, l > 0, c > 0, h >= l, v >= 0 else { continue }
                 let closeSec = openSec + timeframe.seconds
                 out.append(Candle(
                     openTimeEpochSeconds: openSec,
@@ -251,13 +272,18 @@ public struct CryptoOHLCVRouter: Sendable {
             }
             break
         }
+        out.sort { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
+        guard !out.isEmpty else {
+            throw NetworkAdapterError.decodingFailed("Kraken returned 0 valid candles")
+        }
         return OHLCVFetchResult(candles: out, providerName: "Kraken", latencyMs: res.latencyMs)
     }
 
     private func asDouble(_ any: Any) -> Double? {
-        if let d = any as? Double { return d }
+        if CFGetTypeID(any as AnyObject) == CFBooleanGetTypeID() { return nil }
+        if let d = any as? Double { return d.isFinite ? d : nil }
         if let i = any as? Int { return Double(i) }
-        if let s = any as? String { return Double(s) }
+        if let s = any as? String, let v = Double(s), v.isFinite { return v }
         return nil
     }
 }

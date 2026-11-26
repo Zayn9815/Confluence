@@ -118,7 +118,7 @@ public struct StrengthBucketStat: Codable, Sendable, Equatable, Identifiable {
 /// Breaks down win rates honestly by signal origin (Strong signals / Traps and filtered / News setups)
 /// and by raw score strength bucket, with exact Wilson 95% CI and sample size `n`.
 public enum WinRateBreakdown {
-    private struct BucketDef {
+    private struct BucketDef: Sendable {
         let id: String
         let label: String
         let lower: Double

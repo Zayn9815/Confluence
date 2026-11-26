@@ -66,6 +66,7 @@ public actor URLSessionHTTPClient: HTTPTransport {
         var lastError: Error = NetworkAdapterError.httpStatus(0, "No attempt executed")
 
         while attempt <= maxRetries {
+            try Task.checkCancellation()
             let start = Date()
             do {
                 let (data, response) = try await session.data(for: request)
@@ -85,14 +86,20 @@ public actor URLSessionHTTPClient: HTTPTransport {
                 }
 
                 if http.statusCode == 429 || http.statusCode == 503 {
-                    let retryAfter = lowerHeaders["retry-after"].flatMap(Double.init)
+                    let rawRetry = lowerHeaders["retry-after"].flatMap(Double.init)
+                    let retryAfter: Double? = (rawRetry != nil && rawRetry!.isFinite && rawRetry! >= 0) ? rawRetry : nil
                     if attempt < maxRetries {
-                        let backoff = min(retryAfter ?? pow(2.0, Double(attempt)), 8.0)
-                        try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                        let candidate = retryAfter ?? pow(2.0, Double(attempt))
+                        let backoff = min(max(candidate.isFinite ? candidate : 1.0, 0.1), 8.0)
+                        try await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
                         attempt += 1
                         continue
                     }
-                    throw NetworkAdapterError.rateLimited(retryAfterSeconds: retryAfter)
+                    if http.statusCode == 429 {
+                        throw NetworkAdapterError.rateLimited(retryAfterSeconds: retryAfter)
+                    }
+                    let snippet = String(data: data.prefix(160), encoding: .utf8) ?? ""
+                    throw NetworkAdapterError.httpStatus(http.statusCode, snippet)
                 }
 
                 if !(200...299).contains(http.statusCode) {
@@ -151,7 +158,8 @@ public actor ProviderRatePacer {
     private let providerKey: String
     private let maxPerMinute: Int
     private let maxPerUTCDay: Int?
-    private var minuteTimestamps: [Date] = []
+    private var minuteTimestamps: [ContinuousClock.Instant] = []
+    private let clock = ContinuousClock()
 
     public init(providerKey: String, maxPerMinute: Int, maxPerUTCDay: Int? = nil) {
         self.providerKey = providerKey
@@ -161,7 +169,9 @@ public actor ProviderRatePacer {
 
     public func acquireSlot() async throws {
         while true {
+            try Task.checkCancellation()
             let now = Date()
+            let monoNow = clock.now
             if let dailyLimit = maxPerUTCDay {
                 let count = currentDailyCount(for: now)
                 if count >= dailyLimit {
@@ -169,9 +179,11 @@ public actor ProviderRatePacer {
                 }
             }
 
-            minuteTimestamps.removeAll { now.timeIntervalSince($0) >= 60.0 }
+            minuteTimestamps.removeAll { (monoNow - $0) >= .seconds(60) }
             if minuteTimestamps.count >= maxPerMinute, let oldest = minuteTimestamps.first {
-                let waitSec = max(0.2, 60.5 - now.timeIntervalSince(oldest))
+                let elapsed = monoNow - oldest
+                let elapsedSec = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+                let waitSec = max(0.2, 60.5 - elapsedSec)
                 if waitSec > 10.0 {
                     throw NetworkAdapterError.rateLimited(retryAfterSeconds: waitSec)
                 }
@@ -179,7 +191,7 @@ public actor ProviderRatePacer {
                 continue
             }
 
-            minuteTimestamps.append(now)
+            minuteTimestamps.append(monoNow)
             if maxPerUTCDay != nil {
                 incrementDailyCount(for: now)
             }

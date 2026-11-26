@@ -92,6 +92,8 @@ public final class ChartSessionController {
 
     public private(set) var closedCandles: [Candle]
     public private(set) var formingCandle: Candle?
+    public private(set) var lastRolledOverCandle: Candle?
+    public private(set) var latestLiveTick: LiveTick?
     public private(set) var isLoadingInitial: Bool = false
     public private(set) var isLoadingOlder: Bool = false
     public private(set) var hasReachedHistoryEnd: Bool = false
@@ -138,6 +140,7 @@ public final class ChartSessionController {
             .sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
         closedCandles = sorted
         formingCandle = nil
+        lastRolledOverCandle = nil
         aggregator = LiveCandleAggregator(
             timeframe: timeframe,
             seed: sorted.last,
@@ -201,10 +204,13 @@ public final class ChartSessionController {
         let update = aggregator.ingest(tick)
         switch update {
         case .formingUpdated(let forming):
+            latestLiveTick = tick
             formingCandle = forming
             liveUpdateToken += 1
             return forming
         case .rolledOver(let closed, let nextForming):
+            latestLiveTick = tick
+            lastRolledOverCandle = closed
             if let last = closedCandles.last, closed.openTimeEpochSeconds > last.openTimeEpochSeconds {
                 closedCandles.append(closed)
                 if closedCandles.count > ChartPagingPolicy.maxLoadedBars {

@@ -8,19 +8,24 @@ public enum PositioningAnalyzer {
         candles: [Candle],
         upTo endIndex: Int? = nil
     ) -> PositioningAssessment {
-        let lastIdx = min(endIndex ?? (candles.count - 1), candles.count - 1)
+        let lastIdx: Int
+        if candles.isEmpty {
+            lastIdx = -1
+        } else {
+            lastIdx = max(0, min(endIndex ?? (candles.count - 1), candles.count - 1))
+        }
         let lookbackIdx = max(0, lastIdx - 6)
         let priceChangePct: Double
-        if lastIdx > lookbackIdx && candles[lookbackIdx].close > 0 {
+        if lastIdx > lookbackIdx && candles[lookbackIdx].close.isFinite && candles[lookbackIdx].close > 0 && candles[lastIdx].close.isFinite {
             priceChangePct = ((candles[lastIdx].close - candles[lookbackIdx].close) / candles[lookbackIdx].close) * 100.0
         } else {
             priceChangePct = 0.0
         }
 
         // Sort OI history ascending and filter causally to <= last candle close
-        let cutoff = candles.isEmpty ? snapshot.fetchedAtEpochSeconds : candles[lastIdx].closeTimeEpochSeconds
+        let cutoff = lastIdx >= 0 ? candles[lastIdx].closeTimeEpochSeconds : snapshot.fetchedAtEpochSeconds
         let causalOI = snapshot.openInterestHistory
-            .filter { $0.timestampEpochSeconds <= cutoff }
+            .filter { $0.timestampEpochSeconds <= cutoff && $0.openInterestUSD.isFinite && $0.openInterestUSD > 0 }
             .sorted { $0.timestampEpochSeconds < $1.timestampEpochSeconds }
 
         var oiChangePct: Double? = nil
@@ -28,7 +33,10 @@ public enum PositioningAnalyzer {
             let latest = causalOI.last!.openInterestUSD
             let earlier = causalOI[max(0, causalOI.count - 7)].openInterestUSD
             if earlier > 0 {
-                oiChangePct = ((latest - earlier) / earlier) * 100.0
+                let pct = ((latest - earlier) / earlier) * 100.0
+                if pct.isFinite {
+                    oiChangePct = pct
+                }
             }
         }
 
@@ -50,17 +58,28 @@ public enum PositioningAnalyzer {
             divergence = .neutral
         }
 
-        // Funding crowding percentile over causal history
+        // Funding crowding percentile over causal history (strict anti-lookahead in historical evals)
         let causalFundingPoints = snapshot.fundingHistory
             .filter { $0.fundingTimeEpochSeconds <= cutoff }
             .sorted { $0.fundingTimeEpochSeconds < $1.fundingTimeEpochSeconds }
-        let causalFunding = causalFundingPoints.map { $0.realizedRate ?? $0.fundingRate }
-        let isHistoricalEval = (endIndex != nil && lastIdx < candles.count - 1) || cutoff < snapshot.fetchedAtEpochSeconds
-        let currentFunding: Double = if isHistoricalEval, let latestCausal = causalFundingPoints.last {
-            latestCausal.realizedRate ?? latestCausal.fundingRate
-        } else {
-            snapshot.currentFundingRate
+        let causalFunding = causalFundingPoints.compactMap { pt -> Double? in
+            let rate = pt.realizedRate ?? pt.fundingRate
+            return rate.isFinite ? rate : nil
         }
+        let isHistoricalEval = (endIndex != nil && lastIdx < candles.count - 1) || cutoff < snapshot.fetchedAtEpochSeconds
+        let rawCurrentFunding: Double
+        if isHistoricalEval {
+            if let latestCausal = causalFundingPoints.last {
+                rawCurrentFunding = latestCausal.realizedRate ?? latestCausal.fundingRate
+            } else {
+                // Strictly prevent leaking future live funding rate into historical replay
+                rawCurrentFunding = 0.0
+            }
+        } else {
+            rawCurrentFunding = snapshot.currentFundingRate
+        }
+        let currentFunding = rawCurrentFunding.isFinite ? rawCurrentFunding : 0.0
+
         let fundingPercentile: Double?
         if causalFunding.count >= 10 {
             fundingPercentile = percentileRank(value: currentFunding, history: causalFunding)
@@ -136,8 +155,8 @@ public enum PositioningAnalyzer {
         guard let latest = causal.last else { return nil }
 
         let window = Array(causal.suffix(52))
-        let instValues = window.map(\.institutionalNetPercentOI)
-        let retailValues = window.map(\.nonReportableNetPercentOI)
+        let instValues = window.map(\.institutionalNetPercentOI).filter(\.isFinite)
+        let retailValues = window.map(\.nonReportableNetPercentOI).filter(\.isFinite)
 
         let instPct = percentileRank(value: latest.institutionalNetPercentOI, history: instValues)
         let retailPct = percentileRank(value: latest.nonReportableNetPercentOI, history: retailValues)
@@ -196,7 +215,7 @@ public enum PositioningAnalyzer {
     }
 
     private static func percentileRank(value: Double, history: [Double]) -> Double {
-        guard !history.isEmpty else { return 50.0 }
+        guard value.isFinite, !history.isEmpty else { return 50.0 }
         let below = history.filter { $0 < value }.count
         let equal = history.filter { $0 == value }.count
         return ((Double(below) + 0.5 * Double(equal)) / Double(history.count)) * 100.0

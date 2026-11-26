@@ -162,7 +162,7 @@ public enum SignalEngine {
         ).signal
     }
 
-    private struct DetailedSanitizedEvaluation {
+    private struct DetailedSanitizedEvaluation: Sendable {
         let signal: TradeSignal?
         let regime: RegimeAssessment
         let traps: [BehavioralTrap]
@@ -272,32 +272,61 @@ public enum SignalEngine {
         )
     }
 
+    private struct CompactReflexSnapshot: Encodable, Sendable {
+        let symbol: String
+        let market: String
+        let tf: String
+        let htf_bias: String
+        let category: String
+        let dir: String
+        let conf_pct: Int
+        let regime: String
+        let risk_state: String
+        let killzone: String
+        let aligned: [String]
+        let pro_dir: String
+        let retail_dir: String
+        let psych_badges: [String]
+        let rr: Double?
+        let sl_pct: Double?
+        let pre_news: String?
+        let post_news: String?
+    }
+
     /// Builds a compact (<400 token) causal JSON snapshot for the optional Gemini 4 Hydrogen judge.
     public static func buildCompactReflexPrompt(for signal: TradeSignal) -> String {
-        var dict: [String: Any] = [
-            "symbol": signal.symbol,
-            "market": signal.marketClass.rawValue,
-            "tf": signal.timeframe.rawValue,
-            "htf_bias": signal.htfBias.rawValue,
-            "category": signal.category.rawValue,
-            "dir": signal.direction.rawValue,
-            "conf_pct": Int(signal.confidencePercent.rounded()),
-            "regime": signal.regime.rawValue,
-            "risk_state": signal.riskState.rawValue,
-            "killzone": signal.killzone.rawValue,
-            "aligned": signal.alignedStrategies.map(\.name),
-            "pro_dir": signal.psychologyReport.proDirection.rawValue,
-            "retail_dir": signal.psychologyReport.retailCrowdDirection.rawValue,
-            "psych_badges": signal.psychologyReport.behavioralBadges
-        ]
-        if let lv = signal.levels {
-            dict["rr"] = Double(String(format: "%.2f", lv.riskRewardRatio)) ?? lv.riskRewardRatio
-            dict["sl_pct"] = Double(String(format: "%.2f", lv.riskPercent)) ?? lv.riskPercent
+        let safeConf = signal.confidencePercent.isFinite ? Int(min(100.0, max(0.0, signal.confidencePercent)).rounded()) : 0
+        let rrRounded: Double? = signal.levels.flatMap { lv in
+            guard lv.riskRewardRatio.isFinite else { return nil }
+            return (lv.riskRewardRatio * 100.0).rounded() / 100.0
         }
-        if let pre = signal.preNewsBadge { dict["pre_news"] = pre }
-        if let post = signal.postNewsCatalystBadge { dict["post_news"] = post }
-
-        if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+        let slRounded: Double? = signal.levels.flatMap { lv in
+            guard lv.riskPercent.isFinite else { return nil }
+            return (lv.riskPercent * 100.0).rounded() / 100.0
+        }
+        let snapshot = CompactReflexSnapshot(
+            symbol: signal.symbol,
+            market: signal.marketClass.rawValue,
+            tf: signal.timeframe.rawValue,
+            htf_bias: signal.htfBias.rawValue,
+            category: signal.category.rawValue,
+            dir: signal.direction.rawValue,
+            conf_pct: safeConf,
+            regime: signal.regime.rawValue,
+            risk_state: signal.riskState.rawValue,
+            killzone: signal.killzone.rawValue,
+            aligned: signal.alignedStrategies.map(\.name),
+            pro_dir: signal.psychologyReport.proDirection.rawValue,
+            retail_dir: signal.psychologyReport.retailCrowdDirection.rawValue,
+            psych_badges: signal.psychologyReport.behavioralBadges,
+            rr: rrRounded,
+            sl_pct: slRounded,
+            pre_news: signal.preNewsBadge,
+            post_news: signal.postNewsCatalystBadge
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if let data = try? encoder.encode(snapshot),
            let json = String(data: data, encoding: .utf8) {
             return json
         }

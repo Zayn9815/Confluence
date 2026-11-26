@@ -135,17 +135,17 @@ public actor GeminiJudgeClient: AIJudgeClient {
         """
 
         let schema: [String: Any] = [
-            "type": "OBJECT",
+            "type": "object",
             "required": ["regime", "direction", "setup_quality", "confidence", "risk_state", "agree", "catalyst_bias", "invalidation_check"],
             "properties": [
-                "regime": ["type": "STRING", "enum": ["trending", "mean_reverting", "high_vol", "crisis"]],
-                "direction": ["type": "STRING", "enum": ["long", "short", "neutral"]],
-                "setup_quality": ["type": "INTEGER"],
-                "confidence": ["type": "NUMBER"],
-                "risk_state": ["type": "STRING", "enum": ["safe", "near_limit", "reduce"]],
-                "agree": ["type": "BOOLEAN"],
-                "catalyst_bias": ["type": "STRING", "enum": ["bullish", "bearish", "neutral", "none"]],
-                "invalidation_check": ["type": "STRING"]
+                "regime": ["type": "string", "enum": ["trending", "mean_reverting", "high_vol", "crisis"]],
+                "direction": ["type": "string", "enum": ["long", "short", "neutral"]],
+                "setup_quality": ["type": "integer"],
+                "confidence": ["type": "number"],
+                "risk_state": ["type": "string", "enum": ["safe", "near_limit", "reduce"]],
+                "agree": ["type": "boolean"],
+                "catalyst_bias": ["type": "string", "enum": ["bullish", "bearish", "neutral", "none"]],
+                "invalidation_check": ["type": "string"]
             ]
         ]
 
@@ -171,6 +171,7 @@ public actor GeminiJudgeClient: AIJudgeClient {
             }
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
+            req.timeoutInterval = 15.0
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.setValue(cleanKey, forHTTPHeaderField: "x-goog-api-key")
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -190,7 +191,11 @@ public actor GeminiJudgeClient: AIJudgeClient {
         guard let jsonData = cleaned.data(using: .utf8) else {
             throw NetworkAdapterError.decodingFailed("Gemini returned non-UTF8 text")
         }
-        return try JSONDecoder().decode(ReflexJudgment.self, from: jsonData)
+        let judgment = try JSONDecoder().decode(ReflexJudgment.self, from: jsonData)
+        guard judgment.isSchemaValid() else {
+            throw NetworkAdapterError.decodingFailed("Gemini judgment failed bounds validation")
+        }
+        return judgment
     }
 
     public func summarizeBreakingImpact(
@@ -259,11 +264,15 @@ public actor GeminiJudgeClient: AIJudgeClient {
         else {
             throw NetworkAdapterError.decodingFailed("Gemini candidate content missing")
         }
+        var combined = ""
         for part in parts {
             if let isThought = part["thought"] as? Bool, isThought { continue }
             if let text = part["text"] as? String, !text.isEmpty {
-                return text
+                combined += text
             }
+        }
+        if !combined.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return combined
         }
         throw NetworkAdapterError.decodingFailed("Gemini text part empty")
     }

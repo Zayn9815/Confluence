@@ -4,23 +4,33 @@ import SignalEngine
 
 /// Mandatory secret scrubber applied before ANY diagnostic log is persisted or exported.
 public enum SecretRedactor {
-    private static let patterns: [(regex: String, replacement: String)] = [
-        (#"(?i)(apikey|api_key|token|key)\s*=\s*[^&\s"'`]+"#, "$1=[REDACTED]"),
-        (#"(?i)(x-goog-api-key|authorization)\s*:\s*[^\r\n,;"{}\[\]]+"#, "$1: [REDACTED]"),
-        (#"(?i)bearer\s+[A-Za-z0-9\-_\.=]+"#, "Bearer [REDACTED]"),
-        (#"AIza[0-9A-Za-z\-_]{20,}"#, "[REDACTED_GEMINI_KEY]"),
-        (#"sk-or-[A-Za-z0-9\-_]{16,}"#, "[REDACTED_OPENROUTER_KEY]"),
-        (#"sk-[A-Za-z0-9\-_]{16,}"#, "[REDACTED_API_KEY]"),
-        (#"\b[a-fA-F0-9]{32,64}\b"#, "[REDACTED_HEX_TOKEN]")
-    ]
+    private struct CompiledRule: @unchecked Sendable {
+        let regex: NSRegularExpression
+        let replacement: String
+    }
+
+    private static let compiledRules: [CompiledRule] = {
+        let rawPatterns: [(String, String)] = [
+            (#"(?i)(apikey|api_key|token|key)\s*=\s*[^&\s"'`]+"#, "$1=[REDACTED]"),
+            (#"(?i)(x-goog-api-key|authorization)\s*:\s*[^\r\n,;"{}\[\]]+"#, "$1: [REDACTED]"),
+            (#"(?i)bearer\s+[A-Za-z0-9\-_\.=]+"#, "Bearer [REDACTED]"),
+            (#"AIza[0-9A-Za-z\-_]{20,}"#, "[REDACTED_GEMINI_KEY]"),
+            (#"sk-or-[A-Za-z0-9\-_]{16,}"#, "[REDACTED_OPENROUTER_KEY]"),
+            (#"sk-[A-Za-z0-9\-_]{16,}"#, "[REDACTED_API_KEY]"),
+            (#"\b[a-fA-F0-9]{32,64}\b"#, "[REDACTED_HEX_TOKEN]")
+        ]
+        return rawPatterns.compactMap { pattern, replacement in
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+            return CompiledRule(regex: regex, replacement: replacement)
+        }
+    }()
 
     public static func redact(_ input: String) -> String {
+        guard !input.isEmpty else { return input }
         var result = input
-        for (pattern, replacement) in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
-                let range = NSRange(result.startIndex..<result.endIndex, in: result)
-                result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: replacement)
-            }
+        for rule in compiledRules {
+            let range = NSRange(result.startIndex..<result.endIndex, in: result)
+            result = rule.regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: rule.replacement)
         }
         return result
     }

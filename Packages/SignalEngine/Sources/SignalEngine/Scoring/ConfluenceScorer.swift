@@ -9,7 +9,8 @@ public enum ConfluenceScorer {
         direction: TradeDirection,
         barCloseEpochSeconds: TimeInterval
     ) -> String {
-        let bucket = Int(barCloseEpochSeconds / timeframe.seconds)
+        let safeClose = barCloseEpochSeconds.isFinite ? barCloseEpochSeconds : 0.0
+        let bucket = Int(floor(safeClose / max(timeframe.seconds, 1.0)))
         return "\(symbol)|\(timeframe.rawValue)|\(category.rawValue)|\(direction.rawValue)|\(bucket)"
     }
 
@@ -114,7 +115,7 @@ public enum ConfluenceScorer {
 
         // Positioning contribution (OKX Funding/OI or CFTC COT)
         if config.enabledStrategyGroups.contains(.behavioralTrap),
-           let pos = positioning,
+           let pos = effectivePositioning,
            pos.proDirection != .neutral {
             allContributions.append(
                 StrategyContribution(
@@ -319,6 +320,8 @@ public enum ConfluenceScorer {
         let finalDirection: TradeDirection
         let finalLevels: TradeLevels?
         let finalAligned: [StrategyContribution]
+        let finalBreakdown: SignalStrengthBreakdown
+        let finalConfidence: Double
         if category == .trapAlert, let td = trapDir, td.institutionalDirection != dominantDirection {
             finalDirection = td.institutionalDirection
             finalAligned = opposing
@@ -337,10 +340,28 @@ public enum ConfluenceScorer {
                 enableTP2Target: config.enableTP2Target,
                 timeframe: timeframe
             )
+            finalBreakdown = computeStrengthBreakdown(
+                aligned: opposing,
+                opposing: aligned,
+                dominantDirection: finalDirection,
+                htfBias: htfBias,
+                killzone: killzone,
+                regime: regimeAssessment.regime,
+                positioning: effectivePositioning,
+                macroAlignedDir: macroAlignedDir,
+                macroImpulse: macroImpulse,
+                newsCatalyst: newsCatalyst,
+                preNewsShield: preNewsShield,
+                freshTrap: freshTrap,
+                isMarketClosed: isMarketClosed
+            )
+            finalConfidence = finalBreakdown.finalConfidencePercent
         } else {
             finalDirection = dominantDirection
             finalLevels = levels
             finalAligned = aligned
+            finalBreakdown = breakdown
+            finalConfidence = confidence
         }
 
         let psychReport = PsychologyReportBuilder.build(
@@ -382,9 +403,40 @@ public enum ConfluenceScorer {
             ))
         }
 
+        var structureEvents: [StructureOverlayEvent] = []
+        for (idx, brk) in ict.structureBreaks.suffix(4).enumerated() {
+            guard brk.breakBarIndex >= 0, brk.breakBarIndex < candles.count else { continue }
+            let bar = candles[brk.breakBarIndex]
+            let kind: StructureOverlayEvent.Kind = (brk.kind == .bos) ? .bos : .choch
+            let dirTag = (brk.direction == .long) ? "Bull" : "Bear"
+            structureEvents.append(StructureOverlayEvent(
+                id: "struct-\(kind.rawValue)-\(brk.breakBarIndex)-\(idx)",
+                kind: kind,
+                direction: brk.direction,
+                price: brk.brokenLevel,
+                timestampEpochSeconds: bar.openTimeEpochSeconds,
+                label: "\(dirTag) \(kind.rawValue)"
+            ))
+        }
+        for (idx, sweep) in ict.liquiditySweeps.suffix(3).enumerated() {
+            guard sweep.sweepBarIndex >= 0, sweep.sweepBarIndex < candles.count else { continue }
+            let bar = candles[sweep.sweepBarIndex]
+            let dirTag = (sweep.reversalDirection == .long) ? "SSL" : "BSL"
+            structureEvents.append(StructureOverlayEvent(
+                id: "sweep-\(sweep.sweepBarIndex)-\(idx)",
+                kind: .liquiditySweep,
+                direction: sweep.reversalDirection,
+                price: sweep.sweptLevel,
+                timestampEpochSeconds: bar.openTimeEpochSeconds,
+                label: "\(dirTag) Sweep"
+            ))
+        }
+        structureEvents.sort { $0.timestampEpochSeconds < $1.timestampEpochSeconds }
+
         let overlays = ChartOverlayData(
             zones: zones,
-            traps: traps,
+            traps: effectiveTraps,
+            structureEvents: structureEvents,
             equilibriumPrice: ict.equilibriumPrice,
             ema20: momentum.ema20,
             ema50: momentum.ema50,
@@ -413,7 +465,7 @@ public enum ConfluenceScorer {
             direction: finalDirection,
             trapDirection: trapDir,
             tier: tier,
-            confidencePercent: confidence,
+            confidencePercent: finalConfidence,
             regime: regimeAssessment.regime,
             riskState: regimeAssessment.riskState,
             killzone: killzone,
@@ -433,12 +485,12 @@ public enum ConfluenceScorer {
             dataProvider: dataProvider,
             isMarketClosedSnapshot: isMarketClosed,
             marketClosedReason: marketClosedReason,
-            strengthBreakdown: breakdown,
+            strengthBreakdown: finalBreakdown,
             matchedStrategyIDs: StrategyID.resolveMatched(
                 alignedStrategies: finalAligned,
                 category: category,
                 trapDirection: trapDir,
-                traps: traps
+                traps: effectiveTraps
             )
         )
     }

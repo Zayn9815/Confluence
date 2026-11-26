@@ -102,7 +102,8 @@ public struct ConfidenceCalibrator: Codable, Sendable, Equatable {
         let tNeg = 1.0 / (nNeg + 2.0)
 
         let xs: [Double] = eligible.map { rec in
-            let score = rec.predictedProbability * 100.0
+            let prob = rec.predictedProbability.isFinite ? min(1.0, max(0.0, rec.predictedProbability)) : 0.5
+            let score = prob * 100.0
             return (score - 50.0) / 25.0
         }
         let ts: [Double] = eligible.map { rec in
@@ -169,7 +170,7 @@ public struct ConfidenceCalibrator: Codable, Sendable, Equatable {
     /// Maps a raw confluence score (`0...100`) to a calibrated win probability (`0.01...0.99`),
     /// or `nil` if fewer than `minimumSamples` (100) resolved filled trades have been observed.
     public func calibratedProbability(forRawScore rawScorePercent: Double) -> Double? {
-        guard isActive else { return nil }
+        guard isActive, rawScorePercent.isFinite else { return nil }
         let x = (rawScorePercent - 50.0) / 25.0
         let z = max(-30.0, min(30.0, slopeA * x + interceptB))
         let p = 1.0 / (1.0 + exp(-z))
