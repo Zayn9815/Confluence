@@ -220,7 +220,6 @@ public struct SignalsTabView: View {
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                                             .strokeBorder(isHighlighted ? palette.champagneGold : Color.clear, lineWidth: isHighlighted ? 2.0 : 0)
-                                            .animation(.easeInOut(duration: 0.35), value: isHighlighted)
                                     )
                                 }
                             }
@@ -582,4 +581,3 @@ private struct GlossarySheetQuery: Identifiable {
     let id = UUID()
     let query: String
 }
-

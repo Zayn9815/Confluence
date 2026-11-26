@@ -9,11 +9,17 @@ public actor EconomicCalendarService {
     private let ffCacheURL: URL
     private var lastFFFetchDate: Date?
     private var cachedFFEvents: [EconomicEvent] = []
+    private var didLoadFFCache: Bool = false
 
     public init(http: any HTTPTransport, cacheDirectory: URL? = nil) {
         self.http = http
         let dir = cacheDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         self.ffCacheURL = dir.appendingPathComponent("confluence_ff_calendar_cache.json")
+    }
+
+    private func ensureFFCacheLoaded() {
+        guard !didLoadFFCache else { return }
+        didLoadFFCache = true
         if let disk = Self.loadFFCache(from: self.ffCacheURL) {
             self.lastFFFetchDate = disk.fetchedAt
             self.cachedFFEvents = disk.events
@@ -121,7 +127,9 @@ public actor EconomicCalendarService {
     private var lastFFAttemptDate: Date? = nil
 
     public func fetchForexFactoryWithStrictCooldown() async -> [EconomicEvent] {
+        ensureFFCacheLoaded()
         let now = Date()
+        let previousAttempt = lastFFAttemptDate
         // Enforce strict >= 60-minute refresh cooldown (including after errors) to never trip FF's "Request Denied" HTML block
         if let lastAttempt = lastFFAttemptDate ?? lastFFFetchDate, now.timeIntervalSince(lastAttempt) < 3_600.0 {
             if let lastSuccess = lastFFFetchDate, now.timeIntervalSince(lastSuccess) <= 86_400.0 {
@@ -139,6 +147,12 @@ public actor EconomicCalendarService {
             self.lastFFFetchDate = now
             Self.saveFFCache(FFDiskCache(fetchedAt: now, events: parsed), to: ffCacheURL)
             return parsed
+        } catch is CancellationError {
+            self.lastFFAttemptDate = previousAttempt
+            return cachedFFEvents
+        } catch let urlErr as URLError where urlErr.code == .cancelled {
+            self.lastFFAttemptDate = previousAttempt
+            return cachedFFEvents
         } catch {
             // 24-hour offline disk cache fallback
             if let last = lastFFFetchDate, now.timeIntervalSince(last) <= 86_400.0 {
@@ -538,8 +552,18 @@ private final class SimpleRSSParser: NSObject, XMLParserDelegate {
     private func parseRSSDate(_ raw: String) -> TimeInterval? {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
-        return df.date(from: raw)?.timeIntervalSince1970
+        for fmt in [
+            "EEE, dd MMM yyyy HH:mm:ss Z",
+            "EEE, dd MMM yyyy HH:mm:ss zzz",
+            "yyyy-MM-dd'T'HH:mm:ssZ",
+            "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+        ] {
+            df.dateFormat = fmt
+            if let d = df.date(from: raw) {
+                return d.timeIntervalSince1970
+            }
+        }
+        return nil
     }
 }
 
