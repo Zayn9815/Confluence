@@ -39,26 +39,48 @@ public actor OKXPositioningAdapter {
         return snap
     }
 
+    private func makeOKXURL(path: String, queryItems: [URLQueryItem]) throws -> URL {
+        var comps = URLComponents()
+        comps.scheme = "https"
+        comps.host = "www.okx.com"
+        comps.path = path
+        comps.queryItems = queryItems
+        guard let url = comps.url else {
+            throw NetworkAdapterError.invalidURL("OKX \(path)")
+        }
+        return url
+    }
+
     private func fetchCurrentFunding(instId: String) async throws -> (rate: Double, nextTime: TimeInterval?) {
-        let url = URL(string: "https://www.okx.com/api/v5/public/funding-rate?instId=\(instId)")!
+        let url = try makeOKXURL(path: "/api/v5/public/funding-rate", queryItems: [
+            URLQueryItem(name: "instId", value: instId)
+        ])
         let res = try await http.send(URLRequest(url: url), maxRetries: 1)
         struct Resp: Decodable {
             struct Item: Decodable {
                 let fundingRate: String
                 let nextFundingTime: String?
             }
-            let data: [Item]
+            let code: String?
+            let msg: String?
+            let data: [Item]?
         }
         let decoded = try JSONDecoder().decode(Resp.self, from: res.data)
-        guard let item = decoded.data.first, let rate = Double(item.fundingRate) else {
+        if let code = decoded.code, code != "0" {
+            throw NetworkAdapterError.decodingFailed("OKX funding-rate code=\(code) \(decoded.msg ?? "")")
+        }
+        guard let item = decoded.data?.first, let rate = Double(item.fundingRate), rate.isFinite else {
             throw NetworkAdapterError.decodingFailed("OKX funding-rate empty")
         }
-        let nextSec = item.nextFundingTime.flatMap(Double.init).map { $0 / 1000.0 }
+        let nextSec = item.nextFundingTime.flatMap(Double.init).flatMap { $0.isFinite ? $0 / 1000.0 : nil }
         return (rate, nextSec)
     }
 
     private func fetchFundingHistory(instId: String) async throws -> [OKXFundingPoint] {
-        let url = URL(string: "https://www.okx.com/api/v5/public/funding-rate-history?instId=\(instId)&limit=100")!
+        let url = try makeOKXURL(path: "/api/v5/public/funding-rate-history", queryItems: [
+            URLQueryItem(name: "instId", value: instId),
+            URLQueryItem(name: "limit", value: "100")
+        ])
         let res = try await http.send(URLRequest(url: url), maxRetries: 1)
         struct Resp: Decodable {
             struct Item: Decodable {
@@ -66,44 +88,69 @@ public actor OKXPositioningAdapter {
                 let fundingRate: String
                 let realizedRate: String?
             }
-            let data: [Item]
+            let code: String?
+            let msg: String?
+            let data: [Item]?
         }
         let decoded = try JSONDecoder().decode(Resp.self, from: res.data)
-        return decoded.data.compactMap { item in
-            guard let ms = Double(item.fundingTime), let rate = Double(item.fundingRate) else { return nil }
+        if let code = decoded.code, code != "0" {
+            throw NetworkAdapterError.decodingFailed("OKX funding-rate-history code=\(code) \(decoded.msg ?? "")")
+        }
+        return (decoded.data ?? []).compactMap { item in
+            guard let ms = Double(item.fundingTime), ms.isFinite,
+                  let rate = Double(item.fundingRate), rate.isFinite
+            else { return nil }
+            let realized = item.realizedRate.flatMap(Double.init).flatMap { $0.isFinite ? $0 : nil }
             return OKXFundingPoint(
                 fundingTimeEpochSeconds: ms / 1000.0,
                 fundingRate: rate,
-                realizedRate: item.realizedRate.flatMap(Double.init)
+                realizedRate: realized
             )
         }.sorted { $0.fundingTimeEpochSeconds < $1.fundingTimeEpochSeconds }
     }
 
     private func fetchLiveOI(instId: String) async throws -> Double? {
-        let url = URL(string: "https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId=\(instId)")!
+        let url = try makeOKXURL(path: "/api/v5/public/open-interest", queryItems: [
+            URLQueryItem(name: "instType", value: "SWAP"),
+            URLQueryItem(name: "instId", value: instId)
+        ])
         let res = try await http.send(URLRequest(url: url), maxRetries: 1)
         struct Resp: Decodable {
             struct Item: Decodable { let oiUsd: String? }
-            let data: [Item]
+            let code: String?
+            let msg: String?
+            let data: [Item]?
         }
         let decoded = try JSONDecoder().decode(Resp.self, from: res.data)
-        return decoded.data.first?.oiUsd.flatMap(Double.init)
+        if let code = decoded.code, code != "0" {
+            throw NetworkAdapterError.decodingFailed("OKX open-interest code=\(code) \(decoded.msg ?? "")")
+        }
+        return decoded.data?.first?.oiUsd.flatMap(Double.init).flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
     }
 
     private func fetchOIHistory(instId: String, period: String) async throws -> [OKXOpenInterestPoint] {
         // Respect OKX 100 rows/call and 1,440 max history cap
-        let url = URL(string: "https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-history?instId=\(instId)&period=\(period)&limit=100")!
+        let url = try makeOKXURL(path: "/api/v5/rubik/stat/contracts/open-interest-history", queryItems: [
+            URLQueryItem(name: "instId", value: instId),
+            URLQueryItem(name: "period", value: period),
+            URLQueryItem(name: "limit", value: "100")
+        ])
         let res = try await http.send(URLRequest(url: url), maxRetries: 1)
         struct Resp: Decodable {
-            let data: [[String]]
+            let code: String?
+            let msg: String?
+            let data: [[String]]?
         }
         let decoded = try JSONDecoder().decode(Resp.self, from: res.data)
-        return decoded.data.prefix(1_440).compactMap { row in
+        if let code = decoded.code, code != "0" {
+            throw NetworkAdapterError.decodingFailed("OKX open-interest-history code=\(code) \(decoded.msg ?? "")")
+        }
+        return (decoded.data ?? []).prefix(1_440).compactMap { row in
             guard row.count >= 4,
-                  let ms = Double(row[0]),
-                  let oi = Double(row[1]),
-                  let oiCcy = Double(row[2]),
-                  let oiUsd = Double(row[3])
+                  let ms = Double(row[0]), ms.isFinite,
+                  let oi = Double(row[1]), oi.isFinite, oi >= 0,
+                  let oiCcy = Double(row[2]), oiCcy.isFinite, oiCcy >= 0,
+                  let oiUsd = Double(row[3]), oiUsd.isFinite, oiUsd >= 0
             else { return nil }
             return OKXOpenInterestPoint(
                 timestampEpochSeconds: ms / 1000.0,
@@ -124,11 +171,17 @@ public actor CFTCCOTAdapter {
     private let cacheURL: URL
     private var memoryCache: [String: [CFTCCOTRecord]] = [:]
     private var lastFetchedAt: Date?
+    private var didLoadDiskCache: Bool = false
 
     public init(http: any HTTPTransport, cacheDirectory: URL? = nil) {
         self.http = http
         let dir = cacheDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         self.cacheURL = dir.appendingPathComponent("confluence_cftc_cot_cache.json")
+    }
+
+    private func ensureDiskCacheLoaded() {
+        guard !didLoadDiskCache else { return }
+        didLoadDiskCache = true
         if let disk = Self.loadDiskCache(from: self.cacheURL) {
             self.memoryCache = disk.recordsByContract
             self.lastFetchedAt = disk.fetchedAt
@@ -136,6 +189,7 @@ public actor CFTCCOTAdapter {
     }
 
     public func records(for contractCode: String, dataset: CFTCDatasetKind, forceRefresh: Bool = false) async throws -> [CFTCCOTRecord] {
+        ensureDiskCacheLoaded()
         let shouldRefresh: Bool
         if forceRefresh || memoryCache[contractCode] == nil {
             shouldRefresh = true
@@ -159,11 +213,28 @@ public actor CFTCCOTAdapter {
         async let disaggTask = fetchBatch(dataset: .disaggregatedFuturesOnly, contractCodes: disaggCodes)
         async let tffTask = fetchBatch(dataset: .tradersInFinancialFutures, contractCodes: tffCodes)
 
+        ensureDiskCacheLoaded()
         var disagg: [CFTCCOTRecord] = []
         var tff: [CFTCCOTRecord] = []
         var firstError: Error? = nil
-        do { disagg = try await disaggTask } catch { firstError = error }
-        do { tff = try await tffTask } catch { if firstError == nil { firstError = error } }
+        do {
+            disagg = try await disaggTask
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let urlErr as URLError where urlErr.code == .cancelled {
+            throw urlErr
+        } catch {
+            firstError = error
+        }
+        do {
+            tff = try await tffTask
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let urlErr as URLError where urlErr.code == .cancelled {
+            throw urlErr
+        } catch {
+            if firstError == nil { firstError = error }
+        }
 
         if disagg.isEmpty && tff.isEmpty {
             if let firstError { throw firstError }
@@ -217,9 +288,9 @@ public actor CFTCCOTAdapter {
             else { continue }
 
             let name = (row["market_and_exchange_names"] as? String) ?? code
-            let oi = flexibleDouble(row["open_interest_all"]) ?? 0
-            let nonReptLong = flexibleDouble(row["nonrept_positions_long_all"]) ?? 0
-            let nonReptShort = flexibleDouble(row["nonrept_positions_short_all"]) ?? 0
+            guard let oi = flexibleDouble(row["open_interest_all"]), oi.isFinite, oi > 0 else { continue }
+            let nonReptLong = max(0.0, flexibleDouble(row["nonrept_positions_long_all"]) ?? 0)
+            let nonReptShort = max(0.0, flexibleDouble(row["nonrept_positions_short_all"]) ?? 0)
 
             let instLong: Double
             let instShort: Double
@@ -257,9 +328,15 @@ public actor CFTCCOTAdapter {
     }
 
     private static func flexibleDouble(_ any: Any?) -> Double? {
-        if let d = any as? Double { return d }
+        guard let any else { return nil }
+        if CFGetTypeID(any as AnyObject) == CFBooleanGetTypeID() { return nil }
+        if let d = any as? Double { return d.isFinite ? d : nil }
         if let i = any as? Int { return Double(i) }
-        if let s = any as? String { return Double(s.trimmingCharacters(in: .whitespaces)) }
+        if let s = any as? String {
+            let cleaned = s.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "")
+            guard let v = Double(cleaned), v.isFinite else { return nil }
+            return v
+        }
         return nil
     }
 
