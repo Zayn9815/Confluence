@@ -130,14 +130,20 @@ public struct PriceZoneOverlay: Codable, Sendable, Equatable, Hashable, Identifi
 public struct ChartOverlayData: Codable, Sendable, Equatable, Hashable {
     public let zones: [PriceZoneOverlay]
     public let traps: [BehavioralTrap]
+    public let structureEvents: [StructureOverlayEvent]
     public let equilibriumPrice: Double?
     public let ema20: Double?
     public let ema50: Double?
     public let ema200: Double?
 
+    enum CodingKeys: String, CodingKey {
+        case zones, traps, structureEvents, equilibriumPrice, ema20, ema50, ema200
+    }
+
     public init(
         zones: [PriceZoneOverlay] = [],
         traps: [BehavioralTrap] = [],
+        structureEvents: [StructureOverlayEvent] = [],
         equilibriumPrice: Double? = nil,
         ema20: Double? = nil,
         ema50: Double? = nil,
@@ -145,10 +151,22 @@ public struct ChartOverlayData: Codable, Sendable, Equatable, Hashable {
     ) {
         self.zones = zones
         self.traps = traps
+        self.structureEvents = structureEvents
         self.equilibriumPrice = equilibriumPrice
         self.ema20 = ema20
         self.ema50 = ema50
         self.ema200 = ema200
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.zones = try c.decodeIfPresent([PriceZoneOverlay].self, forKey: .zones) ?? []
+        self.traps = try c.decodeIfPresent([BehavioralTrap].self, forKey: .traps) ?? []
+        self.structureEvents = try c.decodeIfPresent([StructureOverlayEvent].self, forKey: .structureEvents) ?? []
+        self.equilibriumPrice = try c.decodeIfPresent(Double.self, forKey: .equilibriumPrice)
+        self.ema20 = try c.decodeIfPresent(Double.self, forKey: .ema20)
+        self.ema50 = try c.decodeIfPresent(Double.self, forKey: .ema50)
+        self.ema200 = try c.decodeIfPresent(Double.self, forKey: .ema200)
     }
 }
 
@@ -193,9 +211,18 @@ public struct ReflexJudgment: Codable, Sendable, Equatable, Hashable {
         self.invalidationCheck = invalidationCheck
     }
 
+    /// Returns a sanitized judgment or `nil` when LLM output violates numeric/schema bounds.
+    public func isSchemaValid() -> Bool {
+        guard confidence.isFinite, (0.0...1.0).contains(confidence) else { return false }
+        guard (0...3).contains(setupQuality) else { return false }
+        guard !invalidationCheck.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return true
+    }
+
     /// Hard confirmation rule enforced purely in deterministic Swift code.
     public func isConfirmedByCodeRule(minimumConfidence: Double = 0.80) -> Bool {
-        agree && setupQuality >= 2 && confidence >= minimumConfidence && riskState == .safe
+        guard isSchemaValid(), minimumConfidence.isFinite else { return false }
+        return agree && setupQuality >= 2 && confidence >= minimumConfidence && riskState == .safe
     }
 }
 

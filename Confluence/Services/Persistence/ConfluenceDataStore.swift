@@ -78,8 +78,15 @@ public final class ConfluenceDataStore {
         do {
             self.container = try ModelContainer(for: schema, configurations: [config])
         } catch {
-            if !inMemory {
-                // Quarantine corrupted SQLite trio (.store, -wal, -shm) and recreate a clean persistent store
+            let nsErr = error as NSError
+            let isLikelySchemaOrCorruption =
+                nsErr.domain == NSCocoaErrorDomain && (nsErr.code == 134100 || nsErr.code == 134110 || nsErr.code == 134130 || nsErr.code == 134140 || nsErr.code == 259)
+                || nsErr.localizedDescription.lowercased().contains("corrupt")
+                || nsErr.localizedDescription.lowercased().contains("migration")
+                || nsErr.localizedDescription.lowercased().contains("incompatible")
+
+            if !inMemory && (isLikelySchemaOrCorruption || customStoreURL != nil) {
+                // Quarantine corrupted/incompatible SQLite trio (.store, -wal, -shm) and recreate a clean store
                 Self.quarantineStoreFiles(at: config.url)
                 self.didQuarantineCorruptStore = true
                 if let recovered = try? ModelContainer(for: schema, configurations: [config]) {
@@ -89,15 +96,20 @@ public final class ConfluenceDataStore {
                     self.container = try! ModelContainer(for: schema, configurations: [fallback])
                 }
             } else {
+                // Transient lock/file-protection error: use safe in-memory fallback without wiping on-disk data
                 let fallback = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
                 self.container = try! ModelContainer(for: schema, configurations: [fallback])
             }
         }
         self.context = ModelContext(container)
-        backfillPersistedOutcomesIfNeeded()
+        backfillPersistedOutcomesIfNeeded(isCustomOrMemory: inMemory || customStoreURL != nil)
     }
 
-    private func backfillPersistedOutcomesIfNeeded() {
+    private func backfillPersistedOutcomesIfNeeded(isCustomOrMemory: Bool) {
+        let flagKey = "com.bilal.confluence.didBackfillOutcomes.v15"
+        if !isCustomOrMemory && UserDefaults.standard.bool(forKey: flagKey) {
+            return
+        }
         guard let legacyRows = try? context.fetch(FetchDescriptor<PersistedSignalRecord>()) else { return }
         let existingOutcomeIDs: Set<String> = Set(
             ((try? context.fetch(FetchDescriptor<PersistedOutcomeRecord>())) ?? []).map(\.signalId)
@@ -114,6 +126,9 @@ public final class ConfluenceDataStore {
         }
         if insertedAny {
             try? context.save()
+        }
+        if !isCustomOrMemory {
+            UserDefaults.standard.set(true, forKey: flagKey)
         }
     }
 
@@ -821,23 +836,31 @@ public final class ConfluenceDataStore {
         let positions = ((try? context.fetch(posDesc)) ?? []).compactMap { $0.toPosition() }
         let transactions = ((try? context.fetch(txDesc)) ?? []).map { $0.toTransaction() }
 
+        let reconciledReserved = positions
+            .filter { $0.status.isActive && $0.marginReservedUSD.isFinite && $0.marginReservedUSD >= 0 }
+            .reduce(0.0) { $0 + $1.marginReservedUSD }
+
         guard let w = walletRow else {
             return DemoWallet(
                 startingBalanceUSD: DemoWallet.defaultStartingBalanceUSD,
                 cashBalanceUSD: DemoWallet.defaultStartingBalanceUSD,
-                reservedMarginUSD: 0,
+                reservedMarginUSD: reconciledReserved,
                 realizedPnLUSD: 0,
                 totalFeesPaidUSD: 0,
                 positions: positions,
                 transactions: transactions
             )
         }
+        let safeStart = (w.startingBalanceUSD.isFinite && w.startingBalanceUSD > 0) ? w.startingBalanceUSD : DemoWallet.defaultStartingBalanceUSD
+        let safeCash = (w.cashBalanceUSD.isFinite && w.cashBalanceUSD >= 0) ? w.cashBalanceUSD : safeStart
+        let safeRealized = w.realizedPnLUSD.isFinite ? w.realizedPnLUSD : 0
+        let safeFees = (w.totalFeesPaidUSD.isFinite && w.totalFeesPaidUSD >= 0) ? w.totalFeesPaidUSD : 0
         return DemoWallet(
-            startingBalanceUSD: w.startingBalanceUSD,
-            cashBalanceUSD: w.cashBalanceUSD,
-            reservedMarginUSD: w.reservedMarginUSD,
-            realizedPnLUSD: w.realizedPnLUSD,
-            totalFeesPaidUSD: w.totalFeesPaidUSD,
+            startingBalanceUSD: safeStart,
+            cashBalanceUSD: safeCash,
+            reservedMarginUSD: reconciledReserved,
+            realizedPnLUSD: safeRealized,
+            totalFeesPaidUSD: safeFees,
             positions: positions,
             transactions: transactions
         )
@@ -898,9 +921,12 @@ public final class ConfluenceDataStore {
             }
         }
 
-        // Append missing transactions (capped at latest 500)
-        let existingTxs = (try? context.fetch(FetchDescriptor<DemoWalletTransactionRecord>())) ?? []
+        // Append missing transactions and prune table to latest 500 rows
+        let existingTxs = (try? context.fetch(FetchDescriptor<DemoWalletTransactionRecord>(
+            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
+        ))) ?? []
         let existingTxIds = Set(existingTxs.map(\.id))
+        var insertedCount = 0
         for tx in wallet.transactions.suffix(500) where !existingTxIds.contains(tx.id) {
             context.insert(DemoWalletTransactionRecord(
                 id: tx.id,
@@ -912,6 +938,15 @@ public final class ConfluenceDataStore {
                 balanceAfterUSD: tx.balanceAfterUSD,
                 note: tx.note
             ))
+            insertedCount += 1
+        }
+        if existingTxs.count + insertedCount > 500 {
+            let keepExisting = max(0, 500 - insertedCount)
+            if existingTxs.count > keepExisting {
+                for stale in existingTxs.dropFirst(keepExisting) {
+                    context.delete(stale)
+                }
+            }
         }
 
         try? context.save()
