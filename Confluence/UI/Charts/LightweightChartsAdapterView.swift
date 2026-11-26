@@ -57,7 +57,7 @@ public struct LightweightChartsAdapterView: UIViewRepresentable {
     }
 
     @MainActor
-    public final class Coordinator: NSObject, TimeScaleDelegate {
+    public final class Coordinator: NSObject, TimeScaleDelegate, ChartDelegate {
         var series: CandlestickSeries?
         var markersPlugin: SeriesMarkersPlugin<CandlestickSeries>?
         var priceLines: [PriceLine] = []
@@ -72,7 +72,6 @@ public struct LightweightChartsAdapterView: UIViewRepresentable {
         var lastRolledOverEpoch: TimeInterval?
         var onNeedOlderHistory: (() -> Void)?
         var onCrosshairChange: ((ChartCrosshairReadout?) -> Void)?
-        var crosshairTask: Task<Void, Never>?
 
         public func didVisibleTimeRangeChange(onTimeScale timeScale: TimeScaleApi, parameters: TimeRange?) {}
 
@@ -84,6 +83,33 @@ public struct LightweightChartsAdapterView: UIViewRepresentable {
         }
 
         public func didReceiveTimeScaleSizeChangeWithParameters(onTimeScale timeScale: TimeScaleApi, parameters: LWCChartRectangle?) {}
+
+        public func didClick(onChart chart: ChartApi, parameters: MouseEventParams) {}
+
+        public func didDoubleClick(onChart chart: ChartApi, parameters: MouseEventParams) {}
+
+        public func didCrosshairMove(onChart chart: ChartApi, parameters: MouseEventParams) {
+            guard let activeSeries = series else { return }
+            if let barData = parameters.data(forSeries: activeSeries),
+               let o = barData.open, let h = barData.high, let l = barData.low, let c = barData.close,
+               o.isFinite, h.isFinite, l.isFinite, c.isFinite {
+                let epoch: TimeInterval?
+                if case .utc(let ts) = parameters.time {
+                    epoch = ts
+                } else {
+                    epoch = nil
+                }
+                onCrosshairChange?(ChartCrosshairReadout(
+                    epochSeconds: epoch,
+                    open: o,
+                    high: h,
+                    low: l,
+                    close: c
+                ))
+            } else {
+                onCrosshairChange?(nil)
+            }
+        }
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -118,32 +144,9 @@ public struct LightweightChartsAdapterView: UIViewRepresentable {
         timeScale.delegate = coord
         timeScale.subscribeVisibleLogicalRangeChange()
 
-        // Wire native LightweightCharts v5.2 crosshair stream (auto-manages subscribeCrosshairMove)
-        let stream = chartView.crosshairMoveEvents
-        coord.crosshairTask = Task { @MainActor [weak coord] in
-            for await params in stream {
-                guard !Task.isCancelled, let coord, let activeSeries = coord.series else { break }
-                if let barData = params.data(forSeries: activeSeries),
-                   let o = barData.open, let h = barData.high, let l = barData.low, let c = barData.close,
-                   o.isFinite, h.isFinite, l.isFinite, c.isFinite {
-                    let epoch: TimeInterval?
-                    if case .utc(let ts) = params.time {
-                        epoch = ts
-                    } else {
-                        epoch = nil
-                    }
-                    coord.onCrosshairChange?(ChartCrosshairReadout(
-                        epochSeconds: epoch,
-                        open: o,
-                        high: h,
-                        low: l,
-                        close: c
-                    ))
-                } else {
-                    coord.onCrosshairChange?(nil)
-                }
-            }
-        }
+        // Wire native LightweightCharts v5.2 ChartDelegate + subscribeCrosshairMove
+        chartView.delegate = coord
+        chartView.subscribeCrosshairMove()
 
         applyFullData(to: chartView, coordinator: coord, shouldFit: true)
         applyOverlays(to: chartView, coordinator: coord)
@@ -206,10 +209,10 @@ public struct LightweightChartsAdapterView: UIViewRepresentable {
     }
 
     public static func dismantleUIView(_ uiView: LightweightCharts, coordinator: Coordinator) {
-        coordinator.crosshairTask?.cancel()
-        coordinator.crosshairTask = nil
         coordinator.onNeedOlderHistory = nil
         coordinator.onCrosshairChange = nil
+        uiView.unsubscribeCrosshairMove()
+        uiView.delegate = nil
         uiView.timeScale().delegate = nil
     }
 
