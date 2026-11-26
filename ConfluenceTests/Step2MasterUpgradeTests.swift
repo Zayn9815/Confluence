@@ -36,10 +36,14 @@ final class Step2MasterUpgradeTests: XCTestCase {
     }
 
     func testCryptoOrderFlowAdapterEnforcesHardNonCryptoGateWithZeroNetworkCalls() async {
-        final class FailingHTTP: HTTPTransport, @unchecked Sendable {
-            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        struct FailingHTTP: HTTPTransport {
+            func send(_ request: URLRequest, maxRetries: Int) async throws -> HTTPResponseData {
                 XCTFail("Network request must NEVER be issued for non-crypto markets")
                 throw URLError(.cancelled)
+            }
+
+            func estimatedClockSkewSeconds() async -> TimeInterval {
+                0
             }
         }
 
