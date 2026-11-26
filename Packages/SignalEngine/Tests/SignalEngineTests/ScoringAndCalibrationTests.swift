@@ -889,8 +889,9 @@ final class ScoringAndCalibrationTests: XCTestCase {
         // Headline Win Rate MUST count both behind-entry losses!
         let summary = PassiveOutcomeEvaluator.summarize(records: [shortFillBarLoss, longFillBarLoss, shortWinOut], filter: .headlineFixed)
         XCTAssertEqual(summary.resolvedSignals, 3)
-        XCTAssertEqual(summary.wins, 1)
-        XCTAssertEqual(summary.losses, 2)
+        XCTAssertEqual(summary.tp1Hits, 1)
+        XCTAssertEqual(summary.slHits, 2)
+        XCTAssertEqual(summary.winRate, 1.0 / 3.0, accuracy: 1e-6)
     }
 
     func testWilsonIntervalConfidenceCalibratorAndHeadlineLegacyExclusion() throws {
