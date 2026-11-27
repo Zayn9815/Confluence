@@ -14,7 +14,7 @@ final class V16AuditCoverageTests: XCTestCase {
             beginnerPsychology: "Clean trend.",
             proPsychology: "Institutional demand held.",
             behavioralBadges: [],
-            evidence: ["BOS confirmed"]
+            evidence: []
         )
         let validJudgment = ReflexJudgment(
             regime: "trending",
