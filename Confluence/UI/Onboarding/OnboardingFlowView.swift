@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 /// 4-page first-run onboarding flow with mandatory Risk Disclosure acknowledgement.
 public struct OnboardingFlowView: View {
@@ -76,9 +77,9 @@ public struct OnboardingFlowView: View {
 
                     Button {
                         Task {
-                            let granted = await PreNewsNotificationScheduler.shared.requestAuthorizationIfNeeded()
+                            let status = await PreNewsNotificationScheduler.shared.requestAuthorizationIfNeeded()
                             notificationsRequested = true
-                            notificationsGranted = granted
+                            notificationsGranted = (status == .authorized || status == .provisional || status == .ephemeral)
                         }
                     } label: {
                         HStack(spacing: 8) {
