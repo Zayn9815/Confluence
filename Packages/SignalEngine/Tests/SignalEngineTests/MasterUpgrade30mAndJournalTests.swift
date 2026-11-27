@@ -346,13 +346,13 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
         XCTAssertTrue(ofDelta.isLowConfidence)
     }
 
-    func testSignalJournalLimitFillWhenPriceBehindEntryAndSLCountsAsLoss() {
+    func testSignalJournalStrictEntryZoneOnlyFillAndPreFillExpiry() {
         let barOpen: TimeInterval = 1_760_000_400
         let created: TimeInterval = barOpen + 1_800
 
         // SHORT setup: Entry 71.30..71.36 (mid 71.33), SL 71.51, TP1 70.90, TP2 70.50
         let shortSig = makeSignal(
-            id: "sig-short-limit",
+            id: "sig-short-strict",
             symbol: "USO/USD",
             marketClass: .stocks,
             timeframe: .h1,
@@ -366,55 +366,50 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
             tp2: 70.50
         )
 
-        // 1. SHORT created when live price is HIGHER than entry (71.41, between entry 71.36 and SL 71.51)
-        //    -> fills immediately at actual live price 71.41 (.live, 0.00R)
-        guard var shortBehind = SignalJournalEngine.createEntry(
+        // 1. SHORT created when live price is BEHIND entry (71.41, between entry 71.36 and SL 71.51)
+        //    -> MUST stay .pending (no auto-fill!), and hitting SL without touching entry -> .expired (NOT .loss)
+        guard let shortBehindPending = SignalJournalEngine.createEntry(
             from: shortSig,
             section: .weakAndFiltered,
             currentPrice: 71.41,
             now: created
         ) else {
-            return XCTFail("Expected immediate live short entry when price is behind entry")
+            return XCTFail("Expected pending short entry when price is behind entry")
         }
-        XCTAssertEqual(shortBehind.status, .live)
-        XCTAssertEqual(shortBehind.fillPrice ?? 0, 71.41, accuracy: 1e-9)
-        XCTAssertEqual(shortBehind.anchorEntryPrice, 71.41, accuracy: 1e-9)
-        XCTAssertEqual(shortBehind.liveRMultiple, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(shortBehindPending.status, .pending)
+        XCTAssertNil(shortBehindPending.fillPrice)
+        XCTAssertNil(shortBehindPending.filledAt)
 
-        // Halfway to SL (71.46): riskDistance = |71.41 - 71.51| = 0.10 -> exactly -0.50R
-        shortBehind = SignalJournalEngine.evaluateLiveTick(entry: shortBehind, livePrice: 71.46, now: created + 120)
-        XCTAssertEqual(shortBehind.status, .live)
-        XCTAssertEqual(shortBehind.liveRMultiple, -0.50, accuracy: 1e-6)
+        let shortMissedSL = SignalJournalEngine.evaluateLiveTick(entry: shortBehindPending, livePrice: 71.51, now: created + 240)
+        XCTAssertEqual(shortMissedSL.status, .expired)
+        XCTAssertTrue(shortMissedSL.status.isExcludedFromWinRate)
+        XCTAssertNil(shortMissedSL.realizedR)
 
-        // Reaching SL (71.51) MUST count as .loss (-1.0R net of stocks defaultRoundTripCostBps)
-        let shortBehindCostR = (MarketClass.stocks.defaultRoundTripCostBps / 100.0) / ((0.10 / 71.41) * 100.0)
-        shortBehind = SignalJournalEngine.evaluateLiveTick(entry: shortBehind, livePrice: 71.51, now: created + 240)
-        XCTAssertEqual(shortBehind.status, .loss)
-        XCTAssertEqual(shortBehind.realizedR ?? 0, -1.0 - shortBehindCostR, accuracy: 1e-6)
-        XCTAssertTrue(shortBehind.status.isCountedLoss)
-
-        // 2. SHORT filled behind entry at 71.41 -> hits TP1 (70.90) -> exact R anchored to 71.41 (5.10R)
-        //    and breakeven pullback triggers at actual fill (71.41), NOT prematurely at planned entryMid (71.33)
-        guard var shortWin = SignalJournalEngine.createEntry(
+        // 2. SHORT created AHEAD of entry (71.15, toward TP1) also stays .pending;
+        //    only fills into .live when price reaches [71.30, 71.36], after which hitting SL counts as .loss (with d241fd5 fee deduction)
+        guard var shortAhead = SignalJournalEngine.createEntry(
             from: shortSig,
             section: .strongSignals,
-            currentPrice: 71.41,
+            currentPrice: 71.15,
             now: created
         ) else {
-            return XCTFail("Expected live short entry")
+            return XCTFail("Expected pending short entry")
         }
-        shortWin = SignalJournalEngine.evaluateLiveTick(entry: shortWin, livePrice: 70.90, now: created + 600)
-        XCTAssertEqual(shortWin.status, .winTrackingTP2)
-        XCTAssertEqual(shortWin.realizedR ?? 0, 5.10 - shortBehindCostR, accuracy: 1e-6)
-        shortWin = SignalJournalEngine.evaluateLiveTick(entry: shortWin, livePrice: 71.35, now: created + 900)
-        XCTAssertEqual(shortWin.status, .winTrackingTP2, "Pullback above entryMid 71.33 but below actual fill 71.41 must keep runner open")
-        shortWin = SignalJournalEngine.evaluateLiveTick(entry: shortWin, livePrice: 71.41, now: created + 1_200)
-        XCTAssertEqual(shortWin.status, .winTP1)
+        XCTAssertEqual(shortAhead.status, .pending)
 
-        // 3. LONG created when live price is LOWER than entry (99.0, between SL 98.0 and entry 99.8)
-        //    -> fills immediately at 99.0 (.live, 0.00R) and counts as .loss if SL 98.0 is hit
+        shortAhead = SignalJournalEngine.evaluateLiveTick(entry: shortAhead, livePrice: 71.33, now: created + 300)
+        XCTAssertEqual(shortAhead.status, .live)
+        XCTAssertEqual(shortAhead.fillPrice ?? 0, 71.33, accuracy: 1e-9)
+
+        let shortMidCostR = (MarketClass.stocks.defaultRoundTripCostBps / 100.0) / ((0.18 / 71.33) * 100.0)
+        shortAhead = SignalJournalEngine.evaluateLiveTick(entry: shortAhead, livePrice: 71.51, now: created + 600)
+        XCTAssertEqual(shortAhead.status, .loss)
+        XCTAssertEqual(shortAhead.realizedR ?? 0, -1.0 - shortMidCostR, accuracy: 1e-6)
+
+        // 3. LONG created BEHIND entry (99.0, between SL 98.0 and entry 99.8) OR AHEAD (101.0)
+        //    -> stays .pending; hitting SL without touching [99.8, 100.2] -> .expired; touching entry -> .live -> SL -> .loss
         let longSig = makeSignal(
-            id: "sig-long-limit",
+            id: "sig-long-strict",
             barOpen: barOpen,
             entryLow: 99.8,
             entryHigh: 100.2,
@@ -423,141 +418,64 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
             tp1: 104.0,
             tp2: 107.0
         )
-        guard var longBehind = SignalJournalEngine.createEntry(
+        guard let longBehind = SignalJournalEngine.createEntry(
             from: longSig,
             section: .strongSignals,
             currentPrice: 99.0,
             now: created
         ) else {
-            return XCTFail("Expected immediate live long entry when price is behind entry")
+            return XCTFail("Expected pending long entry when price is behind entry")
         }
-        XCTAssertEqual(longBehind.status, .live)
-        XCTAssertEqual(longBehind.fillPrice ?? 0, 99.0, accuracy: 1e-9)
-        XCTAssertEqual(longBehind.liveRMultiple, 0.0, accuracy: 1e-9)
-        let longBehindCostR = (MarketClass.crypto.defaultRoundTripCostBps / 100.0) / ((1.0 / 99.0) * 100.0)
-        longBehind = SignalJournalEngine.evaluateLiveTick(entry: longBehind, livePrice: 98.0, now: created + 300)
-        XCTAssertEqual(longBehind.status, .loss)
-        XCTAssertEqual(longBehind.realizedR ?? 0, -1.0 - longBehindCostR, accuracy: 1e-6)
+        XCTAssertEqual(longBehind.status, .pending)
+        XCTAssertNil(longBehind.fillPrice)
+        let longBehindSL = SignalJournalEngine.evaluateLiveTick(entry: longBehind, livePrice: 98.0, now: created + 300)
+        XCTAssertEqual(longBehindSL.status, .expired)
+        XCTAssertTrue(longBehindSL.status.isExcludedFromWinRate)
 
-        // 4. SHORT .pending (price ahead of entry toward TP1 at 71.15):
-        //    - Stays .pending while below entry (71.25)
-        //    - Expires if TP1 (70.85) hit without pulling back
-        //    - Fills at actual live price (71.41) if tick jumps behind entry
-        //    - Counts as .loss (NEVER .expired) if tick jumps straight past SL (71.55)
-        guard let shortPendingBase = SignalJournalEngine.createEntry(
-            from: shortSig,
-            section: .strongSignals,
-            currentPrice: 71.15,
-            now: created
-        ) else {
-            return XCTFail("Expected pending short entry")
-        }
-        XCTAssertEqual(shortPendingBase.status, .pending)
-
-        let stillPending = SignalJournalEngine.evaluateLiveTick(entry: shortPendingBase, livePrice: 71.25, now: created + 60)
-        XCTAssertEqual(stillPending.status, .pending)
-
-        let missedShortTP1 = SignalJournalEngine.evaluateLiveTick(entry: shortPendingBase, livePrice: 70.85, now: created + 120)
-        XCTAssertEqual(missedShortTP1.status, .expired)
-
-        let filledBehindTick = SignalJournalEngine.evaluateLiveTick(entry: shortPendingBase, livePrice: 71.41, now: created + 120)
-        XCTAssertEqual(filledBehindTick.status, .live)
-        XCTAssertEqual(filledBehindTick.fillPrice ?? 0, 71.41, accuracy: 1e-9)
-        XCTAssertEqual(filledBehindTick.liveRMultiple, 0.0, accuracy: 1e-9)
-
-        let shortMidCostR = (MarketClass.stocks.defaultRoundTripCostBps / 100.0) / ((0.18 / 71.33) * 100.0)
-        let gappedPastSLTick = SignalJournalEngine.evaluateLiveTick(entry: shortPendingBase, livePrice: 71.55, now: created + 120)
-        XCTAssertEqual(gappedPastSLTick.status, .loss, "Jumping from pending past SL must fill and count as .loss, not .expired")
-        XCTAssertEqual(gappedPastSLTick.realizedR ?? 0, -1.0 - shortMidCostR, accuracy: 1e-6)
-
-        // 5. LONG .pending (price ahead at 101.0) dropping straight behind entry (99.0) or past SL (97.5)
-        guard let longPendingBase = SignalJournalEngine.createEntry(
+        guard let longAhead = SignalJournalEngine.createEntry(
             from: longSig,
             section: .strongSignals,
             currentPrice: 101.0,
             now: created
         ) else {
-            return XCTFail("Expected pending long entry")
+            return XCTFail("Expected pending long entry when price is ahead of entry")
         }
-        XCTAssertEqual(longPendingBase.status, .pending)
-        let longBehindFill = SignalJournalEngine.evaluateLiveTick(entry: longPendingBase, livePrice: 99.0, now: created + 120)
-        XCTAssertEqual(longBehindFill.status, .live)
-        XCTAssertEqual(longBehindFill.fillPrice ?? 0, 99.0, accuracy: 1e-9)
-        let longGappedSL = SignalJournalEngine.evaluateLiveTick(entry: longPendingBase, livePrice: 97.5, now: created + 120)
-        XCTAssertEqual(longGappedSL.status, .loss)
+        XCTAssertEqual(longAhead.status, .pending)
+        let longCrossedToSL = SignalJournalEngine.evaluateLiveTick(entry: longAhead, livePrice: 97.5, now: created + 300)
+        XCTAssertEqual(longCrossedToSL.status, .loss, "Tick crossing through entry zone to SL must fill and count as .loss")
 
-        // 6. Closed-candle reconcile: SHORT bar entirely above entryZoneHigh (71.36) fills at bar.open (71.41)
-        //    and counts as .loss if SL is hit on that bar or the next bar
-        let behindBarClean = makeBar(openTime: barOpen + 3_600, step: 3_600, open: 71.41, high: 71.46, low: 71.38, close: 71.40)
-        let slNextBar = makeBar(openTime: barOpen + 7_200, step: 3_600, open: 71.40, high: 71.55, low: 71.39, close: 71.52)
-        let reconciledLive = SignalJournalEngine.reconcile(
-            entry: shortPendingBase,
-            againstClosedCandles: [behindBarClean],
+        // 4. Closed-candle reconcile: bar strictly behind entry (SHORT bar low 71.38 > entryHigh 71.36)
+        //    MUST NOT fill; if it hits SL without touching entry zone -> .expired (not .loss)
+        let behindBarNoTouch = makeBar(openTime: barOpen + 3_600, step: 3_600, open: 71.41, high: 71.46, low: 71.38, close: 71.40)
+        let stillPendingBar = SignalJournalEngine.reconcile(
+            entry: shortBehindPending,
+            againstClosedCandles: [behindBarNoTouch],
             livePrice: nil,
             now: barOpen + 7_200
         )
-        XCTAssertEqual(reconciledLive.status, .live)
-        XCTAssertEqual(reconciledLive.fillPrice ?? 0, 71.41, accuracy: 1e-9)
-        XCTAssertEqual(reconciledLive.liveRMultiple, 0.10, accuracy: 1e-6)
+        XCTAssertEqual(stillPendingBar.status, .pending)
+        XCTAssertNil(stillPendingBar.fillPrice)
 
-        let reconciledLossAfterBehindFill = SignalJournalEngine.reconcile(
-            entry: shortPendingBase,
-            againstClosedCandles: [behindBarClean, slNextBar],
+        let behindBarHitsSL = makeBar(openTime: barOpen + 3_600, step: 3_600, open: 71.41, high: 71.55, low: 71.38, close: 71.52)
+        let expiredSLBar = SignalJournalEngine.reconcile(
+            entry: shortBehindPending,
+            againstClosedCandles: [behindBarHitsSL],
+            livePrice: nil,
+            now: barOpen + 7_200
+        )
+        XCTAssertEqual(expiredSLBar.status, .expired)
+
+        // Bar intersecting [71.30, 71.36] fills into .live, after which SL counts as .loss
+        let entryTouchBar = makeBar(openTime: barOpen + 3_600, step: 3_600, open: 71.40, high: 71.42, low: 71.34, close: 71.35)
+        let slAfterTouchBar = makeBar(openTime: barOpen + 7_200, step: 3_600, open: 71.35, high: 71.55, low: 71.34, close: 71.52)
+        let filledThenLoss = SignalJournalEngine.reconcile(
+            entry: shortBehindPending,
+            againstClosedCandles: [entryTouchBar, slAfterTouchBar],
             livePrice: nil,
             now: barOpen + 10_800
         )
-        XCTAssertEqual(reconciledLossAfterBehindFill.status, .loss)
-        XCTAssertEqual(reconciledLossAfterBehindFill.realizedR ?? 0, -1.0 - shortBehindCostR, accuracy: 1e-6)
-
-        let behindBarImmediateSL = makeBar(openTime: barOpen + 3_600, step: 3_600, open: 71.41, high: 71.55, low: 71.38, close: 71.52)
-        let reconciledImmediateSL = SignalJournalEngine.reconcile(
-            entry: shortPendingBase,
-            againstClosedCandles: [behindBarImmediateSL],
-            livePrice: nil,
-            now: barOpen + 7_200
-        )
-        XCTAssertEqual(reconciledImmediateSL.status, .loss, "Bar completely behind entry hitting SL must count as .loss")
-
-        // 7. Pre-existing persisted .pending entry whose stored currentPrice is already behind entry
-        //    heals immediately to .live on reconcile even when livePrice is nil
-        let legacyPersistedPending = TrackedJournalTrade(
-            id: "legacy-pending-short",
-            symbol: "USO/USD",
-            assetClass: .stocks,
-            timeframe: .h1,
-            direction: .short,
-            section: .weakAndFiltered,
-            status: .pending,
-            score: 52.0,
-            signalBarTimestamp: barOpen,
-            entryZoneLow: 71.30,
-            entryZoneHigh: 71.36,
-            entryPrice: 71.33,
-            fillPrice: nil,
-            stopLoss: 71.51,
-            target1: 70.90,
-            target2: 70.50,
-            currentPrice: 71.41,
-            createdAt: created
-        )
-        let healed = SignalJournalEngine.reconcile(
-            entry: legacyPersistedPending,
-            againstClosedCandles: [],
-            livePrice: nil,
-            now: created + 300
-        )
-        XCTAssertEqual(healed.status, .live)
-        XCTAssertEqual(healed.fillPrice ?? 0, 71.41, accuracy: 1e-9)
-
-        // 8. Creation when live price is already at/beyond SL resolves conservatively as .loss
-        let alreadyBreached = SignalJournalEngine.createEntry(
-            from: shortSig,
-            section: .strongSignals,
-            currentPrice: 71.60,
-            now: created
-        )
-        XCTAssertEqual(alreadyBreached?.status, .loss)
-        XCTAssertEqual(alreadyBreached?.realizedR ?? 0, -1.0 - shortMidCostR, accuracy: 1e-6)
+        XCTAssertEqual(filledThenLoss.status, .loss)
+        XCTAssertEqual(filledThenLoss.realizedR ?? 0, -1.0 - shortMidCostR, accuracy: 1e-6)
     }
 
     // MARK: - 3. OrderFlowNarrativeBuilder Plain-English Verdict, Wall Map & REST Honesty

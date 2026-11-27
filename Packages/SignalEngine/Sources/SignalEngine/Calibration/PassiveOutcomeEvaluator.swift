@@ -571,14 +571,10 @@ public enum PassiveOutcomeEvaluator {
     }
 
     /// Passively evaluates a historical signal strictly against SUBSEQUENT closed candles using
-    /// standard causal limit-order fill semantics:
-    /// 1. Signal starts `.pending` until a subsequent closed bar trades at or behind the entry limit
-    ///    (LONG Buy Limit: `bar.low <= entryHigh`; SHORT Sell Limit: `bar.high >= entryLow`).
-    ///    If the fill bar opens strictly behind the entry zone (better price before SL), returns/R
-    ///    are anchored to that actual fill open price.
-    /// 2. Before fill (bars staying strictly on the TP1 side of entry): if a bar touches TP1 without
-    ///    pulling back to fill, signal is `.invalidated`. If `fillWindowBars` pass without filling,
-    ///    signal expires as `.notFilled`.
+    /// the causal entry-zone-only fill lifecycle:
+    /// 1. Signal starts `.pending` until a subsequent closed bar intersects `[entryLow, entryHigh]`.
+    /// 2. Before fill: if a bar closes beyond SL OR touches TP1 without filling, signal is `.invalidated`.
+    ///    If `fillWindowBars` pass without touching entry zone, signal expires as `.notFilled`.
     /// 3. **Fill-Bar Rule (Pessimistic):** On the fill bar itself, check SL ONLY (TP checks start on the NEXT bar).
     /// 4. **Same-Bar Rule (Pessimistic):** On any subsequent bar after fill, if both SL and TP are touched
     ///    within the same bar, resolve pessimistically as SL first (unless TP1 was already hit on a prior bar).
@@ -644,16 +640,8 @@ public enum PassiveOutcomeEvaluator {
             )
         }
 
-        let orderedLow = min(lv.entryLow, lv.entryHigh)
-        let orderedHigh = max(lv.entryLow, lv.entryHigh)
         let costPct = (roundTripCostBps ?? signal.marketClass.defaultRoundTripCostBps) / 100.0
-
-        var effectiveRiskPct = lv.riskPercent
-        var effectiveReward1Pct = lv.reward1Percent
-        var effectiveReward2Pct = lv.reward2Percent
-        var effectiveRR1 = lv.riskRewardRatio
-        var effectiveRR2 = lv.tp2RiskRewardRatio
-        var effectiveCostR = costPct / max(lv.riskPercent, 0.01)
+        let costR = costPct / max(lv.riskPercent, 0.01)
 
         let futureBars = Array(
             subsequentClosedCandles
@@ -663,7 +651,7 @@ public enum PassiveOutcomeEvaluator {
         )
 
         var isFilled = false
-        var fillAnchorPrice: Double = lv.entryMid
+        let fillAnchorPrice: Double = lv.entryMid
         var filledAt: TimeInterval? = nil
         var barsWithoutFill = 0
         var hitTP1 = false
@@ -671,53 +659,22 @@ public enum PassiveOutcomeEvaluator {
 
         for bar in futureBars {
             if !isFilled {
-                // Standard limit-order fill: Buy Limit fills when bar trades at/below entryHigh;
-                // Sell Limit fills when bar trades at/above entryLow (including behind entry toward/through SL).
-                let limitFilled = (signal.direction == .long)
-                    ? (bar.low <= orderedHigh)
-                    : (bar.high >= orderedLow)
-
-                if limitFilled {
+                let touchedEntry = (bar.low <= lv.entryHigh && bar.high >= lv.entryLow)
+                if touchedEntry {
                     isFilled = true
                     filledAt = bar.closeTimeEpochSeconds
-
-                    // If the bar opened strictly behind the entry zone (better price, strictly before SL),
-                    // anchor realized risk/reward metrics to that actual fill open price.
-                    let openedStrictlyBehindEntry: Bool = (signal.direction == .long)
-                        ? (bar.open.isFinite && bar.open < orderedLow && bar.open > lv.stopLoss)
-                        : (bar.open.isFinite && bar.open > orderedHigh && bar.open < lv.stopLoss)
-                    if openedStrictlyBehindEntry {
-                        let fillAnchor = bar.open
-                        fillAnchorPrice = fillAnchor
-                        let denom = max(fillAnchor, Double.leastNormalMagnitude)
-                        let riskDist = abs(fillAnchor - lv.stopLoss)
-                        if riskDist.isFinite && riskDist > denom * 1e-9 {
-                            let r1Dist = (signal.direction == .long)
-                                ? max(0, lv.tp1 - fillAnchor)
-                                : max(0, fillAnchor - lv.tp1)
-                            let r2Dist = (signal.direction == .long)
-                                ? max(0, lv.tp2 - fillAnchor)
-                                : max(0, fillAnchor - lv.tp2)
-                            effectiveRiskPct = (riskDist / denom) * 100.0
-                            effectiveReward1Pct = (r1Dist / denom) * 100.0
-                            effectiveReward2Pct = (r2Dist / denom) * 100.0
-                            effectiveRR1 = r1Dist / riskDist
-                            effectiveRR2 = r2Dist / riskDist
-                            effectiveCostR = costPct / max(effectiveRiskPct, 0.01)
-                        }
-                    }
 
                     // Fill-Bar Rule: check SL ONLY on the fill bar (pessimistic). TP checks start on the NEXT bar.
                     let slHitOnFillBar = (signal.direction == .long)
                         ? (bar.low <= lv.stopLoss)
                         : (bar.high >= lv.stopLoss)
                     if slHitOnFillBar {
-                        let netPct = -(effectiveRiskPct + costPct)
+                        let netPct = -(lv.riskPercent + costPct)
                         return makeRecord(
                             status: .hitSL,
                             lifecycle: .resolved,
                             netReturnPercent: netPct,
-                            rMultiple: -1.0 - effectiveCostR,
+                            rMultiple: -1.0 - costR,
                             filledAt: filledAt,
                             resolvedAt: bar.closeTimeEpochSeconds
                         )
@@ -725,12 +682,15 @@ public enum PassiveOutcomeEvaluator {
                     continue
                 }
 
-                // Pre-fill invalidation on TP side: bar reaches TP1 without ever pulling back to fill
+                // Pre-fill invalidation: bar closes beyond SL OR reaches TP1 without ever touching entry zone
+                let closedBeyondSL = (signal.direction == .long)
+                    ? (bar.close <= lv.stopLoss)
+                    : (bar.close >= lv.stopLoss)
                 let reachedTP1BeforeFill = (signal.direction == .long)
                     ? (bar.high >= lv.tp1)
                     : (bar.low <= lv.tp1)
 
-                if reachedTP1BeforeFill {
+                if closedBeyondSL || reachedTP1BeforeFill {
                     return makeRecord(
                         status: .invalidated,
                         lifecycle: .invalidated,
@@ -759,46 +719,46 @@ public enum PassiveOutcomeEvaluator {
             if signal.direction == .long {
                 let beFloor = max(fillAnchorPrice, lv.stopLoss)
                 if hitTP1 && bar.low <= beFloor {
-                    let netPct = effectiveReward1Pct - costPct
+                    let netPct = lv.reward1Percent - costPct
                     return makeRecord(
                         status: .hitTP1,
                         lifecycle: .resolved,
                         netReturnPercent: netPct,
-                        rMultiple: effectiveRR1 - effectiveCostR,
+                        rMultiple: lv.riskRewardRatio - costR,
                         filledAt: filledAt,
                         resolvedAt: tp1Time
                     )
                 }
                 if bar.low <= lv.stopLoss {
-                    let netPct = -(effectiveRiskPct + costPct)
+                    let netPct = -(lv.riskPercent + costPct)
                     return makeRecord(
                         status: .hitSL,
                         lifecycle: .resolved,
                         netReturnPercent: netPct,
-                        rMultiple: -1.0 - effectiveCostR,
+                        rMultiple: -1.0 - costR,
                         filledAt: filledAt,
                         resolvedAt: bar.closeTimeEpochSeconds
                     )
                 }
                 if lv.isTP2Enabled && bar.high >= lv.tp2 {
-                    let netPct = effectiveReward2Pct - costPct
+                    let netPct = lv.reward2Percent - costPct
                     return makeRecord(
                         status: .hitTP2,
                         lifecycle: .resolved,
                         netReturnPercent: netPct,
-                        rMultiple: effectiveRR2 - effectiveCostR,
+                        rMultiple: lv.tp2RiskRewardRatio - costR,
                         filledAt: filledAt,
                         resolvedAt: bar.closeTimeEpochSeconds
                     )
                 }
                 if !hitTP1 && bar.high >= lv.tp1 {
                     if !lv.isTP2Enabled {
-                        let netPct = effectiveReward1Pct - costPct
+                        let netPct = lv.reward1Percent - costPct
                         return makeRecord(
                             status: .hitTP1,
                             lifecycle: .resolved,
                             netReturnPercent: netPct,
-                            rMultiple: effectiveRR1 - effectiveCostR,
+                            rMultiple: lv.riskRewardRatio - costR,
                             filledAt: filledAt,
                             resolvedAt: bar.closeTimeEpochSeconds
                         )
@@ -809,46 +769,46 @@ public enum PassiveOutcomeEvaluator {
             } else {
                 let beCeiling = min(fillAnchorPrice, lv.stopLoss)
                 if hitTP1 && bar.high >= beCeiling {
-                    let netPct = effectiveReward1Pct - costPct
+                    let netPct = lv.reward1Percent - costPct
                     return makeRecord(
                         status: .hitTP1,
                         lifecycle: .resolved,
                         netReturnPercent: netPct,
-                        rMultiple: effectiveRR1 - effectiveCostR,
+                        rMultiple: lv.riskRewardRatio - costR,
                         filledAt: filledAt,
                         resolvedAt: tp1Time
                     )
                 }
                 if bar.high >= lv.stopLoss {
-                    let netPct = -(effectiveRiskPct + costPct)
+                    let netPct = -(lv.riskPercent + costPct)
                     return makeRecord(
                         status: .hitSL,
                         lifecycle: .resolved,
                         netReturnPercent: netPct,
-                        rMultiple: -1.0 - effectiveCostR,
+                        rMultiple: -1.0 - costR,
                         filledAt: filledAt,
                         resolvedAt: bar.closeTimeEpochSeconds
                     )
                 }
                 if lv.isTP2Enabled && bar.low <= lv.tp2 {
-                    let netPct = effectiveReward2Pct - costPct
+                    let netPct = lv.reward2Percent - costPct
                     return makeRecord(
                         status: .hitTP2,
                         lifecycle: .resolved,
                         netReturnPercent: netPct,
-                        rMultiple: effectiveRR2 - effectiveCostR,
+                        rMultiple: lv.tp2RiskRewardRatio - costR,
                         filledAt: filledAt,
                         resolvedAt: bar.closeTimeEpochSeconds
                     )
                 }
                 if !hitTP1 && bar.low <= lv.tp1 {
                     if !lv.isTP2Enabled {
-                        let netPct = effectiveReward1Pct - costPct
+                        let netPct = lv.reward1Percent - costPct
                         return makeRecord(
                             status: .hitTP1,
                             lifecycle: .resolved,
                             netReturnPercent: netPct,
-                            rMultiple: effectiveRR1 - effectiveCostR,
+                            rMultiple: lv.riskRewardRatio - costR,
                             filledAt: filledAt,
                             resolvedAt: bar.closeTimeEpochSeconds
                         )
@@ -862,12 +822,12 @@ public enum PassiveOutcomeEvaluator {
         if isFilled {
             if futureBars.count >= maxLookforwardBars {
                 if hitTP1 {
-                    let netPct = effectiveReward1Pct - costPct
+                    let netPct = lv.reward1Percent - costPct
                     return makeRecord(
                         status: .hitTP1,
                         lifecycle: .resolved,
                         netReturnPercent: netPct,
-                        rMultiple: effectiveRR1 - effectiveCostR,
+                        rMultiple: lv.riskRewardRatio - costR,
                         filledAt: filledAt,
                         resolvedAt: tp1Time
                     )

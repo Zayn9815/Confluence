@@ -787,7 +787,7 @@ final class ScoringAndCalibrationTests: XCTestCase {
         XCTAssertEqual(summary.winRate, 0.0, accuracy: 1e-9)
     }
 
-    func testPassiveOutcomeLimitFillBehindEntryAndSLCountsAsLoss() {
+    func testPassiveOutcomeStrictEntryZoneOnlyFillAndPreFillInvalidation() {
         let base: TimeInterval = 1_760_000_000
         let psychShort = PsychologyReport(
             signalCategory: .strongSignal, proDirection: .short, retailCrowdDirection: .long,
@@ -805,7 +805,7 @@ final class ScoringAndCalibrationTests: XCTestCase {
             isTP2Enabled: false
         )
         let shortSig = TradeSignal(
-            id: "sig-short-behind", fingerprint: "sig-short-behind", symbol: "USO/USD", displayName: "Oil",
+            id: "sig-short-strict", fingerprint: "sig-short-strict", symbol: "USO/USD", displayName: "Oil",
             marketClass: .stocks, timeframe: .h1, htfTimeframe: .h4,
             category: .strongSignal, direction: .short, tier: .highConviction,
             confidencePercent: 78.0, regime: .trending, riskState: .safe,
@@ -815,43 +815,26 @@ final class ScoringAndCalibrationTests: XCTestCase {
             psychologyReport: psychShort, dataProvider: "Fixture"
         )
 
-        // 1. SHORT bar completely above entryHigh (71.36) between entry and SL -> MUST fill immediately (.open)
+        // 1. SHORT bar completely above entryHigh (71.36) -> MUST stay .pending (no fill behind entry)
         let shortBehindBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 71.41, high: 71.46, low: 71.38, close: 71.40, volume: 100)
-        let shortOpenOut = PassiveOutcomeEvaluator.evaluate(signal: shortSig, subsequentClosedCandles: [shortBehindBar], roundTripCostBps: 0)
-        XCTAssertEqual(shortOpenOut.status, .open)
-        XCTAssertEqual(shortOpenOut.lifecycleStatus, .open)
-        XCTAssertEqual(shortOpenOut.filledAtEpochSeconds, base + 3600)
+        let shortPendingOut = PassiveOutcomeEvaluator.evaluate(signal: shortSig, subsequentClosedCandles: [shortBehindBar], roundTripCostBps: 0)
+        XCTAssertEqual(shortPendingOut.status, .pending)
+        XCTAssertNil(shortPendingOut.filledAtEpochSeconds)
 
-        // Next bar hits SL -> counted .hitSL loss!
-        let shortSLBar = Candle(openTimeEpochSeconds: base + 3600, closeTimeEpochSeconds: base + 7200, open: 71.40, high: 71.55, low: 71.39, close: 71.52, volume: 100)
-        let shortLossOut = PassiveOutcomeEvaluator.evaluate(signal: shortSig, subsequentClosedCandles: [shortBehindBar, shortSLBar], roundTripCostBps: 0)
-        XCTAssertEqual(shortLossOut.status, .hitSL)
-        XCTAssertEqual(shortLossOut.rMultiple, -1.0, accuracy: 1e-6)
-
-        // Single bar behind entry hitting SL on the fill bar -> MUST be .hitSL (NEVER .invalidated!)
+        // Closing beyond SL without touching entry zone -> .invalidated (excluded from Win Rate)
         let shortBehindSLBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 71.41, high: 71.55, low: 71.38, close: 71.52, volume: 100)
-        let shortFillBarLoss = PassiveOutcomeEvaluator.evaluate(signal: shortSig, subsequentClosedCandles: [shortBehindSLBar], roundTripCostBps: 0)
-        XCTAssertEqual(shortFillBarLoss.status, .hitSL)
-        XCTAssertEqual(shortFillBarLoss.lifecycleStatus, .resolved)
+        let shortInvOut = PassiveOutcomeEvaluator.evaluate(signal: shortSig, subsequentClosedCandles: [shortBehindSLBar], roundTripCostBps: 0)
+        XCTAssertEqual(shortInvOut.status, .invalidated)
+        XCTAssertEqual(shortInvOut.lifecycleStatus, .invalidated)
 
-        // Filled behind entry at bar.open = 71.41 -> next bar hits TP1 (70.90) -> exact R anchored to 71.41 (5.10R)
-        let shortTP1Bar = Candle(openTimeEpochSeconds: base + 3600, closeTimeEpochSeconds: base + 7200, open: 71.40, high: 71.42, low: 70.85, close: 70.90, volume: 100)
-        let shortWinOut = PassiveOutcomeEvaluator.evaluate(signal: shortSig, subsequentClosedCandles: [shortBehindBar, shortTP1Bar], roundTripCostBps: 0)
+        // 2. SHORT bar intersecting [71.30, 71.36] fills into .open, then TP1 hits on next bar -> .hitTP1 with planned entryMid R
+        let shortTouchBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 71.40, high: 71.42, low: 71.34, close: 71.35, volume: 100)
+        let shortTP1Bar = Candle(openTimeEpochSeconds: base + 3600, closeTimeEpochSeconds: base + 7200, open: 71.35, high: 71.36, low: 70.85, close: 70.90, volume: 100)
+        let shortWinOut = PassiveOutcomeEvaluator.evaluate(signal: shortSig, subsequentClosedCandles: [shortTouchBar, shortTP1Bar], roundTripCostBps: 0)
         XCTAssertEqual(shortWinOut.status, .hitTP1)
-        XCTAssertEqual(shortWinOut.rMultiple, (71.41 - 70.90) / (71.51 - 71.41), accuracy: 1e-6)
+        XCTAssertEqual(shortWinOut.rMultiple, shortLevels.riskRewardRatio, accuracy: 1e-6)
 
-        // 2. SHORT bars staying strictly on TP1 side (below entryLow 71.30):
-        //    - Hitting TP1 without pullback -> .invalidated
-        //    - Timing out without pulling back -> .notFilled
-        let shortRunawayTP1 = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 71.20, high: 71.25, low: 70.85, close: 70.90, volume: 100)
-        XCTAssertEqual(PassiveOutcomeEvaluator.evaluate(signal: shortSig, subsequentClosedCandles: [shortRunawayTP1]).status, .invalidated)
-
-        let shortMissBars = (0..<2).map { i in
-            Candle(openTimeEpochSeconds: base + Double(i) * 3600, closeTimeEpochSeconds: base + Double(i + 1) * 3600, open: 71.20, high: 71.25, low: 71.10, close: 71.15, volume: 100)
-        }
-        XCTAssertEqual(PassiveOutcomeEvaluator.evaluate(signal: shortSig, subsequentClosedCandles: shortMissBars, fillWindowBars: 2).status, .notFilled)
-
-        // 3. LONG bar completely below entryLow (99.8) between SL (98.0) and entry -> fills immediately & counts SL as .hitSL
+        // 3. LONG bar completely below entryLow (99.8) -> MUST stay .pending; closing beyond SL -> .invalidated
         let longLevels = TradeLevels(
             entryLow: 99.8, entryHigh: 100.2, entryMid: 100.0,
             stopLoss: 98.0, tp1: 104.0, tp2: 107.0,
@@ -864,7 +847,7 @@ final class ScoringAndCalibrationTests: XCTestCase {
             behavioralBadges: [], evidence: []
         )
         let longSig = TradeSignal(
-            id: "sig-long-behind", fingerprint: "sig-long-behind", symbol: "BTC/USDT", displayName: "Bitcoin",
+            id: "sig-long-strict", fingerprint: "sig-long-strict", symbol: "BTC/USDT", displayName: "Bitcoin",
             marketClass: .crypto, timeframe: .h1, htfTimeframe: .h4,
             category: .strongSignal, direction: .long, tier: .highConviction,
             confidencePercent: 80.0, regime: .trending, riskState: .safe,
@@ -874,20 +857,26 @@ final class ScoringAndCalibrationTests: XCTestCase {
             psychologyReport: psychLong, dataProvider: "Fixture"
         )
         let longBehindBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 99.2, high: 99.5, low: 98.8, close: 99.4, volume: 100)
-        let longOpenOut = PassiveOutcomeEvaluator.evaluate(signal: longSig, subsequentClosedCandles: [longBehindBar], roundTripCostBps: 0)
-        XCTAssertEqual(longOpenOut.status, .open)
-        XCTAssertEqual(longOpenOut.filledAtEpochSeconds, base + 3600)
+        let longPendingOut = PassiveOutcomeEvaluator.evaluate(signal: longSig, subsequentClosedCandles: [longBehindBar], roundTripCostBps: 0)
+        XCTAssertEqual(longPendingOut.status, .pending)
 
         let longBehindSLBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 99.0, high: 99.2, low: 97.5, close: 97.8, volume: 100)
-        let longFillBarLoss = PassiveOutcomeEvaluator.evaluate(signal: longSig, subsequentClosedCandles: [longBehindSLBar], roundTripCostBps: 0)
-        XCTAssertEqual(longFillBarLoss.status, .hitSL)
+        let longInvOut = PassiveOutcomeEvaluator.evaluate(signal: longSig, subsequentClosedCandles: [longBehindSLBar], roundTripCostBps: 0)
+        XCTAssertEqual(longInvOut.status, .invalidated)
 
-        // Headline Win Rate MUST count both behind-entry losses!
-        let summary = PassiveOutcomeEvaluator.summarize(records: [shortFillBarLoss, longFillBarLoss, shortWinOut], filter: .headlineFixed)
-        XCTAssertEqual(summary.resolvedSignals, 3)
+        // Touching [99.8, 100.2] then hitting SL -> .hitSL
+        let longTouchBar = Candle(openTimeEpochSeconds: base, closeTimeEpochSeconds: base + 3600, open: 100.5, high: 100.6, low: 99.9, close: 100.0, volume: 100)
+        let longSLBar = Candle(openTimeEpochSeconds: base + 3600, closeTimeEpochSeconds: base + 7200, open: 100.0, high: 100.1, low: 97.5, close: 97.8, volume: 100)
+        let longLossOut = PassiveOutcomeEvaluator.evaluate(signal: longSig, subsequentClosedCandles: [longTouchBar, longSLBar], roundTripCostBps: 0)
+        XCTAssertEqual(longLossOut.status, .hitSL)
+
+        // Headline Win Rate excludes .invalidated and includes only filled resolved outcomes
+        let summary = PassiveOutcomeEvaluator.summarize(records: [shortInvOut, longInvOut, shortWinOut, longLossOut], filter: .headlineFixed)
+        XCTAssertEqual(summary.resolvedSignals, 2)
+        XCTAssertEqual(summary.invalidatedCount, 2)
         XCTAssertEqual(summary.tp1Hits, 1)
-        XCTAssertEqual(summary.slHits, 2)
-        XCTAssertEqual(summary.winRate, 1.0 / 3.0, accuracy: 1e-6)
+        XCTAssertEqual(summary.slHits, 1)
+        XCTAssertEqual(summary.winRate, 0.5, accuracy: 1e-6)
     }
 
     func testWilsonIntervalConfidenceCalibratorAndHeadlineLegacyExclusion() throws {
