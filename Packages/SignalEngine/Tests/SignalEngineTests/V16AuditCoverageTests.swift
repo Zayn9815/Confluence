@@ -228,7 +228,7 @@ final class V16AuditCoverageTests: XCTestCase {
     }
 
     func testLiveCandleAggregatorConfirmsLegitimateGapOnThirdTick() {
-        let base: TimeInterval = 1_760_000_000
+        let base: TimeInterval = 1_760_004_000 // Exact UTC 1H boundary (488_890 * 3_600)
         let seed = Candle(
             openTimeEpochSeconds: base - 3_600,
             closeTimeEpochSeconds: base,
@@ -261,7 +261,7 @@ final class V16AuditCoverageTests: XCTestCase {
     }
 
     func testResample15MTo30MPreservesNilVolumeWhenConstituentMissingVolume() {
-        let base: TimeInterval = 1_760_001_600 // UTC :00 aligned
+        let base: TimeInterval = 1_760_000_400 // Exact UTC 30m boundary (977_778 * 1_800)
         let b1 = Candle(
             openTimeEpochSeconds: base,
             closeTimeEpochSeconds: base + 900,

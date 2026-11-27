@@ -734,7 +734,7 @@ public enum SignalJournalEngine {
                 // Fill-Bar SL-Only invariant: if filledAt lies inside this bar, check SL ONLY (never award TP on fill candle)
                 let isFillBar: Bool = {
                     guard let filledAt = current.filledAt else { return false }
-                    return filledAt >= bar.openTimeEpochSeconds && filledAt <= bar.closeTimeEpochSeconds
+                    return filledAt > bar.openTimeEpochSeconds && filledAt <= bar.closeTimeEpochSeconds
                 }()
                 if isFillBar {
                     if slHit {
