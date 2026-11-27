@@ -455,18 +455,13 @@ public enum NewsTradeAnalyzer {
     // MARK: - Private Helpers
 
     private static func impactedSymbols(forCurrency currency: String) -> [String] {
-        switch currency.uppercased() {
-        case "USD":
-            return ["XAU/USD", "EUR/USD", "GBP/USD", "USD/JPY", "US500", "NAS100", "BTC/USDT"]
-        case "EUR":
-            return ["EUR/USD", "XAU/USD"]
-        case "GBP":
-            return ["GBP/USD", "EUR/USD"]
-        case "JPY":
-            return ["USD/JPY", "NAS100"]
-        default:
-            return ["XAU/USD", "EUR/USD", "US500", "BTC/USDT"]
+        let derived = MacroPolarityTable.directionalImpacts(currency: currency, stance: .hawkish)
+            .map(\.assetLabel)
+            .filter { WatchlistDefaults.descriptor(for: $0) != nil }
+        if !derived.isEmpty {
+            return derived
         }
+        return ["XAU/USD", "EUR/USD", "US500", "BTC/USDT"]
     }
 
     private static func biasFrom(direction: TradeDirection) -> NewsDirectionBias {

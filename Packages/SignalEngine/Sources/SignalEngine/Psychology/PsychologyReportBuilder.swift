@@ -116,9 +116,8 @@ public enum PsychologyReportBuilder {
 
         // 2b. Live Crypto Order Flow & Institutional Absorption evidence (Crypto Only when ON & fresh)
         if let of = activeOrderFlow {
-            if let absTag = of.absorptionState.shortTag {
+            if of.absorptionState.shortTag != nil {
                 badges.append(of.absorptionState == .bullishAbsorption ? "Bullish Absorption" : "Bearish Absorption")
-                _ = absTag
             }
             if of.divergence == .bullish {
                 badges.append("Bullish CVD Div")
@@ -260,9 +259,6 @@ public enum PsychologyReportBuilder {
                 case .postNewsWhipsawTrap:
                     beginnerPsych = "Beginners chased the initial post-release knee-jerk candle without waiting for a closed structure bar, getting caught in wide spreads and whipsaw."
                     proPsych = "Desks swept resting stops on the initial macro spike and faded the emotional imbalance back through the pre-news open."
-                case .shortSqueezeTrap, .longSqueezeTrap:
-                    beginnerPsych = "Overleveraged retail positioning was forced into mechanical liquidation, driving one-sided emotional flow."
-                    proPsych = "Larger players rode the forced liquidation cascade rather than fighting overcrowded margin flow."
                 }
             } else {
                 whatHappened = positioning?.summary ?? "Behavioral trap condition triggered by positioning divergence."
@@ -387,7 +383,13 @@ public enum PsychologyReportBuilder {
         }
 
         var timeline: [ChronologicalTrade] = []
+        var seenTradeKeys: Set<String> = []
         for rec in outcomes where rec.isResolved {
+            seenTradeKeys.insert(rec.signalId)
+            if let tf = rec.timeframe, let barClose = rec.entryBarCloseEpochSeconds {
+                let barOpen = Int((barClose - tf.seconds).rounded())
+                seenTradeKeys.insert("\(rec.symbol)|\(tf.rawValue)|\(barOpen)")
+            }
             timeline.append(ChronologicalTrade(
                 timestamp: rec.resolvedAtEpochSeconds ?? rec.entryBarCloseEpochSeconds ?? 0,
                 profileKey: ActiveStrategyProfile.normalizedKey(rec.activeStrategyProfileKey),
@@ -398,6 +400,10 @@ public enum PsychologyReportBuilder {
             ))
         }
         for entry in journalEntries where entry.status.isCountedWin || entry.status.isCountedLoss {
+            let barKey = "\(entry.symbol)|\(entry.timeframe.rawValue)|\(Int(entry.signalBarTimestamp.rounded()))"
+            guard !seenTradeKeys.contains(entry.id), !seenTradeKeys.contains(barKey) else { continue }
+            seenTradeKeys.insert(entry.id)
+            seenTradeKeys.insert(barKey)
             timeline.append(ChronologicalTrade(
                 timestamp: entry.closedAt ?? entry.tp1HitAt ?? entry.createdAt,
                 profileKey: entry.effectiveStrategyProfileKey,
