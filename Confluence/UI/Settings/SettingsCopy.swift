@@ -73,7 +73,6 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
 
     // Category 5 — Data, Diagnostics & About
     case backupAndRestore
-    case spreadsheetExports
     case diagnosticsAndLogs
 
     public var id: String { rawValue }
@@ -348,12 +347,6 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
                 subtitle: "Save or restore your settings, history, and automatic signal journal.",
                 helpText: "Exports a versioned schema v2 JSON backup (previous v1 backups remain importable). Keychain keys are never included, and all exports pass through SecretRedactor."
             )
-        case .spreadsheetExports:
-            return SettingCopy(
-                label: "Spreadsheet exports",
-                subtitle: "Export your trade ledger or automatic signal journal to spreadsheet files.",
-                helpText: "Generates standard RFC-4180 CSV files compatible with Excel, Numbers, and Google Sheets, scrubbed by SecretRedactor."
-            )
         case .diagnosticsAndLogs:
             return SettingCopy(
                 label: "Health logs & crash reports",
@@ -392,22 +385,9 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
         case .auto: return "Automatic with fallback"
         case .binanceVision: return "Binance Vision"
         case .okx: return "OKX"
+        case .bybit: return "Bybit"
         case .kraken: return "Kraken"
         case .twelveData: return "Twelve Data"
-        }
-    }
-
-    public static func displayLabel(for mode: StrategySelectionMode) -> String {
-        switch mode {
-        case .defaultAll: return "All built-in confirmations"
-        case .custom: return "Custom rule mix"
-        }
-    }
-
-    public static func displayLabel(for rule: CustomStrategyMatchRule) -> String {
-        switch rule {
-        case .anyWithMinConfluence: return "Match minimum aligned rules"
-        case .requireAllSelected: return "Require every selected rule"
         }
     }
 
@@ -429,8 +409,6 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
         labels.append(contentsOf: TradeLevelMode.allCases.map { displayLabel(for: $0) })
         labels.append(contentsOf: CalibrationWinDefinition.allCases.map { displayLabel(for: $0) })
         labels.append(contentsOf: TradFiProviderPreference.allCases.map { displayLabel(for: $0) })
-        labels.append(contentsOf: StrategySelectionMode.allCases.map { displayLabel(for: $0) })
-        labels.append(contentsOf: CustomStrategyMatchRule.allCases.map { displayLabel(for: $0) })
         labels.append(contentsOf: CalibrationCategoryScope.allCases.map { displayLabel(for: $0) })
         return labels
     }

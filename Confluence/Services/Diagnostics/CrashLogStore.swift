@@ -18,7 +18,6 @@ private func confluencePOSIXSignalHandler(_ sig: Int32) {
             case SIGSEGV: payload = "POSIX_SIGNAL:SIGSEGV\n"
             case SIGBUS:  payload = "POSIX_SIGNAL:SIGBUS\n"
             case SIGILL:  payload = "POSIX_SIGNAL:SIGILL\n"
-            case SIGTRAP: payload = "POSIX_SIGNAL:SIGTRAP\n"
             default:      payload = "POSIX_SIGNAL:UNKNOWN\n"
             }
             payload.withUTF8Buffer { buf in

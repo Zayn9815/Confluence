@@ -288,7 +288,7 @@ final class OrderFlowAndDynamicAdaptationTests: XCTestCase {
         // Even with ALL ICT swings/FVGs/OBs disabled, TradeLevelCalculator falls back cleanly to ATR levels
         let lv = TradeLevelCalculator.calculate(
             direction: .long, candles: [bar], ict: emptyICT, htfICT: nil,
-            atr: 250.0, marketClass: .crypto, minimumRiskReward: 2.0,
+            atr: 250.0, minimumRiskReward: 2.0,
             mode: .structureATR, enableTP2Target: true, timeframe: .h1
         )
         XCTAssertNotNil(lv)

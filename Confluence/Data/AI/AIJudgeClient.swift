@@ -142,12 +142,6 @@ public enum AIDailyUsageTracker {
         let key = todayKey()
         defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
     }
-
-    public static func resetToday(suiteName: String? = nil) {
-        lock.lock()
-        defer { lock.unlock() }
-        resolveDefaults(suiteName: suiteName).removeObject(forKey: todayKey())
-    }
 }
 
 /// Unified optional second-opinion protocol implemented by Gemini, DeepSeek, and OpenRouter.
@@ -196,7 +190,7 @@ public actor OpenAICompatibleJudgeClient: AIJudgeClient {
         case .openrouter:
             self.baseURLString = "https://openrouter.ai/api/v1"
         case .gemini:
-            self.baseURLString = "https://generativelanguage.googleapis.com/v1beta"
+            preconditionFailure("OpenAICompatibleJudgeClient does not support .gemini; use GeminiJudgeClient instead.")
         }
     }
 

@@ -7,7 +7,8 @@ public enum PositioningAnalyzer {
         snapshot: OKXDerivativesSnapshot,
         candles: [Candle],
         upTo endIndex: Int? = nil,
-        timeframe: Timeframe = .h1
+        timeframe: Timeframe = .h1,
+        isLiveEvaluation: Bool = true
     ) -> PositioningAssessment {
         let lastIdx: Int
         if candles.isEmpty {
@@ -75,7 +76,7 @@ public enum PositioningAnalyzer {
             let rate = pt.realizedRate ?? pt.fundingRate
             return rate.isFinite ? rate : nil
         }
-        let isHistoricalEval = (endIndex != nil && lastIdx < candles.count - 1) || cutoff < snapshot.fetchedAtEpochSeconds
+        let isHistoricalEval = !isLiveEvaluation || (endIndex != nil && lastIdx < candles.count - 1)
         let rawCurrentFunding: Double
         if isHistoricalEval {
             if let latestCausal = causalFundingPoints.last {

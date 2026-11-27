@@ -517,7 +517,8 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
         }
         activeStrategyProfileKey = (try? c.decodeIfPresent(String.self, forKey: .activeStrategyProfileKey)) ?? ""
         orderFlowStatus = (try? c.decodeIfPresent(String.self, forKey: .orderFlowStatus)) ?? "off"
-        orderFlowSummary = try c.decodeIfPresent(ChartOrderFlowSummary.self, forKey: .orderFlowSummary)
+        let decodedOF = try c.decodeIfPresent(ChartOrderFlowSummary.self, forKey: .orderFlowSummary)
+        orderFlowSummary = (marketClass == .crypto) ? decodedOF : nil
     }
 
     public func withAIJudgment(_ judgment: ReflexJudgment, threshold: Double) -> TradeSignal {
@@ -719,13 +720,6 @@ public enum StrategySelectionMode: String, Codable, Sendable, CaseIterable, Iden
     }
 }
 
-public enum CustomStrategyMatchRule: String, Codable, Sendable, CaseIterable, Identifiable {
-    case anyWithMinConfluence = "Any Selected + Min Confluence"
-    case requireAllSelected = "Require All Selected"
-
-    public var id: String { rawValue }
-}
-
 /// Canonical 12 selectable trading strategies/concepts mapped 1:1 to deterministic `StrategyContribution.id` outputs.
 public enum StrategyConcept: String, Codable, Sendable, CaseIterable, Hashable, Identifiable {
     case ictFVG = "ict_fvg"
@@ -807,10 +801,6 @@ public struct EngineConfig: Codable, Sendable, Equatable {
     public var fixedTP2Percent: Double
     public var enableTP2Target: Bool
     public var minimumAlignedStrategies: Int
-    public var enabledStrategyGroups: Set<StrategyGroup>
-    public var strategySelectionMode: StrategySelectionMode
-    public var selectedStrategyConcepts: Set<StrategyConcept>
-    public var customStrategyMatchRule: CustomStrategyMatchRule
     public var pauseSignalsDuringPreNewsWindow: Bool
     public var preNewsBlackoutMinutesBefore: Int
     public var postNewsWhipsawMinutesAfter: Int
@@ -836,10 +826,6 @@ public struct EngineConfig: Codable, Sendable, Equatable {
         fixedTP2Percent: Double = 3.5,
         enableTP2Target: Bool = true,
         minimumAlignedStrategies: Int = 3,
-        enabledStrategyGroups: Set<StrategyGroup> = Set(StrategyGroup.allCases),
-        strategySelectionMode: StrategySelectionMode = .defaultAll,
-        selectedStrategyConcepts: Set<StrategyConcept> = Set(StrategyConcept.allCases),
-        customStrategyMatchRule: CustomStrategyMatchRule = .anyWithMinConfluence,
         pauseSignalsDuringPreNewsWindow: Bool = true,
         preNewsBlackoutMinutesBefore: Int = 15,
         postNewsWhipsawMinutesAfter: Int = 5,
@@ -862,10 +848,6 @@ public struct EngineConfig: Codable, Sendable, Equatable {
         self.fixedTP2Percent = fixedTP2Percent
         self.enableTP2Target = enableTP2Target
         self.minimumAlignedStrategies = minimumAlignedStrategies
-        self.enabledStrategyGroups = enabledStrategyGroups
-        self.strategySelectionMode = strategySelectionMode
-        self.selectedStrategyConcepts = selectedStrategyConcepts
-        self.customStrategyMatchRule = customStrategyMatchRule
         self.pauseSignalsDuringPreNewsWindow = pauseSignalsDuringPreNewsWindow
         self.preNewsBlackoutMinutesBefore = preNewsBlackoutMinutesBefore
         self.postNewsWhipsawMinutesAfter = postNewsWhipsawMinutesAfter

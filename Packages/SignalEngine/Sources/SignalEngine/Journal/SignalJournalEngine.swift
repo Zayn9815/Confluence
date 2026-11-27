@@ -165,6 +165,57 @@ public struct TrackedJournalTrade: Codable, Sendable, Equatable, Hashable, Ident
         self.matchedStrategyIDs = matchedStrategyIDs
     }
 
+    enum CodingKeys: String, CodingKey {
+        case id, symbol, assetClass, timeframe, direction, section, status, score
+        case signalBarTimestamp, entryZoneLow, entryZoneHigh, entryPrice, fillPrice
+        case stopLoss, target1, target2, isTP2Enabled, currentPrice
+        case livePnLPercent, liveRMultiple, realizedR, isWinLocked
+        case activeStrategyProfileKey, orderFlowStatus, orderFlowSummary, orderFlowCapturedAt
+        case createdAt, filledAt, tp1HitAt, closedAt, lastEvaluatedAt
+        case filterReason, matchedStrategyIDs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        symbol = try c.decode(String.self, forKey: .symbol)
+        assetClass = try c.decode(MarketClass.self, forKey: .assetClass)
+        timeframe = try c.decode(Timeframe.self, forKey: .timeframe)
+        direction = try c.decode(TradeDirection.self, forKey: .direction)
+        section = try c.decode(JournalSection.self, forKey: .section)
+        status = try c.decode(JournalTradeStatus.self, forKey: .status)
+        score = try c.decode(Double.self, forKey: .score)
+        signalBarTimestamp = try c.decode(TimeInterval.self, forKey: .signalBarTimestamp)
+        let rawLow = try c.decode(Double.self, forKey: .entryZoneLow)
+        let rawHigh = try c.decode(Double.self, forKey: .entryZoneHigh)
+        entryZoneLow = min(rawLow, rawHigh)
+        entryZoneHigh = max(rawLow, rawHigh)
+        entryPrice = try c.decode(Double.self, forKey: .entryPrice)
+        fillPrice = try c.decodeIfPresent(Double.self, forKey: .fillPrice)
+        stopLoss = try c.decode(Double.self, forKey: .stopLoss)
+        target1 = try c.decode(Double.self, forKey: .target1)
+        target2 = try c.decode(Double.self, forKey: .target2)
+        isTP2Enabled = (try? c.decodeIfPresent(Bool.self, forKey: .isTP2Enabled)) ?? true
+        currentPrice = try c.decode(Double.self, forKey: .currentPrice)
+        livePnLPercent = (try? c.decodeIfPresent(Double.self, forKey: .livePnLPercent)) ?? 0.0
+        liveRMultiple = (try? c.decodeIfPresent(Double.self, forKey: .liveRMultiple)) ?? 0.0
+        realizedR = try c.decodeIfPresent(Double.self, forKey: .realizedR)
+        isWinLocked = (try? c.decodeIfPresent(Bool.self, forKey: .isWinLocked)) ?? false
+        activeStrategyProfileKey = (try? c.decodeIfPresent(String.self, forKey: .activeStrategyProfileKey)) ?? ""
+        orderFlowStatus = (try? c.decodeIfPresent(String.self, forKey: .orderFlowStatus)) ?? "off"
+        let decodedOF = try c.decodeIfPresent(ChartOrderFlowSummary.self, forKey: .orderFlowSummary)
+        let decodedOFCaptured = try c.decodeIfPresent(TimeInterval.self, forKey: .orderFlowCapturedAt)
+        orderFlowSummary = (assetClass == .crypto) ? decodedOF : nil
+        orderFlowCapturedAt = (assetClass == .crypto) ? decodedOFCaptured : nil
+        createdAt = try c.decode(TimeInterval.self, forKey: .createdAt)
+        filledAt = try c.decodeIfPresent(TimeInterval.self, forKey: .filledAt)
+        tp1HitAt = try c.decodeIfPresent(TimeInterval.self, forKey: .tp1HitAt)
+        closedAt = try c.decodeIfPresent(TimeInterval.self, forKey: .closedAt)
+        lastEvaluatedAt = (try? c.decodeIfPresent(TimeInterval.self, forKey: .lastEvaluatedAt)) ?? createdAt
+        filterReason = try c.decodeIfPresent(String.self, forKey: .filterReason)
+        matchedStrategyIDs = (try? c.decodeIfPresent([String].self, forKey: .matchedStrategyIDs)) ?? []
+    }
+
     public var anchorEntryPrice: Double {
         if let fp = fillPrice, fp.isFinite, fp > 0 { return fp }
         return entryPrice
@@ -196,15 +247,9 @@ public struct TrackedJournalTrade: Codable, Sendable, Equatable, Hashable, Ident
 // MARK: - Deterministic Automatic Signal Journal State Machine
 
 public enum SignalJournalEngine {
-    /// Timeframe-aware entry-zone pending expiration window.
+    /// Timeframe-aware entry-zone pending expiration window aligned 1:1 with `PassiveOutcomeEvaluator.defaultFillWindowBars`.
     public static func pendingExpirySeconds(for timeframe: Timeframe) -> TimeInterval {
-        switch timeframe {
-        case .m15: return 3 * 3_600
-        case .m30: return 6 * 3_600
-        case .h1: return 12 * 3_600
-        case .h4: return 32 * 3_600
-        case .d1: return 5 * 86_400
-        }
+        Double(PassiveOutcomeEvaluator.defaultFillWindowBars(for: timeframe)) * timeframe.seconds
     }
 
     /// Runner expiration window after TP1 is locked (2× the pending expiry window).
@@ -438,7 +483,8 @@ public enum SignalJournalEngine {
         var updated = entry
         let previousPrice = entry.currentPrice
         updated.currentPrice = livePrice
-        updated.lastEvaluatedAt = max(updated.lastEvaluatedAt, now)
+        // Do NOT advance `lastEvaluatedAt` on open live ticks so subsequent closed-candle
+        // reconciliation cannot skip a newly-closed bar whose closeTime <= tick timestamp.
 
         switch updated.status {
         case .pending:
@@ -528,22 +574,24 @@ public enum SignalJournalEngine {
             if isTargetHit(price: livePrice, target: updated.target1, direction: updated.direction) {
                 updated.isWinLocked = true
                 updated.tp1HitAt = updated.tp1HitAt ?? now
-                let tp1R = computeR(price: updated.target1, entry: updated)
 
                 if updated.hasDistinctTP2 && isTargetHit(price: livePrice, target: updated.target2, direction: updated.direction) {
-                    let tp2R = computeR(price: updated.target2, entry: updated)
+                    let tp2R = computeNetRealizedR(price: updated.target2, entry: updated)
                     updated.status = .winTP2
                     updated.closedAt = now
+                    updated.lastEvaluatedAt = max(updated.lastEvaluatedAt, now)
                     updated.realizedR = tp2R
                     applyLiveMetrics(&updated, markPrice: updated.target2)
                 } else if !updated.hasDistinctTP2 {
+                    let netTP1R = computeNetRealizedR(price: updated.target1, entry: updated)
                     updated.status = .winTP1
                     updated.closedAt = now
-                    updated.realizedR = tp1R
+                    updated.lastEvaluatedAt = max(updated.lastEvaluatedAt, now)
+                    updated.realizedR = netTP1R
                     applyLiveMetrics(&updated, markPrice: updated.target1)
                 } else {
                     updated.status = .winTrackingTP2
-                    updated.realizedR = tp1R
+                    updated.realizedR = computeNetRealizedR(price: updated.target1, entry: updated)
                 }
             }
             return updated
@@ -553,13 +601,12 @@ public enum SignalJournalEngine {
             updated.isWinLocked = true
             applyLiveMetrics(&updated, markPrice: livePrice)
 
-            let tp1R = computeR(price: updated.target1, entry: updated)
-
             // TP2 hit -> full WIN (TP2)
             if updated.hasDistinctTP2 && isTargetHit(price: livePrice, target: updated.target2, direction: updated.direction) {
-                let tp2R = computeR(price: updated.target2, entry: updated)
+                let tp2R = computeNetRealizedR(price: updated.target2, entry: updated)
                 updated.status = .winTP2
                 updated.closedAt = now
+                updated.lastEvaluatedAt = max(updated.lastEvaluatedAt, now)
                 updated.realizedR = tp2R
                 applyLiveMetrics(&updated, markPrice: updated.target2)
                 return updated
@@ -573,7 +620,8 @@ public enum SignalJournalEngine {
             if pulledBackToBreakeven || runnerExpired {
                 updated.status = .winTP1
                 updated.closedAt = now
-                updated.realizedR = tp1R
+                updated.lastEvaluatedAt = max(updated.lastEvaluatedAt, now)
+                updated.realizedR = computeNetRealizedR(price: updated.target1, entry: updated)
                 applyLiveMetrics(&updated, markPrice: updated.target1)
             }
             return updated
@@ -693,7 +741,7 @@ public enum SignalJournalEngine {
                 if slHit {
                     applyLoss(&current, closedAt: barClose)
                 } else if tp2Hit {
-                    let tp2R = computeR(price: current.target2, entry: current)
+                    let tp2R = computeNetRealizedR(price: current.target2, entry: current)
                     current.isWinLocked = true
                     current.tp1HitAt = current.tp1HitAt ?? barClose
                     current.status = .winTP2
@@ -701,7 +749,7 @@ public enum SignalJournalEngine {
                     current.realizedR = tp2R
                     applyLiveMetrics(&current, markPrice: current.target2)
                 } else if tp1Hit {
-                    let tp1R = computeR(price: current.target1, entry: current)
+                    let tp1R = computeNetRealizedR(price: current.target1, entry: current)
                     current.isWinLocked = true
                     current.tp1HitAt = barClose
                     if !current.hasDistinctTP2 {
@@ -720,7 +768,7 @@ public enum SignalJournalEngine {
 
             case .winTrackingTP2:
                 current.isWinLocked = true
-                let tp1R = computeR(price: current.target1, entry: current)
+                let tp1R = computeNetRealizedR(price: current.target1, entry: current)
                 let pullbackHit = isBarPullbackToBreakevenOrSL(bar: bar, entry: current)
                 let tp2Hit = current.hasDistinctTP2 && ((current.direction == .long)
                     ? (bar.high >= current.target2)
@@ -735,7 +783,7 @@ public enum SignalJournalEngine {
                     current.realizedR = tp1R
                     applyLiveMetrics(&current, markPrice: current.target1)
                 } else if tp2Hit {
-                    let tp2R = computeR(price: current.target2, entry: current)
+                    let tp2R = computeNetRealizedR(price: current.target2, entry: current)
                     current.status = .winTP2
                     current.closedAt = barClose
                     current.realizedR = tp2R
@@ -766,7 +814,7 @@ public enum SignalJournalEngine {
         if current.status == .winTrackingTP2 {
             let runnerOrigin = current.tp1HitAt ?? current.filledAt ?? current.createdAt
             if (now - runnerOrigin) >= tp2RunnerExpirySeconds(for: current.timeframe) {
-                let tp1R = computeR(price: current.target1, entry: current)
+                let tp1R = computeNetRealizedR(price: current.target1, entry: current)
                 current.status = .winTP1
                 current.closedAt = now
                 current.realizedR = tp1R
@@ -883,6 +931,20 @@ public enum SignalJournalEngine {
         return r.isFinite ? r : 0.0
     }
 
+    private static func roundTripCostR(for entry: TrackedJournalTrade) -> Double {
+        let anchor = entry.anchorEntryPrice
+        let costPct = entry.assetClass.defaultRoundTripCostBps / 100.0
+        let riskPct = (riskDistance(for: entry) / max(anchor, Double.leastNormalMagnitude)) * 100.0
+        let costR = costPct / max(riskPct, 0.01)
+        return costR.isFinite ? costR : 0.0
+    }
+
+    private static func computeNetRealizedR(price: Double, entry: TrackedJournalTrade) -> Double {
+        let grossR = computeR(price: price, entry: entry)
+        let net = grossR - roundTripCostR(for: entry)
+        return net.isFinite ? net : 0.0
+    }
+
     private static func applyLiveMetrics(_ entry: inout TrackedJournalTrade, markPrice: Double) {
         let anchor = entry.anchorEntryPrice
         guard anchor.isFinite, anchor > 0, markPrice.isFinite, markPrice > 0 else {
@@ -902,17 +964,21 @@ public enum SignalJournalEngine {
         guard !entry.isWinLocked else {
             entry.status = .winTP1
             entry.closedAt = closedAt
-            entry.realizedR = computeR(price: entry.target1, entry: entry)
+            entry.lastEvaluatedAt = max(entry.lastEvaluatedAt, closedAt)
+            entry.realizedR = computeNetRealizedR(price: entry.target1, entry: entry)
             applyLiveMetrics(&entry, markPrice: entry.target1)
             return
         }
+        let costR = roundTripCostR(for: entry)
+        let costPct = entry.assetClass.defaultRoundTripCostBps / 100.0
         entry.status = .loss
         entry.closedAt = closedAt
-        entry.realizedR = -1.0
+        entry.lastEvaluatedAt = max(entry.lastEvaluatedAt, closedAt)
+        entry.realizedR = -1.0 - costR
         let anchor = entry.anchorEntryPrice
         let slPct = (abs(anchor - entry.stopLoss) / max(anchor, Double.leastNormalMagnitude)) * 100.0
-        entry.livePnLPercent = slPct.isFinite ? -slPct : 0.0
-        entry.liveRMultiple = -1.0
+        entry.livePnLPercent = slPct.isFinite ? -(slPct + costPct) : 0.0
+        entry.liveRMultiple = -1.0 - costR
     }
 
     private static func isStopLossHit(price: Double, stopLoss: Double, direction: TradeDirection) -> Bool {

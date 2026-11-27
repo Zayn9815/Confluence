@@ -7,7 +7,6 @@ Uses pure Python standard library only.
 """
 
 import math
-import os
 import struct
 from pathlib import Path
 

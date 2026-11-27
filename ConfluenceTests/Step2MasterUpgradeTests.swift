@@ -36,7 +36,6 @@ final class Step2MasterUpgradeTests: XCTestCase {
         XCTAssertEqual(pepe.bybitLinearSymbol, "1000PEPEUSDT")
         XCTAssertEqual(pepe.binanceFuturesSymbol, "1000PEPEUSDT")
         XCTAssertEqual(pepe.bybitSpotSymbol, "PEPEUSDT")
-        XCTAssertEqual(pepe.binanceSpotSymbol, "PEPEUSDT")
     }
 
     func testCryptoOrderFlowAdapterEnforcesHardNonCryptoGateWithZeroNetworkCalls() async {

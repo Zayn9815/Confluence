@@ -121,14 +121,10 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var fixedTP2Percent: Double = 3.5
     public var enableTP2Target: Bool = true
     public var minimumAlignedStrategies: Int = 3
-    public var enabledStrategyGroups: Set<StrategyGroup> = Set(StrategyGroup.allCases)
     /// v1.6 individual strategy toggles (JSON array of `StrategyID` raw values). Fresh installs start with Proven Winners.
     public var enabledStrategies: Set<StrategyID> = StrategyID.provenWinners
     /// Crypto-only live Order Flow & Institutional Absorption module (skipped on Forex/TradFi with zero penalty).
     public var isOrderFlowEnabled: Bool = false
-    public var strategySelectionMode: StrategySelectionMode = .defaultAll
-    public var selectedStrategyConcepts: Set<StrategyConcept> = Set(StrategyConcept.allCases)
-    public var customStrategyMatchRule: CustomStrategyMatchRule = .anyWithMinConfluence
     public var showWeakFilteredSignals: Bool = false
     public var autoSuppressCrisisAlerts: Bool = true
     public var oneSignalPerCorrelatedCluster: Bool = false
@@ -148,7 +144,6 @@ public struct PersistedSettingsPayload: Codable, Sendable {
 
     // Section 5 — AI Second-Opinion (Optional)
     public var geminiEnabled: Bool = false
-    public var geminiModel: GeminiModelOption = .hydrogen
     public var aiProvider: AIProviderOption = .gemini
     public var aiModelID: String = GeminiModelOption.hydrogen.rawValue
     public var geminiDailyCallLimit: Int = 25
@@ -163,7 +158,6 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public var showTradingViewOption: Bool = true
     public var scanOnOpenEnabled: Bool = true
     public var autoScanIntervalMinutes: Int = ScanSchedulePolicy.defaultIntervalMinutes
-    public var demoWalletFeesEnabled: Bool = false
 
     public init() {}
 
@@ -181,21 +175,24 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         case htfTimeframe, entryTimeframe, minimumConfidencePercent, minimumRiskReward
         case maxStopLossPercentCryptoStocks, maxStopLossPercentFXMetalsIndices
         case levelCalculationMode, fixedStopLossPercent, fixedTP1Percent, fixedTP2Percent
-        case enableTP2Target, minimumAlignedStrategies, enabledStrategyGroups, enabledStrategies, isOrderFlowEnabled
-        case strategySelectionMode, selectedStrategyConcepts, customStrategyMatchRule
+        case enableTP2Target, minimumAlignedStrategies, enabledStrategies, isOrderFlowEnabled
         case showWeakFilteredSignals, autoSuppressCrisisAlerts, oneSignalPerCorrelatedCluster
         case defaultAccountBalance, defaultRiskPercent, defaultAccountCurrency
         case manualUSDToAccountRate, customContractSpecs
         case calibrationWinDefinition, calibrationCategoryScope
         case calibrationMinConfidencePercent, calibrationMinRiskReward
-        case geminiEnabled, geminiModel, aiProvider, aiModelID, geminiDailyCallLimit, geminiConfirmationThreshold
+        case geminiEnabled, aiProvider, aiModelID, geminiDailyCallLimit, geminiConfirmationThreshold
         case tradFiLiveFeedMode, cryptoLiveFeedMode, defaultChartViewMode, chartEngine, tradingViewPreferDesktop, showTradingViewOption
-        case scanOnOpenEnabled, autoScanIntervalMinutes, demoWalletFeesEnabled
+        case scanOnOpenEnabled, autoScanIntervalMinutes
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
         case themePreset
         case lastDarkThemePreset
+        case enabledStrategyGroups
+        case strategySelectionMode
+        case selectedStrategyConcepts
+        case geminiModel
     }
 
     /// Maps legacy v1.2–v1.5 rule settings to individual `StrategyID`s (custom concepts win over groups).
@@ -281,19 +278,18 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         fixedTP2Percent = (try? c.decodeIfPresent(Double.self, forKey: .fixedTP2Percent)) ?? d.fixedTP2Percent
         enableTP2Target = (try? c.decodeIfPresent(Bool.self, forKey: .enableTP2Target)) ?? d.enableTP2Target
         minimumAlignedStrategies = (try? c.decodeIfPresent(Int.self, forKey: .minimumAlignedStrategies)) ?? d.minimumAlignedStrategies
-        enabledStrategyGroups = (try? c.decodeIfPresent(Set<StrategyGroup>.self, forKey: .enabledStrategyGroups)) ?? d.enabledStrategyGroups
-        strategySelectionMode = (try? c.decodeIfPresent(StrategySelectionMode.self, forKey: .strategySelectionMode)) ?? d.strategySelectionMode
-        selectedStrategyConcepts = (try? c.decodeIfPresent(Set<StrategyConcept>.self, forKey: .selectedStrategyConcepts)) ?? d.selectedStrategyConcepts
-        customStrategyMatchRule = (try? c.decodeIfPresent(CustomStrategyMatchRule.self, forKey: .customStrategyMatchRule)) ?? d.customStrategyMatchRule
         if let raw = try? c.decodeIfPresent([String].self, forKey: .enabledStrategies) {
             // Unknown raw values (future/removed detectors) are skipped instead of resetting the whole selection.
             enabledStrategies = Set(raw.compactMap(StrategyID.init(rawValue:)))
-        } else if c.contains(.enabledStrategyGroups) || c.contains(.strategySelectionMode) || c.contains(.selectedStrategyConcepts) {
+        } else if legacy.contains(.enabledStrategyGroups) || legacy.contains(.strategySelectionMode) || legacy.contains(.selectedStrategyConcepts) {
             // One-time legacy migration: map the old grouped / custom-concept selection to individual StrategyIDs.
+            let legacyGroups = (try? legacy.decodeIfPresent(Set<StrategyGroup>.self, forKey: .enabledStrategyGroups)) ?? Set(StrategyGroup.allCases)
+            let legacyMode = (try? legacy.decodeIfPresent(StrategySelectionMode.self, forKey: .strategySelectionMode)) ?? .defaultAll
+            let legacyConcepts = (try? legacy.decodeIfPresent(Set<StrategyConcept>.self, forKey: .selectedStrategyConcepts)) ?? Set(StrategyConcept.allCases)
             enabledStrategies = PersistedSettingsPayload.migrateLegacyStrategies(
-                mode: strategySelectionMode,
-                groups: enabledStrategyGroups,
-                concepts: selectedStrategyConcepts
+                mode: legacyMode,
+                groups: legacyGroups,
+                concepts: legacyConcepts
             )
         } else {
             enabledStrategies = d.enabledStrategies
@@ -315,8 +311,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         calibrationMinRiskReward = (try? c.decodeIfPresent(Double.self, forKey: .calibrationMinRiskReward)) ?? d.calibrationMinRiskReward
 
         geminiEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .geminiEnabled)) ?? d.geminiEnabled
-        let decodedLegacyGemini = (try? c.decodeIfPresent(GeminiModelOption.self, forKey: .geminiModel)) ?? d.geminiModel
-        geminiModel = decodedLegacyGemini
+        let decodedLegacyGemini = (try? legacy.decodeIfPresent(GeminiModelOption.self, forKey: .geminiModel)) ?? .hydrogen
         // Migrate legacy `geminiModel` cleanly to `aiProvider` + `aiModelID` when new keys are absent
         aiProvider = (try? c.decodeIfPresent(AIProviderOption.self, forKey: .aiProvider)) ?? .gemini
         aiModelID = (try? c.decodeIfPresent(String.self, forKey: .aiModelID)) ?? decodedLegacyGemini.rawValue
@@ -331,7 +326,6 @@ public struct PersistedSettingsPayload: Codable, Sendable {
         showTradingViewOption = (try? c.decodeIfPresent(Bool.self, forKey: .showTradingViewOption)) ?? d.showTradingViewOption
         scanOnOpenEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .scanOnOpenEnabled)) ?? d.scanOnOpenEnabled
         autoScanIntervalMinutes = (try? c.decodeIfPresent(Int.self, forKey: .autoScanIntervalMinutes)) ?? d.autoScanIntervalMinutes
-        demoWalletFeesEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .demoWalletFeesEnabled)) ?? d.demoWalletFeesEnabled
     }
 }
 
@@ -462,11 +456,6 @@ public final class AppSettingsStore {
             fixedTP2Percent: payload.fixedTP2Percent,
             enableTP2Target: payload.enableTP2Target,
             minimumAlignedStrategies: payload.minimumAlignedStrategies,
-            // Legacy group/concept gates are neutralised; individual `enabledStrategies` is the single source of truth.
-            enabledStrategyGroups: Set(StrategyGroup.allCases),
-            strategySelectionMode: .defaultAll,
-            selectedStrategyConcepts: Set(StrategyConcept.allCases),
-            customStrategyMatchRule: .anyWithMinConfluence,
             pauseSignalsDuringPreNewsWindow: payload.pauseSignalsDuringPreNewsWindow,
             preNewsBlackoutMinutesBefore: 15,
             postNewsWhipsawMinutesAfter: 5,
@@ -484,14 +473,6 @@ public final class AppSettingsStore {
             payload.enabledMarkets.remove(market)
         } else {
             payload.enabledMarkets.insert(market)
-        }
-    }
-
-    public func toggleStrategyGroup(_ group: StrategyGroup) {
-        if payload.enabledStrategyGroups.contains(group) {
-            payload.enabledStrategyGroups.remove(group)
-        } else {
-            payload.enabledStrategyGroups.insert(group)
         }
     }
 
@@ -519,16 +500,6 @@ public final class AppSettingsStore {
         }
         payload.enabledStrategies.remove(id)
         return true
-    }
-
-    public func toggleStrategyConcept(_ concept: StrategyConcept) {
-        if payload.selectedStrategyConcepts.contains(concept) {
-            if payload.selectedStrategyConcepts.count > 1 {
-                payload.selectedStrategyConcepts.remove(concept)
-            }
-        } else {
-            payload.selectedStrategyConcepts.insert(concept)
-        }
     }
 
     public func toggleWatchlistSymbol(_ symbol: String) {

@@ -174,7 +174,6 @@ public struct OrderFlowAssessment: Codable, Sendable, Equatable, Hashable {
     public let isLiveWebSocket: Bool
     public let spreadBps: Double
     public let isLowLiquidity: Bool
-    public let obiAdaptiveBand: Double
     public let obiWeighted: Double
     public let micropriceBias: Double
     public let cvdRatio: Double
@@ -201,7 +200,6 @@ public struct OrderFlowAssessment: Codable, Sendable, Equatable, Hashable {
         isLiveWebSocket: Bool,
         spreadBps: Double,
         isLowLiquidity: Bool,
-        obiAdaptiveBand: Double,
         obiWeighted: Double,
         micropriceBias: Double,
         cvdRatio: Double,
@@ -225,7 +223,6 @@ public struct OrderFlowAssessment: Codable, Sendable, Equatable, Hashable {
         self.isLiveWebSocket = isLiveWebSocket
         self.spreadBps = spreadBps
         self.isLowLiquidity = isLowLiquidity
-        self.obiAdaptiveBand = obiAdaptiveBand
         self.obiWeighted = obiWeighted
         self.micropriceBias = micropriceBias
         self.cvdRatio = cvdRatio
@@ -300,7 +297,6 @@ public struct OrderFlowAssessment: Codable, Sendable, Equatable, Hashable {
             isLiveWebSocket: false,
             spreadBps: 0,
             isLowLiquidity: false,
-            obiAdaptiveBand: 0,
             obiWeighted: 0,
             micropriceBias: 0,
             cvdRatio: 0,
@@ -415,31 +411,19 @@ public enum OrderFlowAnalyzer {
 
         // 1. Adaptive Distance-Weighted Order Book Imbalance (OBI) + Microprice Bias
         let bandBps = max(25.0, spreadBps * 2.5)
-        var bandBidQty = 0.0
-        var bandAskQty = 0.0
         var weightedBidQty = 0.0
         var weightedAskQty = 0.0
 
         for level in validBids {
             let distBps = max(0.0, ((bestBid - level.price) / bestBid) * 10_000.0)
-            if distBps <= bandBps {
-                bandBidQty += level.quantity
-            }
             let weight = exp(-distBps / bandBps)
             weightedBidQty += level.quantity * weight
         }
         for level in validAsks {
             let distBps = max(0.0, ((level.price - bestAsk) / bestAsk) * 10_000.0)
-            if distBps <= bandBps {
-                bandAskQty += level.quantity
-            }
             let weight = exp(-distBps / bandBps)
             weightedAskQty += level.quantity * weight
         }
-
-        let obiAdaptiveBand: Double = (bandBidQty + bandAskQty) > 0
-            ? clamp((bandBidQty - bandAskQty) / (bandBidQty + bandAskQty), -1.0, 1.0)
-            : 0.0
         let obiWeighted: Double = (weightedBidQty + weightedAskQty) > 0
             ? clamp((weightedBidQty - weightedAskQty) / (weightedBidQty + weightedAskQty), -1.0, 1.0)
             : 0.0
@@ -678,7 +662,6 @@ public enum OrderFlowAnalyzer {
             isLiveWebSocket: snap.isLiveWebSocket,
             spreadBps: spreadBps,
             isLowLiquidity: false,
-            obiAdaptiveBand: obiAdaptiveBand,
             obiWeighted: obiWeighted,
             micropriceBias: micropriceBias,
             cvdRatio: cvdRatio,
@@ -712,7 +695,6 @@ public enum OrderFlowAnalyzer {
             isLiveWebSocket: snap.isLiveWebSocket,
             spreadBps: spreadBps.isFinite ? spreadBps : 999.0,
             isLowLiquidity: true,
-            obiAdaptiveBand: 0,
             obiWeighted: 0,
             micropriceBias: 0,
             cvdRatio: 0,

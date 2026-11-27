@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://confluence.bilal/schemas/reflex_judgment.schema.json",
   "title": "ReflexJudgment",
-  "description": "Strict JSON schema returned by optional Gemini 4 Hydrogen second-opinion judge.",
+  "description": "Strict JSON schema returned by optional multi-provider AI second-opinion judge (Gemini, DeepSeek, OpenRouter).",
   "type": "object",
   "required": ["regime", "direction", "setup_quality", "confidence", "risk_state", "agree", "catalyst_bias", "invalidation_check"],
   "properties": {

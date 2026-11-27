@@ -3,7 +3,7 @@ import XCTest
 @testable import Confluence
 import SignalEngine
 
-final class V15M4WalletScheduleStatsTests: XCTestCase {
+final class JournalScheduleStatsTests: XCTestCase {
     // MARK: - Live Quote Freshness & Automatic Journal Tick Tracking Tests
 
     func testLiveQuoteFreshnessAndAutomaticJournalLiveTickTracking() {

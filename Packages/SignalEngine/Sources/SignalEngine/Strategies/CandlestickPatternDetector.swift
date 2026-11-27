@@ -42,7 +42,7 @@ public enum CandlestickPatternDetector {
                     name: "Bullish Engulfing",
                     group: .candlestick,
                     direction: .long,
-                    weight: weights[id] ?? 1.05,
+                    weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .candleBullishEngulfing),
                     historicalWinRate: 0.57,
                     detail: "Closed bullish body engulfed prior bearish candle (\(String(format: "%.2f", current.bodySize / atr))x ATR)."
                 )
@@ -60,7 +60,7 @@ public enum CandlestickPatternDetector {
                     name: "Bearish Engulfing",
                     group: .candlestick,
                     direction: .short,
-                    weight: weights[id] ?? 1.05,
+                    weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .candleBearishEngulfing),
                     historicalWinRate: 0.57,
                     detail: "Closed bearish body engulfed prior bullish candle (\(String(format: "%.2f", current.bodySize / atr))x ATR)."
                 )
@@ -81,7 +81,7 @@ public enum CandlestickPatternDetector {
                         name: "Hammer / Pin Rejection",
                         group: .candlestick,
                         direction: .long,
-                        weight: weights[id] ?? 1.10,
+                        weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .candleHammerPinbar),
                         historicalWinRate: 0.58,
                         detail: "Strong lower rejection wick (\(Int((lowerWickRatio * 100).rounded()))% of bar range) signaling demand absorption."
                     )
@@ -94,7 +94,7 @@ public enum CandlestickPatternDetector {
                         name: "Shooting Star Rejection",
                         group: .candlestick,
                         direction: .short,
-                        weight: weights[id] ?? 1.10,
+                        weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .candleShootingStar),
                         historicalWinRate: 0.58,
                         detail: "Strong upper rejection wick (\(Int((upperWickRatio * 100).rounded()))% of bar range) signaling supply absorption."
                     )
@@ -112,7 +112,7 @@ public enum CandlestickPatternDetector {
                     name: dir == .long ? "Bullish Displacement" : "Bearish Displacement",
                     group: .candlestick,
                     direction: dir,
-                    weight: weights[id] ?? 1.0,
+                    weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .candleDisplacement),
                     historicalWinRate: 0.56,
                     detail: "Institutional displacement bar (\(String(format: "%.2f", current.rangeSize / atr))x ATR, \(Int((current.bodySize / current.rangeSize * 100).rounded()))% body)."
                 )
@@ -130,7 +130,7 @@ public enum CandlestickPatternDetector {
                         name: "Inside Bar Breakout",
                         group: .candlestick,
                         direction: .long,
-                        weight: weights[id] ?? 0.95,
+                        weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .candleInsideBreakout),
                         historicalWinRate: 0.55,
                         detail: "Closed above mother-bar high after compression inside bar."
                     )
@@ -143,7 +143,7 @@ public enum CandlestickPatternDetector {
                         name: "Inside Bar Breakdown",
                         group: .candlestick,
                         direction: .short,
-                        weight: weights[id] ?? 0.95,
+                        weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .candleInsideBreakout),
                         historicalWinRate: 0.55,
                         detail: "Closed below mother-bar low after compression inside bar."
                     )

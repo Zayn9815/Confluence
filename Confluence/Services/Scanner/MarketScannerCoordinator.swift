@@ -1070,10 +1070,8 @@ public final class MarketScannerCoordinator {
                         if let swapId = asset.okxSwapInstId {
                             let oiPeriod = (entryTF == .d1) ? "1Dutc" : (entryTF == .h4 ? "4H" : "1H")
                             okxSnap = try? await okxPositioning.fetchSnapshot(instId: swapId, period: oiPeriod)
-                        } else if let code = asset.cftcContractCode,
-                                  let dsRaw = asset.cftcDataset,
-                                  let ds = CFTCDatasetKind(rawValue: dsRaw) {
-                            cotRecords = (try? await cftcCOT.records(for: code, dataset: ds)) ?? []
+                        } else if let code = asset.cftcContractCode {
+                            cotRecords = (try? await cftcCOT.records(for: code)) ?? []
                         }
                     }
 
@@ -1424,10 +1422,8 @@ public final class MarketScannerCoordinator {
             if let swapId = asset.okxSwapInstId {
                 let oiPeriod = (entryTF == .d1) ? "1Dutc" : (entryTF == .h4 ? "4H" : "1H")
                 okxSnap = try? await okxPositioning.fetchSnapshot(instId: swapId, period: oiPeriod)
-            } else if let code = asset.cftcContractCode,
-                      let dsRaw = asset.cftcDataset,
-                      let ds = CFTCDatasetKind(rawValue: dsRaw) {
-                cotRecords = (try? await cftcCOT.records(for: code, dataset: ds)) ?? []
+            } else if let code = asset.cftcContractCode {
+                cotRecords = (try? await cftcCOT.records(for: code)) ?? []
             }
         }
 
@@ -1681,6 +1677,7 @@ public final class MarketScannerCoordinator {
             case .auto: pref = settings.payload.cryptoPrimaryExchange
             case .binanceVision: pref = .binanceVision
             case .okx: pref = .okx
+            case .bybit: pref = .bybit
             case .kraken: pref = .kraken
             case .twelveData: pref = .twelveData
             default: pref = .auto
@@ -1831,7 +1828,7 @@ public final class MarketScannerCoordinator {
         // 4. CFTC COT Socrata JSON
         let cotStart = Date()
         do {
-            let recs = try await cftcCOT.records(for: "088691", dataset: .disaggregatedFuturesOnly, forceRefresh: true)
+            let recs = try await cftcCOT.records(for: "088691", forceRefresh: true)
             let ms = Date().timeIntervalSince(cotStart) * 1000
             results.append(FeedHealthEntry(name: "CFTC COT Socrata JSON", healthy: !recs.isEmpty, latencyMs: ms, detail: "\(recs.count) weekly reports"))
         } catch {

@@ -158,8 +158,8 @@ private struct PreparedMultiPaneSlice {
 public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
     public let candles: [Candle]
     public let formingCandle: Candle?
-    public let liveTick: LiveTick?
     public let overlayModel: ChartSignalOverlayModel
+    public let replayMarkers: [ChartReplayMarker]
     public let timeframe: Timeframe
     public let pricePrecision: ChartPricePrecision
     public let palette: ConfluencePalette
@@ -196,8 +196,8 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
     public init(
         candles: [Candle],
         formingCandle: Candle?,
-        liveTick: LiveTick?,
         overlayModel: ChartSignalOverlayModel,
+        replayMarkers: [ChartReplayMarker] = [],
         timeframe: Timeframe,
         pricePrecision: ChartPricePrecision,
         palette: ConfluencePalette,
@@ -207,8 +207,8 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
     ) {
         self.candles = candles
         self.formingCandle = formingCandle
-        self.liveTick = liveTick
         self.overlayModel = overlayModel
+        self.replayMarkers = replayMarkers
         self.timeframe = timeframe
         self.pricePrecision = pricePrecision
         self.palette = palette
@@ -462,6 +462,39 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
                         if let lp = overlayModel.livePrice {
                             let liveColor = lp >= refClose ? palette.longEmerald : palette.shortCrimson
                             drawLevel(lp, label: "LIVE", color: liveColor, dash: [2, 2])
+                        }
+
+                        // 7b. Trade Replay Entry / Exit Markers
+                        for marker in replayMarkers {
+                            if let idx = visibleSlice.firstIndex(where: { abs($0.openTimeEpochSeconds - marker.timeEpochSeconds) < 1.0 }) {
+                                let bar = visibleSlice[idx]
+                                let cx = (CGFloat(idx) + 0.5) * stepX
+                                let markerColor = Color(hex: marker.colorHex)
+                                let isAbove = (marker.position == .aboveBar)
+                                let cy = isAbove
+                                    ? max(12.0, yFor(bar.high) - 10.0)
+                                    : min(pricePlotHeight - 12.0, yFor(bar.low) + 10.0)
+
+                                var pin = Path()
+                                if isAbove {
+                                    pin.move(to: CGPoint(x: cx, y: cy + 5))
+                                    pin.addLine(to: CGPoint(x: cx - 4, y: cy - 2))
+                                    pin.addLine(to: CGPoint(x: cx + 4, y: cy - 2))
+                                    pin.closeSubpath()
+                                } else {
+                                    pin.move(to: CGPoint(x: cx, y: cy - 5))
+                                    pin.addLine(to: CGPoint(x: cx - 4, y: cy + 2))
+                                    pin.addLine(to: CGPoint(x: cx + 4, y: cy + 2))
+                                    pin.closeSubpath()
+                                }
+                                context.fill(pin, with: .color(markerColor))
+
+                                let labelY = isAbove ? max(7.0, cy - 9.0) : min(pricePlotHeight - 7.0, cy + 9.0)
+                                let markerText = Text(marker.text)
+                                    .font(.system(size: 8.5, weight: .bold))
+                                    .foregroundStyle(markerColor)
+                                context.draw(markerText, at: CGPoint(x: cx, y: labelY), anchor: .center)
+                            }
                         }
 
                         // 8. Crosshair Guide

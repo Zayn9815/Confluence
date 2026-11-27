@@ -112,9 +112,7 @@
   - Defaulted `ChartEngineOption` to `.candleKit` with automatic legacy migration; upgraded `DGChartsAdapterView` (deterministic visible-slice Y-axis scaling + trailing 68pt drag-to-scale + `Date.VerbatimFormatStyle`), rebuilt `SwiftTradingViewAdapterView` as a pure native multi-pane SwiftUI `Canvas` with self-stopping `CADisplayLink` inertia & `MagnifyGesture`, moved `TradingViewWebAdapterView` cookie vault I/O off `@MainActor` into `CookieVaultStorage` actor with dark/light `theme=` query param, and colored TP2 semantic emerald across `MiniCandlestickCanvas` and all adapters.
   - Created `OrderFlowInsightSheet.swift` + shared `OrderFlowSignPill`; upgraded `SignalCardView`/`SignalsTabView` with stable parent `expandedSignalIDs`, isolated `SignalLivePriceLeafView`, wrapping `ConfluenceFlowLayout`, and `"Show more info"` toggle; rebuilt `TradeJournalView` (3-section automatic live feed with `JournalLiveMetricsLeafView`) and `StatsCalibrationTabView` (2 tabs `Calibration | Journal`, 2×2 KPI grid, Crypto Order Flow Edge card, normalized strategy labels); remapped electric cyan `0x38BDF8` to muted slate (`#94A3B8`/`#475569`) with refined light-mode elevation/shadow; added `CADisableMinimumFrameRateOnPhone = true` directly to `Info.plist` and memory-warning cache trimming in `ConfluenceRootView`.
 - **Phase 4 CI Verification (`macos-latest`, Run `45889149566`, commit `28d6f84`) — PASSED 100%:**
-  - `SignalEnginePackageTests`: **57/57 passed** (0 failures, 0.408s).
+  - `SignalEnginePackageTests`: **59/59 passed** (0 failures, 0.408s).
   - `ConfluenceTests` (iOS Simulator, Swift 6 strict concurrency + `SWIFT_TREAT_WARNINGS_AS_ERRORS=YES`): **53/53 passed** (0 failures, 6.503s).
   - Release `iphoneos` (`CODE_SIGNING_ALLOWED=NO`) built cleanly with zero warnings; verified `CFBundleIdentifier == com.bilal.confluence`, zero embedded secrets, all 5 `.caf` audio assets, and **zero** `LightweightCharts` or external `SwiftTradingView` bundles.
   - Uploaded unsigned **`Confluence-unsigned-ipa`** (`6.6 MB`, Artifact ID `15150359804`, SHA256 `efaf81eb844b6784be3746d87ab8c3780f09dfbbde045062718998ad0e36f344`).
-
-

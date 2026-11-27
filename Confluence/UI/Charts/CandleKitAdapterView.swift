@@ -12,7 +12,6 @@ import SignalEngine
 public struct CandleKitAdapterView: ConfluenceChartAdapter {
     public let candles: [EngineCandle]
     public let formingCandle: EngineCandle?
-    public let liveTick: LiveTick?
     public let overlayModel: ChartSignalOverlayModel
     public let timeframe: Timeframe
     public let pricePrecision: ChartPricePrecision
@@ -26,7 +25,6 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
     public init(
         candles: [EngineCandle],
         formingCandle: EngineCandle?,
-        liveTick: LiveTick?,
         overlayModel: ChartSignalOverlayModel,
         timeframe: Timeframe,
         pricePrecision: ChartPricePrecision,
@@ -37,7 +35,6 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
     ) {
         self.candles = candles
         self.formingCandle = formingCandle
-        self.liveTick = liveTick
         self.overlayModel = overlayModel
         self.timeframe = timeframe
         self.pricePrecision = pricePrecision
@@ -125,17 +122,16 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
         let series = mappedCandles
         ZStack(alignment: .topLeading) {
             if series.isEmpty {
-                NativeCanvasFallbackChartView(
-                    candles: candles,
-                    formingCandle: formingCandle,
-                    overlayModel: overlayModel,
-                    timeframe: timeframe,
-                    pricePrecision: pricePrecision,
-                    palette: palette,
-                    showVolumePane: true,
-                    resetTrigger: resetTrigger,
-                    onCrosshairChange: onCrosshairChange
-                )
+                VStack(spacing: 8) {
+                    Image(systemName: "chart.bar.xaxis")
+                        .font(.title3)
+                        .foregroundStyle(palette.tertiaryInk)
+                    Text("No closed candles available")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(palette.secondaryInk)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(palette.canvas)
             } else {
                 let anchorDate = series.last?.time ?? Date()
                 let drawings = buildHorizontalOverlayDrawings(anchorDate: anchorDate)

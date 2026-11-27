@@ -3,7 +3,7 @@ import Foundation
 @testable import Confluence
 import SignalEngine
 
-final class StrategyToggleAndPopoverTests: XCTestCase {
+final class StrategyToggleAndGuardTests: XCTestCase {
 
     func testFreshInstallDefaultsToProvenWinners() throws {
         let emptyJSON = Data("{}".utf8)

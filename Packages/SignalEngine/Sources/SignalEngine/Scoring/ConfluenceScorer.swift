@@ -228,35 +228,14 @@ public enum ConfluenceScorer {
             enabled.contains(pos.provenance == .okxFundingOI ? .positioningOkx : .positioningCot) ? pos : nil
         }
 
-        // Gather all enabled strategy contributions
+        // Gather all enabled strategy contributions (individual `enabledStrategies` is the single source of truth)
         var allContributions: [StrategyContribution] = []
-        if config.enabledStrategyGroups.contains(.ictSmc) {
-            allContributions.append(contentsOf: ict.contributions)
-        }
-        if config.enabledStrategyGroups.contains(.candlestick) {
-            allContributions.append(contentsOf: candlestickContributions)
-        }
-        if config.enabledStrategyGroups.contains(.trendMomentum) {
-            allContributions.append(contentsOf: momentum.contributions)
-        }
+        allContributions.append(contentsOf: ict.contributions)
+        allContributions.append(contentsOf: candlestickContributions)
+        allContributions.append(contentsOf: momentum.contributions)
 
-        // Behavioral Trap contributions
-        let trapsAllowed: Bool = {
-            guard config.enabledStrategyGroups.contains(.behavioralTrap) else { return false }
-            if config.strategySelectionMode == .custom && !config.selectedStrategyConcepts.isEmpty {
-                return config.selectedStrategyConcepts.contains(.behavioralTraps)
-            }
-            return true
-        }()
-        let positioningAllowed: Bool = {
-            guard config.enabledStrategyGroups.contains(.behavioralTrap) else { return false }
-            if config.strategySelectionMode == .custom && !config.selectedStrategyConcepts.isEmpty {
-                return config.selectedStrategyConcepts.contains(.positioningFlow)
-            }
-            return true
-        }()
-        let effectiveTraps = trapsAllowed ? traps : []
-        let effectivePositioning = positioningAllowed ? positioning : nil
+        let effectiveTraps = traps
+        let effectivePositioning = positioning
         let trapFreshnessBars: Int
         switch timeframe {
         case .m15: trapFreshnessBars = 5
@@ -267,14 +246,18 @@ public enum ConfluenceScorer {
         }
         let actionableTraps = effectiveTraps.filter(\.isActionable)
         let freshTrap = actionableTraps.last(where: { candles.count - 1 - $0.triggerBarIndex <= trapFreshnessBars || $0.state == .returned })
-        if config.enabledStrategyGroups.contains(.behavioralTrap), let trap = freshTrap {
+        if let trap = freshTrap {
+            let trapSID = StrategyID.forTrapKind(trap.triggerKind)
+            let trapID = trapSID?.rawValue ?? "trap_\(trap.triggerKind.rawValue.lowercased().replacingOccurrences(of: " ", with: "_"))"
+            let trapBaseWeight = trapSID.map { defaultBaseWeight(for: $0) } ?? 1.25
+            let trapWeight = trapSID.flatMap { config.historicalReliabilityWeights[$0.rawValue] } ?? trapBaseWeight
             allContributions.append(
                 StrategyContribution(
-                    id: "trap_\(trap.triggerKind.rawValue.lowercased().replacingOccurrences(of: " ", with: "_"))",
+                    id: trapID,
                     name: "\(trap.direction.rawValue) (\(trap.state.rawValue.capitalized))",
                     group: .behavioralTrap,
                     direction: trap.direction.institutionalDirection,
-                    weight: config.historicalReliabilityWeights["trap"] ?? 1.25,
+                    weight: trapWeight,
                     historicalWinRate: 0.61,
                     detail: trap.detail
                 )
@@ -282,16 +265,16 @@ public enum ConfluenceScorer {
         }
 
         // Positioning contribution (OKX Funding/OI or CFTC COT)
-        if config.enabledStrategyGroups.contains(.behavioralTrap),
-           let pos = effectivePositioning,
-           pos.proDirection != .neutral {
+        if let pos = effectivePositioning, pos.proDirection != .neutral {
+            let posSID: StrategyID = (pos.provenance == .okxFundingOI) ? .positioningOkx : .positioningCot
+            let posWeight = config.historicalReliabilityWeights[posSID.rawValue] ?? defaultBaseWeight(for: posSID)
             allContributions.append(
                 StrategyContribution(
-                    id: "positioning_\(pos.provenance == .okxFundingOI ? "okx" : "cot")",
+                    id: posSID.rawValue,
                     name: pos.provenance == .okxFundingOI ? "OKX Pro/OI Flow" : "CFTC COT Smart Money",
                     group: .behavioralTrap,
                     direction: pos.proDirection,
-                    weight: pos.provenance == .okxFundingOI ? 1.10 : 0.90,
+                    weight: posWeight,
                     historicalWinRate: 0.59,
                     detail: pos.summary
                 )
@@ -300,16 +283,18 @@ public enum ConfluenceScorer {
 
         // Macro Surprise catalyst contribution
         var macroAlignedDir: TradeDirection = .neutral
-        if config.enabledStrategyGroups.contains(.macroCatalyst), enabled.contains(.macroSurpriseCatalyst), let imp = macroImpulse {
+        if enabled.contains(.macroSurpriseCatalyst), let imp = macroImpulse {
             macroAlignedDir = MacroPolarityTable.impactDirection(for: asset, currency: imp.currency, stance: imp.netStance)
             if macroAlignedDir != .neutral && !imp.isWhipsawCautionActive {
+                let macroWeight = config.historicalReliabilityWeights[StrategyID.macroSurpriseCatalyst.rawValue]
+                    ?? defaultBaseWeight(for: .macroSurpriseCatalyst)
                 allContributions.append(
                     StrategyContribution(
-                        id: "macro_surprise_catalyst",
+                        id: StrategyID.macroSurpriseCatalyst.rawValue,
                         name: "Macro Surprise Catalyst",
                         group: .macroCatalyst,
                         direction: macroAlignedDir,
-                        weight: 1.20,
+                        weight: macroWeight,
                         historicalWinRate: 0.60,
                         detail: imp.headlineStrip
                     )
@@ -321,20 +306,6 @@ public enum ConfluenceScorer {
         allContributions = allContributions.filter { contrib in
             guard let sid = contrib.strategyID else { return true }
             return enabled.contains(sid)
-        }
-
-        // Apply Custom concept filtering deterministically
-        let activeConcepts: Set<StrategyConcept>
-        switch config.strategySelectionMode {
-        case .defaultAll:
-            activeConcepts = Set(StrategyConcept.allCases)
-        case .custom:
-            activeConcepts = config.selectedStrategyConcepts.isEmpty
-                ? Set(StrategyConcept.allCases)
-                : config.selectedStrategyConcepts
-            allContributions = allContributions.filter { contrib in
-                activeConcepts.contains { $0.matches(contributionId: contrib.id) }
-            }
         }
 
         // Split long vs short independent strategy contributions
@@ -373,7 +344,6 @@ public enum ConfluenceScorer {
             ict: ict,
             htfICT: htfICT,
             atr: momentum.atr14,
-            marketClass: asset.marketClass,
             minimumRiskReward: config.minimumRiskReward,
             mode: config.levelCalculationMode,
             fixedStopLossPercent: config.fixedStopLossPercent,
@@ -429,31 +399,15 @@ public enum ConfluenceScorer {
         // Hard Gate Checks (all enforced in deterministic Swift code)
         var rejectionReasons: [String] = []
         let distinctGroups = Set(aligned.map(\.group))
-        let isCustomMode = (config.strategySelectionMode == .custom)
-        let requiredAlignedCount: Int = isCustomMode
-            ? max(1, min(config.minimumAlignedStrategies, activeConcepts.count))
-            : config.effectiveMinConfluence(configured: max(3, config.minimumAlignedStrategies))
+        let requiredAlignedCount = config.effectiveMinConfluence(configured: max(3, config.minimumAlignedStrategies))
         let enabledGroupCount = Set(enabled.map(\.group)).count
 
-        if config.strategySelectionMode == .custom && config.customStrategyMatchRule == .requireAllSelected {
-            let missingConcepts = activeConcepts.filter { concept in
-                !aligned.contains { concept.matches(contributionId: $0.id) }
-            }
-            if dominantDirection == .neutral || !missingConcepts.isEmpty {
-                let names = missingConcepts.map(\.displayName).sorted().prefix(2).joined(separator: ", ")
-                rejectionReasons.append("Missing required custom strategies (\(missingConcepts.count) unmatched: \(names))")
-            }
-        } else {
-            if dominantDirection == .neutral || aligned.count < requiredAlignedCount {
-                rejectionReasons.append("Only \(aligned.count)/\(requiredAlignedCount) independent strategies aligned")
-            }
-            let selectedGroupCount = Set(activeConcepts.map(\.group)).count
-            let requireTwoGroups = isCustomMode
-                ? (requiredAlignedCount >= 2 && selectedGroupCount >= 2)
-                : (requiredAlignedCount >= 2 && enabledGroupCount >= 2)
-            if requireTwoGroups && distinctGroups.count < 2 && aligned.count >= requiredAlignedCount {
-                rejectionReasons.append("Lacks multi-pillar independence (only \(distinctGroups.count) strategy group)")
-            }
+        if dominantDirection == .neutral || aligned.count < requiredAlignedCount {
+            rejectionReasons.append("Only \(aligned.count)/\(requiredAlignedCount) independent strategies aligned")
+        }
+        let requireTwoGroups = (requiredAlignedCount >= 2 && enabledGroupCount >= 2)
+        if requireTwoGroups && distinctGroups.count < 2 && aligned.count >= requiredAlignedCount {
+            rejectionReasons.append("Lacks multi-pillar independence (only \(distinctGroups.count) strategy group)")
         }
         if confidence < config.minimumConfidencePercent {
             rejectionReasons.append("Confidence \(Int(confidence.rounded()))% below \(Int(config.minimumConfidencePercent.rounded()))% gate")
@@ -527,7 +481,6 @@ public enum ConfluenceScorer {
                 ict: ict,
                 htfICT: htfICT,
                 atr: momentum.atr14,
-                marketClass: asset.marketClass,
                 minimumRiskReward: config.minimumRiskReward,
                 mode: config.levelCalculationMode,
                 fixedStopLossPercent: config.fixedStopLossPercent,

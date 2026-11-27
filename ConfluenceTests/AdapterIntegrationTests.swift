@@ -408,7 +408,7 @@ final class AdapterIntegrationTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PersistedSettingsPayload.self, from: legacyJSON)
         XCTAssertEqual(decoded.appearanceMode, .dark)
         XCTAssertTrue(decoded.usePureBlackAMOLED, "Legacy AMOLED Vault must migrate to usePureBlackAMOLED = true")
-        XCTAssertEqual(decoded.strategySelectionMode, .defaultAll, "Legacy Random Subset must decode safely to .defaultAll")
+        XCTAssertEqual(decoded.enabledStrategies, StrategyID.allSet, "Legacy Random Subset must migrate safely to StrategyID.allSet")
         XCTAssertFalse(decoded.showWeakFilteredSignals, "Weak / Filtered signals must default OFF")
         XCTAssertFalse(decoded.showAdvancedSettings, "Show Advanced Settings must default OFF")
         XCTAssertEqual(decoded.minimumConfidencePercent, 78.0)
@@ -426,6 +426,8 @@ final class AdapterIntegrationTests: XCTestCase {
         XCTAssertFalse(decodedPorcelain.usePureBlackAMOLED)
 
         let settings = AppSettingsStore()
+        let originalPayload = settings.payload
+        defer { settings.payload = originalPayload }
         settings.payload = decoded
         // Toggle Dark (AMOLED) -> Light -> Dark (preserves usePureBlackAMOLED = true!)
         settings.toggleDarkLightMode(currentlyDark: true)
@@ -964,6 +966,8 @@ final class AdapterIntegrationTests: XCTestCase {
     @MainActor
     func testBrokerPriceOffsetDisplayOnlyAndStaleCheck() throws {
         let settings = AppSettingsStore()
+        let originalPayload = settings.payload
+        defer { settings.payload = originalPayload }
         let baseNow: TimeInterval = 1_760_100_000
         let staleOffset = BrokerPriceOffset(offset: 12.5, calibratedAtEpochSeconds: baseNow - 90_000)
         XCTAssertTrue(staleOffset.isStale(nowEpochSeconds: baseNow))
@@ -1010,4 +1014,3 @@ final class AdapterIntegrationTests: XCTestCase {
         XCTAssertEqual(sig.levels?.entryMid ?? 0, 2650.0, accuracy: 1e-9, "Raw signal levels must never be mutated by display offset")
     }
 }
-

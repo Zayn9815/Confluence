@@ -12,4 +12,4 @@ An institutional-grade, strictly read-only native iPhone multi-market analysis t
 
 ## Attribution
 - Developer : Bilal ([GitHub](https://github.com/Zayn9815))
-- Full-screen interactive charts powered by [TradingView Lightweight Charts (LightweightChartsIOS)](https://github.com/tradingview/LightweightChartsIOS) (Apache 2.0).
+- Full-screen interactive charts and UI animations powered by `CandleKit`, `DGCharts`, `Pow`, and `PopupView`.

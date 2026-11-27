@@ -188,7 +188,7 @@ public actor CFTCCOTAdapter {
         }
     }
 
-    public func records(for contractCode: String, dataset: CFTCDatasetKind, forceRefresh: Bool = false) async throws -> [CFTCCOTRecord] {
+    public func records(for contractCode: String, forceRefresh: Bool = false) async throws -> [CFTCCOTRecord] {
         ensureDiskCacheLoaded()
         let shouldRefresh: Bool
         if forceRefresh || memoryCache[contractCode] == nil {

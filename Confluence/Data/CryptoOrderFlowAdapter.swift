@@ -11,7 +11,6 @@ public struct CryptoOrderFlowVenueSymbols: Sendable, Equatable {
     public let bybitLinearSymbol: String
     public let bybitSpotSymbol: String
     public let binanceFuturesSymbol: String
-    public let binanceSpotSymbol: String
 
     private static let thousandMultiplierBases: Set<String> = [
         "PEPE", "SHIB", "FLOKI", "BONK", "LUNC", "XEC", "SATS", "RATS", "CAT", "WHY"
@@ -47,8 +46,7 @@ public struct CryptoOrderFlowVenueSymbols: Sendable, Equatable {
             okxUnderlying: "\(normalizedBase)-USDT",
             bybitLinearSymbol: "\(perpBase)USDT",
             bybitSpotSymbol: "\(normalizedBase)USDT",
-            binanceFuturesSymbol: "\(perpBase)USDT",
-            binanceSpotSymbol: "\(normalizedBase)USDT"
+            binanceFuturesSymbol: "\(perpBase)USDT"
         )
     }
 }

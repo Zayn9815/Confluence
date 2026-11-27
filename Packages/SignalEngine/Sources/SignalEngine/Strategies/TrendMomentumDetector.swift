@@ -96,7 +96,7 @@ public enum TrendMomentumDetector {
                         name: "EMA Stack Pullback",
                         group: .trendMomentum,
                         direction: .long,
-                        weight: weights[id] ?? 1.05,
+                        weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .momentumEmaPullback),
                         historicalWinRate: 0.58,
                         detail: "Bullish EMA(20/50\(e200 != nil ? "/200" : "")) alignment with pullback bounce off EMA-20."
                     )
@@ -109,7 +109,7 @@ public enum TrendMomentumDetector {
                         name: "EMA Stack Pullback",
                         group: .trendMomentum,
                         direction: .short,
-                        weight: weights[id] ?? 1.05,
+                        weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .momentumEmaPullback),
                         historicalWinRate: 0.58,
                         detail: "Bearish EMA(20/50\(e200 != nil ? "/200" : "")) alignment with rejection at EMA-20."
                     )
@@ -160,7 +160,7 @@ public enum TrendMomentumDetector {
                                 name: "Bullish RSI Divergence",
                                 group: .trendMomentum,
                                 direction: .long,
-                                weight: weights[id] ?? 1.0,
+                                weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .momentumRsiDivergence),
                                 historicalWinRate: 0.56,
                                 detail: "Lower price low with higher RSI(14) (\(String(format: "%.1f", priorRSI)) -> \(String(format: "%.1f", currentRSI)))."
                             )
@@ -181,7 +181,7 @@ public enum TrendMomentumDetector {
                                 name: "Bearish RSI Divergence",
                                 group: .trendMomentum,
                                 direction: .short,
-                                weight: weights[id] ?? 1.0,
+                                weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .momentumRsiDivergence),
                                 historicalWinRate: 0.56,
                                 detail: "Higher price high with lower RSI(14) (\(String(format: "%.1f", priorRSI)) -> \(String(format: "%.1f", currentRSI)))."
                             )
@@ -207,7 +207,7 @@ public enum TrendMomentumDetector {
                             name: "ATR Squeeze Breakout",
                             group: .trendMomentum,
                             direction: .long,
-                            weight: weights[id] ?? 1.0,
+                            weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .momentumAtrSqueeze),
                             historicalWinRate: 0.56,
                             detail: "Volatility compression broke upward (\(String(format: "%.2f", lastBar.rangeSize / atr))x ATR bar)."
                         )
@@ -220,7 +220,7 @@ public enum TrendMomentumDetector {
                             name: "ATR Squeeze Breakdown",
                             group: .trendMomentum,
                             direction: .short,
-                            weight: weights[id] ?? 1.0,
+                            weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .momentumAtrSqueeze),
                             historicalWinRate: 0.56,
                             detail: "Volatility compression broke downward (\(String(format: "%.2f", lastBar.rangeSize / atr))x ATR bar)."
                         )
@@ -239,7 +239,7 @@ public enum TrendMomentumDetector {
                     name: "RVOL Confirmation",
                     group: .trendMomentum,
                     direction: dir,
-                    weight: weights[id] ?? 0.90,
+                    weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .momentumRvol),
                     historicalWinRate: 0.55,
                     detail: "Relative volume expanded to \(String(format: "%.2f", rv))x 20-bar average."
                 )

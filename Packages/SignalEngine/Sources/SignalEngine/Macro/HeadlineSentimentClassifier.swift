@@ -63,7 +63,9 @@ public enum HeadlineSentimentClassifier {
         ("GBP/USD", ["pound", "sterling", "boe", "gbp/usd", "gbpusd"]),
         ("USD/JPY", ["yen", "boj", "usd/jpy", "usdjpy"]),
         ("US500", ["s&p 500", "s&p500", "sp500", "wall street", "fed", "fomc", "cpi", "nfp", "powell"]),
-        ("NAS100", ["nasdaq", "tech stocks", "ndx", "nas100", "qqq"]),
+        ("NAS100", ["nasdaq", "tech stocks", "ndx", "nas100"]),
+        ("SPY", ["spy", "spdr s&p", "s&p 500 etf", "s&p 500"]),
+        ("QQQ", ["qqq", "invesco qqq", "nasdaq 100 etf", "nasdaq"]),
         ("AAPL", ["apple", "aapl"]),
         ("NVDA", ["nvidia", "nvda"]),
         ("MSFT", ["microsoft", "msft"])

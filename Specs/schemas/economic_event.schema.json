@@ -8,11 +8,11 @@
   "properties": {
     "semanticKey": { "type": "string" },
     "source": { "enum": ["biquote", "forexFactory"] },
-    "eventId": { "type": ["string", "null"] },
+    "upstreamEventId": { "type": ["string", "null"] },
     "countryCode": { "type": "string" },
     "currency": { "type": "string" },
     "name": { "type": "string" },
-    "canonicalKey": { "type": ["string", "null"] },
+    "canonicalIndicator": { "type": ["string", "null"] },
     "importance": { "enum": ["low", "medium", "high"] },
     "timeMode": { "enum": ["exact", "date", "notime", "tentative"] },
     "scheduledEpochSeconds": { "type": "number" },

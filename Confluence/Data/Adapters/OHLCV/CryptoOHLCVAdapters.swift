@@ -2,19 +2,32 @@ import Foundation
 import SignalEngine
 
 public enum CryptoExchangePreference: String, Codable, Sendable, CaseIterable, Identifiable {
-    case auto = "Auto (Binance -> OKX -> Kraken)"
+    case auto = "Auto (Binance -> OKX -> Bybit -> Kraken)"
     case binanceVision = "Binance Vision"
     case okx = "OKX"
+    case bybit = "Bybit"
     case kraken = "Kraken"
     case twelveData = "Twelve Data"
 
     public var id: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        let raw = (try? decoder.singleValueContainer().decode(String.self)) ?? ""
+        if let exact = Self(rawValue: raw) {
+            self = exact
+        } else if raw == "Auto (Binance -> OKX -> Kraken)" || raw.lowercased().hasPrefix("auto") {
+            self = .auto
+        } else {
+            self = .auto
+        }
+    }
 
     public var shortLabel: String {
         switch self {
         case .auto: return "Auto"
         case .binanceVision: return "Binance"
         case .okx: return "OKX"
+        case .bybit: return "Bybit"
         case .kraken: return "Kraken"
         case .twelveData: return "Twelve Data"
         }
@@ -79,6 +92,8 @@ public struct CryptoOHLCVRouter: Sendable {
             order = [.binanceVision, .okx, .kraken, .bybit]
         case .okx:
             order = [.okx, .binanceVision, .bybit, .kraken]
+        case .bybit:
+            order = [.bybit, .binanceVision, .okx, .kraken]
         case .kraken:
             order = [.kraken, .binanceVision, .okx, .bybit]
         case .twelveData:
@@ -96,6 +111,9 @@ public struct CryptoOHLCVRouter: Sendable {
                 case .okx:
                     result = try await fetchOKX(asset: asset, timeframe: timeframe, limit: limit, endTimeEpochSeconds: endTimeEpochSeconds)
                 case .kraken:
+                    if endTimeEpochSeconds != nil {
+                        continue
+                    }
                     result = try await fetchKraken(asset: asset, timeframe: timeframe)
                 case .bybit:
                     result = try await fetchBybit(asset: asset, timeframe: timeframe, limit: limit, endTimeEpochSeconds: endTimeEpochSeconds)

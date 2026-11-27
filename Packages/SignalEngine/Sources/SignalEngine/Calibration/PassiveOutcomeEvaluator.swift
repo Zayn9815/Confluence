@@ -663,6 +663,7 @@ public enum PassiveOutcomeEvaluator {
         )
 
         var isFilled = false
+        var fillAnchorPrice: Double = lv.entryMid
         var filledAt: TimeInterval? = nil
         var barsWithoutFill = 0
         var hitTP1 = false
@@ -687,6 +688,7 @@ public enum PassiveOutcomeEvaluator {
                         : (bar.open.isFinite && bar.open > orderedHigh && bar.open < lv.stopLoss)
                     if openedStrictlyBehindEntry {
                         let fillAnchor = bar.open
+                        fillAnchorPrice = fillAnchor
                         let denom = max(fillAnchor, Double.leastNormalMagnitude)
                         let riskDist = abs(fillAnchor - lv.stopLoss)
                         if riskDist.isFinite && riskDist > denom * 1e-9 {
@@ -753,20 +755,21 @@ public enum PassiveOutcomeEvaluator {
                 continue
             }
 
-            // Strictly post-fill bars: pessimistic same-bar SL-first resolution
+            // Strictly post-fill bars: pessimistic same-bar SL-first resolution (and post-TP1 breakeven runner lock)
             if signal.direction == .long {
+                let beFloor = max(fillAnchorPrice, lv.stopLoss)
+                if hitTP1 && bar.low <= beFloor {
+                    let netPct = effectiveReward1Pct - costPct
+                    return makeRecord(
+                        status: .hitTP1,
+                        lifecycle: .resolved,
+                        netReturnPercent: netPct,
+                        rMultiple: effectiveRR1 - effectiveCostR,
+                        filledAt: filledAt,
+                        resolvedAt: tp1Time
+                    )
+                }
                 if bar.low <= lv.stopLoss {
-                    if hitTP1 {
-                        let netPct = effectiveReward1Pct - costPct
-                        return makeRecord(
-                            status: .hitTP1,
-                            lifecycle: .resolved,
-                            netReturnPercent: netPct,
-                            rMultiple: effectiveRR1 - effectiveCostR,
-                            filledAt: filledAt,
-                            resolvedAt: tp1Time
-                        )
-                    }
                     let netPct = -(effectiveRiskPct + costPct)
                     return makeRecord(
                         status: .hitSL,
@@ -804,18 +807,19 @@ public enum PassiveOutcomeEvaluator {
                     tp1Time = bar.closeTimeEpochSeconds
                 }
             } else {
+                let beCeiling = min(fillAnchorPrice, lv.stopLoss)
+                if hitTP1 && bar.high >= beCeiling {
+                    let netPct = effectiveReward1Pct - costPct
+                    return makeRecord(
+                        status: .hitTP1,
+                        lifecycle: .resolved,
+                        netReturnPercent: netPct,
+                        rMultiple: effectiveRR1 - effectiveCostR,
+                        filledAt: filledAt,
+                        resolvedAt: tp1Time
+                    )
+                }
                 if bar.high >= lv.stopLoss {
-                    if hitTP1 {
-                        let netPct = effectiveReward1Pct - costPct
-                        return makeRecord(
-                            status: .hitTP1,
-                            lifecycle: .resolved,
-                            netReturnPercent: netPct,
-                            rMultiple: effectiveRR1 - effectiveCostR,
-                            filledAt: filledAt,
-                            resolvedAt: tp1Time
-                        )
-                    }
                     let netPct = -(effectiveRiskPct + costPct)
                     return makeRecord(
                         status: .hitSL,
