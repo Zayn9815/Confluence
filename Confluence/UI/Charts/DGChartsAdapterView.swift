@@ -11,8 +11,8 @@ import SignalEngine
 public struct DGChartsAdapterView: ConfluenceChartAdapter {
     public let candles: [Candle]
     public let formingCandle: Candle?
-    public let liveTick: LiveTick?
     public let overlayModel: ChartSignalOverlayModel
+    public let replayMarkers: [ChartReplayMarker]
     public let timeframe: Timeframe
     public let pricePrecision: ChartPricePrecision
     public let palette: ConfluencePalette
@@ -26,8 +26,8 @@ public struct DGChartsAdapterView: ConfluenceChartAdapter {
     public init(
         candles: [Candle],
         formingCandle: Candle?,
-        liveTick: LiveTick?,
         overlayModel: ChartSignalOverlayModel,
+        replayMarkers: [ChartReplayMarker] = [],
         timeframe: Timeframe,
         pricePrecision: ChartPricePrecision,
         palette: ConfluencePalette,
@@ -37,8 +37,8 @@ public struct DGChartsAdapterView: ConfluenceChartAdapter {
     ) {
         self.candles = candles
         self.formingCandle = formingCandle
-        self.liveTick = liveTick
         self.overlayModel = overlayModel
+        self.replayMarkers = replayMarkers
         self.timeframe = timeframe
         self.pricePrecision = pricePrecision
         self.palette = palette
@@ -53,6 +53,7 @@ public struct DGChartsAdapterView: ConfluenceChartAdapter {
                 candles: candles,
                 formingCandle: formingCandle,
                 overlayModel: overlayModel,
+                replayMarkers: replayMarkers,
                 timeframe: timeframe,
                 pricePrecision: pricePrecision,
                 isDark: isDark,
@@ -141,6 +142,7 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
     let candles: [Candle]
     let formingCandle: Candle?
     let overlayModel: ChartSignalOverlayModel
+    let replayMarkers: [ChartReplayMarker]
     let timeframe: Timeframe
     let pricePrecision: ChartPricePrecision
     let isDark: Bool
@@ -440,6 +442,25 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
                     addLimit(of.askWallPrice, label: "ASK WALL", color: crimsonColor.withAlphaComponent(0.8), dashed: true)
                 }
             }
+
+            let xAxis = chart.xAxis
+            xAxis.removeAllLimitLines()
+            for marker in replayMarkers {
+                if let idx = bars.firstIndex(where: { abs($0.openTimeEpochSeconds - marker.timeEpochSeconds) < 1.0 }) {
+                    let r = CGFloat((marker.colorHex & 0xFF0000) >> 16) / 255.0
+                    let g = CGFloat((marker.colorHex & 0x00FF00) >> 8) / 255.0
+                    let b = CGFloat(marker.colorHex & 0x0000FF) / 255.0
+                    let color = UIColor(red: r, green: g, blue: b, alpha: 0.95)
+                    let line = ChartLimitLine(limit: Double(idx), label: marker.text)
+                    line.lineColor = color
+                    line.lineWidth = 1.2
+                    line.lineDashLengths = [4, 3]
+                    line.valueTextColor = color
+                    line.valueFont = .monospacedDigitSystemFont(ofSize: 9, weight: .bold)
+                    line.labelPosition = (marker.position == .aboveBar) ? .rightTop : .rightBottom
+                    xAxis.addLimitLine(line)
+                }
+            }
         }
 
         let count = bars.count
@@ -469,6 +490,7 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
         let tr = overlayModel.trapPrice.map { String(format: "%.8f", $0) } ?? "n"
         let bw = overlayModel.orderFlowSummary?.bidWallConfirmed == true ? (overlayModel.orderFlowSummary?.bidWallPrice.map { String(format: "%.6f", $0) } ?? "n") : "n"
         let aw = overlayModel.orderFlowSummary?.askWallConfirmed == true ? (overlayModel.orderFlowSummary?.askWallPrice.map { String(format: "%.6f", $0) } ?? "n") : "n"
-        return "\(e)|\(sl)|\(tp1)|\(tp2)|\(tr)|\(bw)|\(aw)|\(pricePrecision.precision)"
+        let rm = replayMarkers.map { "\($0.id):\(Int($0.timeEpochSeconds))" }.joined(separator: ",")
+        return "\(e)|\(sl)|\(tp1)|\(tp2)|\(tr)|\(bw)|\(aw)|\(pricePrecision.precision)|\(rm)"
     }
 }
