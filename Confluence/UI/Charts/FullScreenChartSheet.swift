@@ -145,7 +145,7 @@ public enum TradeReplayMarkerBuilder {
 
 /// Tap-to-open Full-Screen Interactive Chart powered by `ConfluenceChartContainerView`
 /// (`CandleKit`, `DGCharts`, native multi-pane `Swift Trading View`, or persistent `TradingView Web`).
-/// - Auto-fetches 500 bars on open and lazy-loads older history on pan-left (up to 5,000 bars via `HistoryMerge`).
+/// - Auto-fetches 500 bars on open (and supports up to 5,000 merged bars via `HistoryMerge`).
 /// - Plots live forming candles via display-only `LiveCandleAggregator` (never touches `SignalEngine`).
 /// - Includes timeframe bar (`15m | 30m | 1H | 4H | 1D`), Reset view, collapsible Risk strip, and clean read-only chrome.
 public struct FullScreenChartSheet: View {
@@ -463,19 +463,13 @@ public struct FullScreenChartSheet: View {
                         ConfluenceChartContainerView(
                             selectedEngine: activeChartEngine,
                             symbol: symbol,
-                            assetClass: marketClass,
                             closedCandles: session.closedCandles,
                             formingCandle: session.formingCandle,
-                            lastRolledOverCandle: session.lastRolledOverCandle,
-                            liveTick: session.latestLiveTick,
-                            dataSetRevision: session.dataSetRevision,
-                            liveUpdateToken: session.liveUpdateToken,
                             fitRequestToken: session.fitRequestToken,
                             overlayModel: activeOverlayModel,
                             replayMarkers: replayMarkerBuild?.markers ?? [],
                             pricePrecision: prec,
                             timeframe: session.timeframe,
-                            providerTag: activeProviderName,
                             palette: palette,
                             isDark: colorScheme == .dark,
                             tradingViewPreferDesktop: Binding(
@@ -483,10 +477,7 @@ public struct FullScreenChartSheet: View {
                                 set: { newVal in
                                     coordinator?.settings.payload.tradingViewPreferDesktop = newVal
                                 }
-                            ),
-                            onNeedOlderHistory: {
-                                Task { await loadOlderHistoryPage() }
-                            }
+                            )
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -871,30 +862,6 @@ public struct FullScreenChartSheet: View {
                 loadError = error.localizedDescription
             }
             session.failInitialLoad()
-        }
-    }
-
-    private func loadOlderHistoryPage() async {
-        guard let coordinator, !isReplayMode,
-              let oldestOpen = session.oldestOpenTimeEpochSeconds,
-              !session.isLoadingInitial, !session.isLoadingOlder, !session.hasReachedHistoryEnd
-        else { return }
-
-        session.beginOlderPageLoad()
-        do {
-            let res = try await coordinator.fetchChartCandles(
-                symbol: symbol,
-                timeframe: session.timeframe,
-                providerChoice: selectedProvider,
-                limit: 500,
-                endTimeEpochSeconds: oldestOpen - 1.0
-            )
-            session.finishOlderPageLoad(
-                olderCandles: res.candles,
-                serverNowEpochSeconds: Date().timeIntervalSince1970
-            )
-        } catch {
-            session.failOlderPageLoad()
         }
     }
 
