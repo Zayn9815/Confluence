@@ -119,8 +119,6 @@ public struct ConfluencePalette: Sendable {
         )
     }
 
-    public static let porcelain = resolve(colorScheme: .light, usePureBlackAMOLED: false)
-
     public func color(for direction: TradeDirection) -> Color {
         switch direction {
         case .long: return longEmerald

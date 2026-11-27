@@ -46,8 +46,6 @@ public enum HygieneRejectionReason: String, Codable, Sendable, Equatable {
     case insufficientBars
     case staleFeedDuringOpenSession
     case excessiveClockSkew
-    case invalidPriceData
-    case severeGapContinuity
 }
 
 public struct HygieneReport: Codable, Sendable, Equatable {
