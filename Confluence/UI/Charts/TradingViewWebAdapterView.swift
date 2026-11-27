@@ -836,11 +836,8 @@ private struct TradingViewWebContainerView: UIViewRepresentable {
 public struct TradingViewWebAdapterView: View {
     public let symbol: String
     public let timeframe: Timeframe
-    public let overlayModel: ChartSignalOverlayModel
-    public let pricePrecision: ChartPricePrecision
     public let palette: ConfluencePalette
     public let isDark: Bool
-    public let resetTrigger: Int
     @Binding public var preferDesktop: Bool
 
     @AppStorage("tv_web_signin_tip_dismissed") private var isSignInTipDismissed: Bool = false
@@ -852,20 +849,14 @@ public struct TradingViewWebAdapterView: View {
     public init(
         symbol: String,
         timeframe: Timeframe,
-        overlayModel: ChartSignalOverlayModel,
-        pricePrecision: ChartPricePrecision,
         palette: ConfluencePalette,
         isDark: Bool,
-        resetTrigger: Int = 0,
         preferDesktop: Binding<Bool>
     ) {
         self.symbol = symbol
         self.timeframe = timeframe
-        self.overlayModel = overlayModel
-        self.pricePrecision = pricePrecision
         self.palette = palette
         self.isDark = isDark
-        self.resetTrigger = resetTrigger
         self._preferDesktop = preferDesktop
     }
 
