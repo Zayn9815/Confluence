@@ -58,24 +58,30 @@ public struct SignalRiskRewardLadderView: View {
         self.showFullAnchors = showFullAnchors
     }
 
+    private func normalizedPosition(_ price: Double, minP: Double, maxP: Double) -> Double {
+        let span = max(maxP - minP, 1e-9)
+        let raw = (direction == .short)
+            ? (maxP - price) / span
+            : (price - minP) / span
+        return min(1.0, max(0.0, raw))
+    }
+
     public var body: some View {
         let farTarget = levels.isTP2Enabled ? levels.tp2 : levels.tp1
         let minP = min(levels.stopLoss, levels.entryLow, levels.entryHigh, levels.tp1, farTarget)
         let maxP = max(levels.stopLoss, levels.entryLow, levels.entryHigh, levels.tp1, farTarget)
-        let span = max(maxP - minP, 1e-9)
 
-        func norm(_ price: Double) -> Double {
-            let raw = (direction == .short)
-                ? (maxP - price) / span
-                : (price - minP) / span
-            return min(1.0, max(0.0, raw))
-        }
-
-        let slFrac = norm(levels.stopLoss)
-        let entryStart = min(norm(levels.entryLow), norm(levels.entryHigh))
-        let entryEnd = max(norm(levels.entryLow), norm(levels.entryHigh))
-        let tp1Frac = norm(levels.tp1)
-        let tp2Frac = norm(farTarget)
+        let slFrac = normalizedPosition(levels.stopLoss, minP: minP, maxP: maxP)
+        let entryStart = min(
+            normalizedPosition(levels.entryLow, minP: minP, maxP: maxP),
+            normalizedPosition(levels.entryHigh, minP: minP, maxP: maxP)
+        )
+        let entryEnd = max(
+            normalizedPosition(levels.entryLow, minP: minP, maxP: maxP),
+            normalizedPosition(levels.entryHigh, minP: minP, maxP: maxP)
+        )
+        let tp1Frac = normalizedPosition(levels.tp1, minP: minP, maxP: maxP)
+        let tp2Frac = normalizedPosition(farTarget, minP: minP, maxP: maxP)
         let prec = PriceFormatHelper.precision(for: symbol, marketClass: marketClass, referencePrice: levels.entryMid)
 
         VStack(alignment: .leading, spacing: 6) {
