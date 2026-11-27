@@ -255,7 +255,6 @@ final class ScoringAndCalibrationTests: XCTestCase {
             ict: emptyICT,
             htfICT: nil,
             atr: 0.5,
-            marketClass: .crypto,
             minimumRiskReward: 2.0,
             mode: .fixedPercent,
             fixedStopLossPercent: 1.0,
@@ -375,7 +374,7 @@ final class ScoringAndCalibrationTests: XCTestCase {
             efficiencyRatio: 0.65, rollingDrawdownPercent: 0.4, summary: "Trending"
         )
 
-        // Custom mode with 1 selected strategy (`ictFVG`) + Fixed % SL/TP + 60% confidence gate -> fires as Strong Signal
+        // Single enabled strategy (`ictFvg`) + Fixed % SL/TP + 60% confidence gate -> fires as Strong Signal
         var cfg = EngineConfig(
             minimumConfidencePercent: 60.0,
             minimumRiskReward: 2.0,
@@ -383,9 +382,7 @@ final class ScoringAndCalibrationTests: XCTestCase {
             fixedStopLossPercent: 0.5,
             fixedTP1Percent: 1.0,
             minimumAlignedStrategies: 3,
-            strategySelectionMode: .custom,
-            selectedStrategyConcepts: [.ictFVG],
-            customStrategyMatchRule: .requireAllSelected
+            enabledStrategies: [.ictFvg]
         )
         let strongSig = ConfluenceScorer.score(
             asset: asset, timeframe: .h1, htfTimeframe: .h4, candles: [bar], htfBias: .long,
@@ -439,7 +436,6 @@ final class ScoringAndCalibrationTests: XCTestCase {
             ict: ict,
             htfICT: htfICT,
             atr: 45.0,
-            marketClass: .indices,
             minimumRiskReward: 2.0,
             mode: .structureATR,
             enableTP2Target: true,
@@ -1268,4 +1264,3 @@ final class ScoringAndCalibrationTests: XCTestCase {
         XCTAssertTrue(AlertRuleEvaluator.shouldAllowMacroRelease(rules: rules, at: tuesday0800, calendar: utcCal))
     }
 }
-
