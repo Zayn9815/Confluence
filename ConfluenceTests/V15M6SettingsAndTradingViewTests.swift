@@ -120,7 +120,7 @@ final class V15M6SettingsAndTradingViewTests: XCTestCase {
         XCTAssertTrue(html.contains("Track all markets on TradingView"))
     }
 
-    func testBackupSchemaVersionIsV2() {
-        XCTAssertEqual(ConfluenceBackupArchive.currentSchemaVersion, 2)
+    func testBackupSchemaVersionIsV3() {
+        XCTAssertEqual(ConfluenceBackupArchive.currentSchemaVersion, 3)
     }
 }
