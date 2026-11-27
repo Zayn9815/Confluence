@@ -93,14 +93,12 @@ public enum CandleHygieneEngine {
                 continue
             }
 
-            // Enforce honest nil volume on OTC feeds when exchange reports 0 or negative.
+            // Enforce honest nil volume on OTC feeds unconditionally (matching LiveCandleAggregator).
             let cleanVolume: Double?
-            if let v = bar.volume, v.isFinite {
-                if marketClass.isOTCVolumeUnavailable && v <= 0 {
-                    cleanVolume = nil
-                } else {
-                    cleanVolume = max(v, 0.0)
-                }
+            if marketClass.isOTCVolumeUnavailable {
+                cleanVolume = nil
+            } else if let v = bar.volume, v.isFinite {
+                cleanVolume = max(v, 0.0)
             } else {
                 cleanVolume = nil
             }
@@ -269,10 +267,8 @@ public enum CandleHygieneEngine {
                   let last = group.last
             else { continue }
 
-            // Require bucket close elapsed (never mark forming 30m bars as closed);
-            // also verify both constituent 15m slots when still within an active bucket boundary.
-            let hasBothSlots = group.count >= 2
-            guard isClosed && (hasBothSlots || bucketClose <= serverNowEpochSeconds) else { continue }
+            // Require bucket close elapsed (never mark forming 30m bars as closed).
+            guard isClosed else { continue }
 
             let high = group.map(\.high).max() ?? first.high
             let low = group.map(\.low).min() ?? first.low

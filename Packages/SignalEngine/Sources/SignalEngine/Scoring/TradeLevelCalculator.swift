@@ -9,7 +9,6 @@ public enum TradeLevelCalculator {
         ict: ICTAnalysis,
         htfICT: ICTAnalysis?,
         atr: Double,
-        marketClass: MarketClass,
         minimumRiskReward: Double,
         mode: TradeLevelMode = .structureATR,
         fixedStopLossPercent: Double = 1.0,
