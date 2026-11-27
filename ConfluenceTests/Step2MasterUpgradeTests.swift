@@ -93,7 +93,6 @@ final class Step2MasterUpgradeTests: XCTestCase {
             signals: [],
             outcomes: [],
             tradeLedger: [],
-            journalEntries: [],
             trackedJournalEntries: [],
             tvLastChartURL: "https://www.tradingview.com/chart/MyLayout1/?symbol=BINANCE:BTCUSDT&interval=60"
         )

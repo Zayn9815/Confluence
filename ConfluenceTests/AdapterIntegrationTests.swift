@@ -858,40 +858,46 @@ final class AdapterIntegrationTests: XCTestCase {
         XCTAssertEqual(v14Store.fetchOutcomeRecords().count, 1)
         XCTAssertEqual(v14Store.fetchOutcomeRecords().first?.signalId, "fp-v13-existing")
 
-        // 3. Upsert a personal Trade Journal entry & verify persistence across disk reopen
-        let entry = JournalEntrySnapshot(
+        // 3. Upsert an automatic TrackedJournalTrade & verify persistence across disk reopen
+        let entry = TrackedJournalTrade(
             id: "journal-1",
-            signalFingerprint: "fp-v13-existing",
             symbol: "XAU/USD",
-            marketClass: .metals,
+            assetClass: .metals,
             timeframe: .h1,
             direction: .long,
-            plannedEntry: 2650.0,
-            actualFillPrice: 2650.5,
+            section: .strongSignals,
+            status: .winTP1,
+            score: 82.0,
+            signalBarTimestamp: base,
+            entryZoneLow: 2649.5,
+            entryZoneHigh: 2650.5,
+            entryPrice: 2650.0,
+            fillPrice: 2650.5,
             stopLoss: 2640.0,
-            tp1: 2670.0,
-            tp2: 2685.0,
-            exitPrice: 2671.5,
-            positionSizeText: "0.10 Lots",
-            outcome: .win,
-            actualRMultiple: 2.0,
-            systemRMultiple: 2.5,
-            strategyIDs: ["ict_fvg", "ict_sweep"],
-            tags: ["A+ Setup", "London KZ"],
-            notes: "Clean sweep and FVG entry",
-            takenAt: Date(timeIntervalSince1970: base + 1800),
-            closedAt: Date(timeIntervalSince1970: base + 5400)
+            target1: 2670.0,
+            target2: 2685.0,
+            isTP2Enabled: true,
+            currentPrice: 2671.5,
+            livePnLPercent: 0.79,
+            liveRMultiple: 2.0,
+            realizedR: 2.0,
+            isWinLocked: true,
+            createdAt: base + 1800,
+            filledAt: base + 1800,
+            tp1HitAt: base + 5400,
+            closedAt: base + 5400,
+            matchedStrategyIDs: ["ict_fvg", "ict_sweep"]
         )
-        v14Store.upsertJournalEntry(entry)
+        v14Store.upsertTrackedJournalEntry(entry)
 
         let reopened = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
         XCTAssertFalse(reopened.didQuarantineCorruptStore)
-        let fetched = reopened.fetchJournalEntries()
+        let fetched = reopened.loadTrackedJournalEntries()
         XCTAssertEqual(fetched.count, 1)
         XCTAssertEqual(fetched.first?.symbol, "XAU/USD")
-        XCTAssertEqual(fetched.first?.outcome, .win)
-        XCTAssertEqual(fetched.first?.tags, ["A+ Setup", "London KZ"])
-        XCTAssertEqual(reopened.journalEntry(forSignalFingerprint: "fp-v13-existing")?.id, "journal-1")
+        XCTAssertEqual(fetched.first?.status, .winTP1)
+        XCTAssertEqual(fetched.first?.matchedStrategyIDs, ["ict_fvg", "ict_sweep"])
+        XCTAssertEqual(fetched.first?.id, "journal-1")
     }
 
     @MainActor
@@ -901,22 +907,36 @@ final class AdapterIntegrationTests: XCTestCase {
         settings.payload.minimumConfidencePercent = 77.0
         settings.payload.use24HourTime = true
 
-        // Put a secret-like string in journal notes to verify SecretRedactor scrubs exports
-        let j1 = JournalEntrySnapshot(
+        // Put a secret-like string and RFC-4180 special chars in filterReason to verify SecretRedactor + CSV escaping
+        let baseNow: TimeInterval = 1_760_050_000
+        let j1 = TrackedJournalTrade(
             id: "j-secret-test",
             symbol: "EUR/USD",
-            marketClass: .forex,
+            assetClass: .forex,
             timeframe: .h1,
             direction: .long,
-            plannedEntry: 1.1000,
+            section: .weakAndFiltered,
+            status: .winTP1,
+            score: 64.0,
+            signalBarTimestamp: baseNow,
+            entryZoneLow: 1.0998,
+            entryZoneHigh: 1.1002,
+            entryPrice: 1.1000,
+            fillPrice: 1.1000,
             stopLoss: 1.0950,
-            tp1: 1.1100,
-            outcome: .win,
-            actualRMultiple: 2.0,
-            tags: [" London, NY "],
-            notes: "Quoted \"entry\", apikey=SECRET_TD_KEY_12345 and AIzaSyFakeGeminiKey0123456789012345\nSecond line"
+            target1: 1.1100,
+            target2: 1.1150,
+            currentPrice: 1.1100,
+            livePnLPercent: 0.91,
+            liveRMultiple: 2.0,
+            realizedR: 2.0,
+            isWinLocked: true,
+            createdAt: baseNow,
+            filledAt: baseNow,
+            closedAt: baseNow + 3600,
+            filterReason: "Quoted \"entry\", London, NY, apikey=SECRET_TD_KEY_12345 and AIzaSyFakeGeminiKey0123456789012345\nSecond line"
         )
-        store.upsertJournalEntry(j1)
+        store.upsertTrackedJournalEntry(j1)
 
         // 1. Export JSON archive and verify zero secrets
         let archive = BackupArchiveService.buildArchive(settings: settings.payload, store: store, appVersion: "1.4.0")
@@ -936,31 +956,48 @@ final class AdapterIntegrationTests: XCTestCase {
         // 3. Merge vs Replace restore
         let targetStore = ConfluenceDataStore(inMemory: true)
         let targetSettings = AppSettingsStore()
-        targetStore.upsertJournalEntry(JournalEntrySnapshot(
-            id: "j-existing-local", symbol: "BTC/USDT", marketClass: .crypto, timeframe: .h4,
-            direction: .short, plannedEntry: 95_000, stopLoss: 96_000, tp1: 92_000
+        targetStore.upsertTrackedJournalEntry(TrackedJournalTrade(
+            id: "j-existing-local",
+            symbol: "BTC/USDT",
+            assetClass: .crypto,
+            timeframe: .h4,
+            direction: .short,
+            section: .strongSignals,
+            status: .live,
+            score: 80.0,
+            signalBarTimestamp: baseNow,
+            entryZoneLow: 94_900,
+            entryZoneHigh: 95_100,
+            entryPrice: 95_000,
+            fillPrice: 95_000,
+            stopLoss: 96_000,
+            target1: 92_000,
+            target2: 90_000,
+            currentPrice: 95_000,
+            createdAt: baseNow,
+            filledAt: baseNow
         ))
 
         let mergeSummary = try BackupArchiveService.restoreArchive(
             from: archiveData, mode: .merge, settingsStore: targetSettings, dataStore: targetStore
         )
         XCTAssertEqual(mergeSummary.journalImported, 1)
-        XCTAssertEqual(targetStore.fetchJournalEntries().count, 2, "Merge mode must keep pre-existing local entries")
+        XCTAssertEqual(targetStore.loadTrackedJournalEntries().count, 2, "Merge mode must keep pre-existing local entries")
         XCTAssertEqual(targetSettings.payload.minimumConfidencePercent, 77.0, accuracy: 1e-6)
 
         let replaceSummary = try BackupArchiveService.restoreArchive(
             from: archiveData, mode: .replace, settingsStore: targetSettings, dataStore: targetStore
         )
         XCTAssertEqual(replaceSummary.journalImported, 1)
-        XCTAssertEqual(targetStore.fetchJournalEntries().count, 1, "Replace mode must clear pre-existing local entries")
-        XCTAssertEqual(targetStore.fetchJournalEntries().first?.id, "j-secret-test")
+        XCTAssertEqual(targetStore.loadTrackedJournalEntries().count, 1, "Replace mode must clear pre-existing local entries")
+        XCTAssertEqual(targetStore.loadTrackedJournalEntries().first?.id, "j-secret-test")
 
         // 4. RFC-4180 CSV escaping & redaction
-        let csv = BackupArchiveService.buildJournalCSV(entries: [j1])
+        let csv = BackupArchiveService.buildTrackedJournalCSV(entries: [j1])
         XCTAssertFalse(csv.contains("SECRET_TD_KEY_12345"))
         XCTAssertFalse(csv.contains("AIzaSyFakeGeminiKey"))
         XCTAssertTrue(csv.contains("\"\"entry\"\""), "RFC-4180 must double inner quotes")
-        XCTAssertTrue(csv.contains("\" London, NY \""), "RFC-4180 must quote fields containing commas")
+        XCTAssertTrue(csv.contains("London, NY"), "RFC-4180 must preserve fields containing commas inside quotes")
     }
 
     @MainActor

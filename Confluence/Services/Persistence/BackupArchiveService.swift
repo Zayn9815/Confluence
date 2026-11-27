@@ -19,7 +19,6 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
     public let signals: [TradeSignal]
     public let outcomes: [SignalOutcomeRecord]
     public let tradeLedger: [TradeLedgerSnapshot]
-    public let journalEntries: [JournalEntrySnapshot]
     public let trackedJournalEntries: [TrackedJournalTrade]
     /// Last opened TradingView chart URL (never includes raw auth cookies).
     public let tvLastChartURL: String?
@@ -33,7 +32,6 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
         signals: [TradeSignal],
         outcomes: [SignalOutcomeRecord],
         tradeLedger: [TradeLedgerSnapshot],
-        journalEntries: [JournalEntrySnapshot],
         trackedJournalEntries: [TrackedJournalTrade] = [],
         tvLastChartURL: String? = nil
     ) {
@@ -45,14 +43,13 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
         self.signals = signals
         self.outcomes = outcomes
         self.tradeLedger = tradeLedger
-        self.journalEntries = journalEntries
         self.trackedJournalEntries = trackedJournalEntries
         self.tvLastChartURL = tvLastChartURL
     }
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion, exportedAtISO8601, appBundleId, appVersion
-        case settings, signals, outcomes, tradeLedger, journalEntries, trackedJournalEntries, tvLastChartURL
+        case settings, signals, outcomes, tradeLedger, trackedJournalEntries, tvLastChartURL
     }
 
     public init(from decoder: Decoder) throws {
@@ -65,10 +62,9 @@ public struct ConfluenceBackupArchive: Codable, Sendable {
         signals = (try? c.decodeIfPresent([TradeSignal].self, forKey: .signals)) ?? []
         outcomes = (try? c.decodeIfPresent([SignalOutcomeRecord].self, forKey: .outcomes)) ?? []
         tradeLedger = (try? c.decodeIfPresent([TradeLedgerSnapshot].self, forKey: .tradeLedger)) ?? []
-        journalEntries = (try? c.decodeIfPresent([JournalEntrySnapshot].self, forKey: .journalEntries)) ?? []
         trackedJournalEntries = (try? c.decodeIfPresent([TrackedJournalTrade].self, forKey: .trackedJournalEntries)) ?? []
         tvLastChartURL = try? c.decodeIfPresent(String.self, forKey: .tvLastChartURL)
-        // Legacy backups containing a "demoWallet" key decode cleanly with that key safely ignored.
+        // Legacy v1/v2 backups containing "journalEntries" or "demoWallet" keys decode cleanly with those keys safely ignored.
     }
 }
 
@@ -132,7 +128,6 @@ public enum BackupArchiveService {
             signals: store.fetchSignals(limit: 500),
             outcomes: store.fetchOutcomeRecords(),
             tradeLedger: store.fetchTradeLedger(limit: 500),
-            journalEntries: store.fetchJournalEntries(limit: 500),
             trackedJournalEntries: store.loadTrackedJournalEntries(),
             tvLastChartURL: savedTVURL
         )
@@ -204,7 +199,6 @@ public enum BackupArchiveService {
 
         if mode == .replace {
             dataStore.resetCalibrationAndHistory()
-            dataStore.clearJournalEntries()
             dataStore.clearTrackedJournalEntries()
         }
 
@@ -226,9 +220,6 @@ public enum BackupArchiveService {
         for outcome in archive.outcomes {
             dataStore.updateOutcome(outcome)
         }
-        for entry in archive.journalEntries {
-            dataStore.upsertJournalEntry(entry)
-        }
         if !archive.trackedJournalEntries.isEmpty {
             dataStore.upsertTrackedJournalEntries(archive.trackedJournalEntries)
         }
@@ -236,7 +227,7 @@ public enum BackupArchiveService {
         return BackupImportSummary(
             signalsImported: archive.signals.count,
             outcomesImported: archive.outcomes.count,
-            journalImported: archive.trackedJournalEntries.count + archive.journalEntries.count,
+            journalImported: archive.trackedJournalEntries.count,
             settingsRestored: true,
             schemaVersion: archive.schemaVersion
         )
@@ -280,39 +271,6 @@ public enum BackupArchiveService {
                 iso.string(from: t.createdAt),
                 t.exitedAt.map { iso.string(from: $0) } ?? "",
                 t.alignedStrategyIDs.joined(separator: ";")
-            ]
-            lines.append(row.map(csvEscape).joined(separator: ","))
-        }
-        return lines.joined(separator: "\r\n")
-    }
-
-    public static func buildJournalCSV(entries: [JournalEntrySnapshot]) -> String {
-        let iso = ISO8601DateFormatter()
-        var lines: [String] = [
-            "id,signal_fingerprint,symbol,market,timeframe,direction,planned_entry,actual_fill,stop_loss,tp1,tp2,exit_price,position_size,outcome,my_r,system_r,tags,notes,taken_at,closed_at"
-        ]
-        for j in entries {
-            let row: [String] = [
-                j.id,
-                j.signalFingerprint ?? "",
-                j.symbol,
-                j.marketClass.rawValue,
-                j.timeframe.rawValue,
-                j.direction.rawValue,
-                String(format: "%.6f", j.plannedEntry),
-                j.actualFillPrice.map { String(format: "%.6f", $0) } ?? "",
-                String(format: "%.6f", j.stopLoss),
-                String(format: "%.6f", j.tp1),
-                j.tp2.map { String(format: "%.6f", $0) } ?? "",
-                j.exitPrice.map { String(format: "%.6f", $0) } ?? "",
-                j.positionSizeText ?? "",
-                j.outcome.rawValue,
-                j.effectiveRMultiple.map { String(format: "%.3f", $0) } ?? "",
-                j.systemRMultiple.map { String(format: "%.3f", $0) } ?? "",
-                j.tags.joined(separator: ";"),
-                j.notes,
-                iso.string(from: j.takenAt),
-                j.closedAt.map { iso.string(from: $0) } ?? ""
             ]
             lines.append(row.map(csvEscape).joined(separator: ","))
         }

@@ -65,8 +65,6 @@ public final class MarketScannerCoordinator {
     public var strategyBreakdowns: [StrategyDiagnosticBreakdown] = []
     public var tradeLedger: [TradeLedgerSnapshot] = []
     public var trapLogs: [TrapLogSnapshot] = []
-    public var journalEntries: [JournalEntrySnapshot] = []
-    public var journalSummary: JournalSummaryStats = JournalSummaryStats.compute(entries: [], totalSystemStrongSignals: 0)
     public var correlationWarningsByFingerprint: [String: [CorrelationPairWarning]] = [:]
     public var netExposureSummary: NetExposureSummary = NetExposureSummary(exposures: [], concentratedClusters: [], totalStrongSignals: 0)
     public var profileWinRateComparison: ProfileWinRateComparison = WinRateBreakdown.byActiveProfile(records: [], activeProfileKey: "")
@@ -112,11 +110,9 @@ public final class MarketScannerCoordinator {
     public let liveOrderFlowService: LiveOrderFlowService
     public let journalCoordinator: SignalJournalCoordinator
     public var journalSectionStats: [JournalSectionStat] = WinRateBreakdown.byJournalSection(entries: [])
-    public var manualTradeSuggestions: [String: ManualTradeLevelSuggestion] = [:]
     public var originWinRates: [OriginWinRateStat] = WinRateBreakdown.byOrigin(records: [])
     public var strengthBuckets: [StrengthBucketStat] = WinRateBreakdown.byStrengthBucket(records: [])
     public var nextScheduledScanEpochSeconds: TimeInterval? = nil
-    private var dismissedManualSuggestionIds: Set<String> = []
     private var autoScanTask: Task<Void, Never>?
     private var activeScanTask: Task<Void, Never>?
 
@@ -359,12 +355,10 @@ public final class MarketScannerCoordinator {
 
     public func acquireActivePositionsLiveFeed() {
         let trackedSyms = journalCoordinator.openTrackedSymbols
-        let openJournalSyms = journalEntries.filter { $0.outcome == .open }.map(\.symbol)
-        let combined = Array(Set(trackedSyms + openJournalSyms)).sorted()
-        if combined.isEmpty {
+        if trackedSyms.isEmpty {
             livePriceService.release(owner: "positions_monitor")
         } else {
-            livePriceService.acquire(owner: "positions_monitor", symbols: combined)
+            livePriceService.acquire(owner: "positions_monitor", symbols: trackedSyms)
         }
     }
 
@@ -382,50 +376,6 @@ public final class MarketScannerCoordinator {
 
     public func handleLivePriceTick(_ quote: LivePriceQuote) {
         journalCoordinator.enqueueLiveQuote(quote)
-
-        let alerts = TradeMonitor.evaluateManualJournalAlerts(
-            entries: journalEntries,
-            quote: quote,
-            dismissedIds: dismissedManualSuggestionIds
-        )
-        for alert in alerts {
-            manualTradeSuggestions[alert.journalEntryId] = alert
-        }
-    }
-
-    public func applyManualTradeSuggestion(_ suggestion: ManualTradeLevelSuggestion) {
-        guard let existing = journalEntries.first(where: { $0.id == suggestion.journalEntryId }) else { return }
-        let updated = JournalEntrySnapshot(
-            id: existing.id,
-            signalFingerprint: existing.signalFingerprint,
-            symbol: existing.symbol,
-            marketClass: existing.marketClass,
-            timeframe: existing.timeframe,
-            direction: existing.direction,
-            plannedEntry: existing.plannedEntry,
-            actualFillPrice: existing.actualFillPrice,
-            stopLoss: existing.stopLoss,
-            tp1: existing.tp1,
-            tp2: existing.tp2,
-            exitPrice: suggestion.suggestedExitPrice,
-            positionSizeText: existing.positionSizeText,
-            outcome: suggestion.suggestedOutcome,
-            actualRMultiple: suggestion.suggestedRMultiple,
-            systemRMultiple: existing.systemRMultiple,
-            strategyIDs: existing.strategyIDs,
-            tags: existing.tags,
-            notes: existing.notes,
-            takenAt: existing.takenAt,
-            closedAt: Date()
-        )
-        manualTradeSuggestions.removeValue(forKey: suggestion.journalEntryId)
-        saveJournalEntry(updated)
-        acquireActivePositionsLiveFeed()
-    }
-
-    public func dismissManualTradeSuggestion(entryId: String) {
-        dismissedManualSuggestionIds.insert(entryId)
-        manualTradeSuggestions.removeValue(forKey: entryId)
     }
 
     private func wireNotificationRouter() {
@@ -449,7 +399,6 @@ public final class MarketScannerCoordinator {
         self.outcomeRecords = store.fetchOutcomeRecords()
         self.tradeLedger = store.fetchTradeLedger(limit: 300)
         self.trapLogs = store.fetchTrapLogs(limit: 300)
-        self.journalEntries = store.fetchJournalEntries(limit: 500)
         self.journalCoordinator.loadFromStore()
         recomputeCalibration()
         recomputeCorrelations()
@@ -468,15 +417,7 @@ public final class MarketScannerCoordinator {
         }
     }
 
-    // MARK: - Trade Journal, Correlation Awareness, Broker Offsets & Backup/CSV (v1.4)
-
-    public func recomputeJournalSummary() {
-        let strongCount = signals.filter { $0.category == .strongSignal }.count
-        self.journalSummary = JournalSummaryStats.compute(
-            entries: journalEntries,
-            totalSystemStrongSignals: max(strongCount, tradeLedger.count)
-        )
-    }
+    // MARK: - Correlation Awareness, Broker Offsets & Backup/CSV
 
     public func recomputeCorrelations() {
         let activeList: [TradeSignal]
@@ -516,48 +457,6 @@ public final class MarketScannerCoordinator {
         return nil
     }
 
-    public func journalEntry(forSignalFingerprint fingerprint: String) -> JournalEntrySnapshot? {
-        journalEntries.first { $0.signalFingerprint == fingerprint }
-    }
-
-    public func makeJournalDraft(from signal: TradeSignal) -> JournalEntrySnapshot {
-        if let existing = journalEntry(forSignalFingerprint: signal.fingerprint) {
-            return existing
-        }
-        let lv = settings.displayLevels(for: signal) ?? signal.levels
-        let outcomeRec = outcomeBySignalId[signal.fingerprint]
-        return JournalEntrySnapshot(
-            signalFingerprint: signal.fingerprint,
-            symbol: signal.symbol,
-            marketClass: signal.marketClass,
-            timeframe: signal.timeframe,
-            direction: signal.direction,
-            plannedEntry: lv?.entryMid ?? signal.recentCandles.last?.close ?? 0,
-            actualFillPrice: lv?.entryMid,
-            stopLoss: lv?.stopLoss ?? 0,
-            tp1: lv?.tp1 ?? 0,
-            tp2: (lv?.isTP2Enabled == true) ? lv?.tp2 : nil,
-            outcome: .open,
-            systemRMultiple: outcomeRec?.isResolved == true ? outcomeRec?.rMultiple : nil,
-            strategyIDs: signal.alignedStrategies.map(\.id),
-            tags: [signal.regime.badgeLabel, signal.killzone.displayName],
-            notes: "",
-            takenAt: Date()
-        )
-    }
-
-    public func saveJournalEntry(_ entry: JournalEntrySnapshot) {
-        store.upsertJournalEntry(entry)
-        self.journalEntries = store.fetchJournalEntries(limit: 500)
-        recomputeJournalSummary()
-    }
-
-    public func deleteJournalEntry(id: String) {
-        store.deleteJournalEntry(id: id)
-        self.journalEntries = store.fetchJournalEntries(limit: 500)
-        recomputeJournalSummary()
-    }
-
     public func exportBackupArchiveURL() -> URL? {
         let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
         return BackupArchiveService.exportBackupFile(settings: settings.payload, store: store, appVersion: ver)
@@ -592,9 +491,7 @@ public final class MarketScannerCoordinator {
 
     public func exportJournalCSVURL() -> URL? {
         let tracked = journalCoordinator.allEntries
-        let csv = tracked.isEmpty
-            ? BackupArchiveService.buildJournalCSV(entries: journalEntries)
-            : BackupArchiveService.buildTrackedJournalCSV(entries: tracked)
+        let csv = BackupArchiveService.buildTrackedJournalCSV(entries: tracked)
         return BackupArchiveService.writeCSVToTemporaryFile(content: csv, filename: "Confluence_Trade_Journal.csv")
     }
 
@@ -683,7 +580,6 @@ public final class MarketScannerCoordinator {
             activeProfile: activeProfile,
             entryTimeframe: settings.payload.entryTimeframe
         )
-        recomputeJournalSummary()
     }
 
     /// Instant off-main-actor re-evaluation triggered whenever any strategy toggle or Order Flow changes in Settings.
@@ -1289,7 +1185,6 @@ public final class MarketScannerCoordinator {
         self.outcomeRecords = store.fetchOutcomeRecords()
         self.tradeLedger = store.fetchTradeLedger(limit: 300)
         self.trapLogs = store.fetchTrapLogs(limit: 300)
-        self.journalEntries = store.fetchJournalEntries(limit: 500)
         recomputeCalibration()
         recomputeCorrelations()
         self.twelveDataLocalDailyUsed = await twelveData.localDailyUsage()
