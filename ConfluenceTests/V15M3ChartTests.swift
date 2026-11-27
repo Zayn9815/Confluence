@@ -81,9 +81,9 @@ final class V15M3ChartTests: XCTestCase {
         XCTAssertNotNil(forming)
         XCTAssertEqual(forming?.isClosed, false)
         XCTAssertEqual(ctrl.fitRequestToken, initialFitToken)
-        XCTAssertEqual(ctrl.liveUpdateToken, 1)
+        XCTAssertEqual(ctrl.formingCandle?.close, 59_450)
 
-        // Merging older history bumps dataSetRevision WITHOUT bumping fitRequestToken
+        // Merging older history appends bars WITHOUT bumping fitRequestToken
         let older = (0..<10).map { i in
             Candle(
                 openTimeEpochSeconds: base + Double(i) * step,

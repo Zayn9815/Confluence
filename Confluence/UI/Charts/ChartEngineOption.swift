@@ -39,28 +39,6 @@ public enum ChartEngineOption: String, Codable, Sendable, CaseIterable, Identifi
         }
     }
 
-    public var shortBadge: String {
-        switch self {
-        case .candleKit: return "CandleKit"
-        case .dgCharts: return "DGCharts"
-        case .swiftTradingView: return "Swift Trading View"
-        case .tradingViewWeb: return "TradingView Web"
-        }
-    }
-
-    public var subtitle: String {
-        switch self {
-        case .candleKit:
-            return "Native 120Hz SwiftUI Canvas candlestick engine with momentum scroll, order lines, and volume."
-        case .dgCharts:
-            return "Native CoreGraphics candlestick engine with smooth pan/pinch, axis drag-to-scale, and limit lines."
-        case .swiftTradingView:
-            return "Multi-pane native SwiftUI Canvas chart with moving averages, volume pane, and inertia scroll."
-        case .tradingViewWeb:
-            return "Full persistent TradingView web workspace with saved login, Clean Mode, and 1-tap pair sync."
-        }
-    }
-
     public var attributionLabel: String {
         switch self {
         case .candleKit:
@@ -71,16 +49,6 @@ public enum ChartEngineOption: String, Codable, Sendable, CaseIterable, Identifi
             return "Swift Trading View (Multi-Pane)"
         case .tradingViewWeb:
             return "TradingView Full Web"
-        }
-    }
-
-    /// Indicates whether this engine natively draws horizontal price lines on its own price scale.
-    public var supportsNativeOverlayLines: Bool {
-        switch self {
-        case .candleKit, .dgCharts, .swiftTradingView:
-            return true
-        case .tradingViewWeb:
-            return false
         }
     }
 }
@@ -171,7 +139,6 @@ public typealias EngineCandle = Candle
 public protocol ConfluenceChartAdapter: View {
     var candles: [Candle] { get }
     var formingCandle: Candle? { get }
-    var liveTick: LiveTick? { get }
     var overlayModel: ChartSignalOverlayModel { get }
     var timeframe: Timeframe { get }
     var pricePrecision: ChartPricePrecision { get }

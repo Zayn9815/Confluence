@@ -54,14 +54,10 @@ public final class ChartSessionController {
 
     public private(set) var closedCandles: [Candle]
     public private(set) var formingCandle: Candle?
-    public private(set) var lastRolledOverCandle: Candle?
-    public private(set) var latestLiveTick: LiveTick?
     public private(set) var isLoadingInitial: Bool = false
     public private(set) var isLoadingOlder: Bool = false
     public private(set) var hasReachedHistoryEnd: Bool = false
     public private(set) var fitRequestToken: Int = 1
-    public private(set) var liveUpdateToken: Int = 0
-    public private(set) var dataSetRevision: Int = 1
 
     private var aggregator: LiveCandleAggregator
 
@@ -102,7 +98,6 @@ public final class ChartSessionController {
             .sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
         closedCandles = sorted
         formingCandle = nil
-        lastRolledOverCandle = nil
         aggregator = LiveCandleAggregator(
             timeframe: timeframe,
             seed: sorted.last,
@@ -110,22 +105,11 @@ public final class ChartSessionController {
         )
         isLoadingInitial = false
         hasReachedHistoryEnd = sorted.count < 20
-        dataSetRevision += 1
         fitRequestToken += 1
     }
 
     public func failInitialLoad() {
         isLoadingInitial = false
-    }
-
-    public func canPageOlder(visibleFromLogical: Double) -> Bool {
-        ChartPagingPolicy.shouldRequestOlderPage(
-            visibleFromLogical: visibleFromLogical,
-            currentBarCount: closedCandles.count,
-            isLoadingInitial: isLoadingInitial,
-            isLoadingOlder: isLoadingOlder,
-            hasReachedHistoryEnd: hasReachedHistoryEnd
-        )
     }
 
     public func beginOlderPageLoad() {
@@ -145,8 +129,7 @@ public final class ChartSessionController {
         if merged.count <= beforeCount || merged.count >= ChartPagingPolicy.maxLoadedBars {
             hasReachedHistoryEnd = true
         }
-        // Increment dataSetRevision ONLY (do NOT bump fitRequestToken so user scroll stays intact!)
-        dataSetRevision += 1
+        // Do NOT bump fitRequestToken so user scroll stays intact!
     }
 
     public func failOlderPageLoad() {
@@ -157,8 +140,8 @@ public final class ChartSessionController {
         fitRequestToken += 1
     }
 
-    /// Ingests a foreground live quote into the display-only `LiveCandleAggregator`.
-    /// Emits incremental `series.update` via `liveUpdateToken` without calling `fitContent()`.
+    /// Ingests a foreground live quote into the display-only `LiveCandleAggregator`
+    /// without bumping `fitRequestToken`.
     @discardableResult
     public func ingestLiveQuote(_ quote: LivePriceQuote) -> Candle? {
         guard quote.symbol == symbol else { return nil }
@@ -166,13 +149,9 @@ public final class ChartSessionController {
         let update = aggregator.ingest(tick)
         switch update {
         case .formingUpdated(let forming):
-            latestLiveTick = tick
             formingCandle = forming
-            liveUpdateToken += 1
             return forming
         case .rolledOver(let closed, let nextForming):
-            latestLiveTick = tick
-            lastRolledOverCandle = closed
             if let last = closedCandles.last, closed.openTimeEpochSeconds > last.openTimeEpochSeconds {
                 closedCandles.append(closed)
                 if closedCandles.count > ChartPagingPolicy.maxLoadedBars {
@@ -180,7 +159,6 @@ public final class ChartSessionController {
                 }
             }
             formingCandle = nextForming
-            liveUpdateToken += 1
             return nextForming
         case .rejected:
             return nil
