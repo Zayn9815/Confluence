@@ -775,178 +775,479 @@ public final class CrashLogEntry {
     }
 }
 
-// MARK: - Legacy v1.4 Migration-Only Trade Journal @Model Stub (Retired in v2.0 Schema Migration)
+// MARK: - SwiftData VersionedSchema Chain (v1.0..v1.6 -> v2.0) & Staged Migration Plan
 
-/// Migration-only v1.4 table retained in Schema until v2.0 VersionedSchema migration.
-@Model
-public final class JournalEntry {
-    @Attribute(.unique) public var id: String
-    public var signalFingerprint: String?
-    public var symbol: String
-    public var marketRaw: String
-    public var timeframeRaw: String
-    public var directionRaw: String
-    public var plannedEntry: Double
-    public var actualFillPrice: Double?
-    public var stopLoss: Double
-    public var tp1: Double
-    public var tp2: Double?
-    public var exitPrice: Double?
-    public var positionSizeText: String?
-    public var outcomeRaw: String
-    public var actualRMultiple: Double?
-    public var systemRMultiple: Double?
-    public var strategyIDsJSON: Data
-    public var tagsJSON: Data
-    public var notes: String
-    public var takenAt: Date
-    public var closedAt: Date?
+/// Top-level alias pointing the active app & tests at the v2.0 `PersistedSignalRecord` schema.
+public typealias PersistedSignalRecord = ConfluenceSchemaV20.PersistedSignalRecord
 
-    public init(
-        id: String,
-        signalFingerprint: String? = nil,
-        symbol: String,
-        marketRaw: String,
-        timeframeRaw: String,
-        directionRaw: String,
-        plannedEntry: Double,
-        actualFillPrice: Double? = nil,
-        stopLoss: Double,
-        tp1: Double,
-        tp2: Double? = nil,
-        exitPrice: Double? = nil,
-        positionSizeText: String? = nil,
-        outcomeRaw: String = "OPEN",
-        actualRMultiple: Double? = nil,
-        systemRMultiple: Double? = nil,
-        strategyIDsJSON: Data = Data(),
-        tagsJSON: Data = Data(),
-        notes: String = "",
-        takenAt: Date = Date(),
-        closedAt: Date? = nil
-    ) {
-        self.id = id
-        self.signalFingerprint = signalFingerprint
-        self.symbol = symbol
-        self.marketRaw = marketRaw
-        self.timeframeRaw = timeframeRaw
-        self.directionRaw = directionRaw
-        self.plannedEntry = plannedEntry
-        self.actualFillPrice = actualFillPrice
-        self.stopLoss = stopLoss
-        self.tp1 = tp1
-        self.tp2 = tp2
-        self.exitPrice = exitPrice
-        self.positionSizeText = positionSizeText
-        self.outcomeRaw = outcomeRaw
-        self.actualRMultiple = actualRMultiple
-        self.systemRMultiple = systemRMultiple
-        self.strategyIDsJSON = strategyIDsJSON
-        self.tagsJSON = tagsJSON
-        self.notes = notes
-        self.takenAt = takenAt
-        self.closedAt = closedAt
+/// Legacy v1.0 (1-table) schema snapshot for crash-free over-the-top staged migration.
+public enum ConfluenceSchemaV10: VersionedSchema {
+    public static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
+    public static var models: [any PersistentModel.Type] {
+        [
+            ConfluenceSchemaV16.PersistedSignalRecord.self
+        ]
     }
 }
 
-// MARK: - Legacy v1.5 Migration-Only SwiftData @Model Stubs (Retained for Crash-Free SQLite Migration)
-
-/// Migration-only v1.5 table retained in Schema so existing SQLite stores open without quarantine.
-@Model
-public final class DemoWalletRecord {
-    @Attribute(.unique) public var id: String = "primary"
-    public var startingBalanceUSD: Double = 1_000.0
-    public var cashBalanceUSD: Double = 1_000.0
-    public var reservedMarginUSD: Double = 0
-    public var realizedPnLUSD: Double = 0
-    public var totalFeesPaidUSD: Double = 0
-    public var updatedAt: Date = Date()
-
-    public init(
-        id: String = "primary",
-        startingBalanceUSD: Double = 1_000.0,
-        cashBalanceUSD: Double = 1_000.0,
-        reservedMarginUSD: Double = 0,
-        realizedPnLUSD: Double = 0,
-        totalFeesPaidUSD: Double = 0,
-        updatedAt: Date = Date()
-    ) {
-        self.id = id
-        self.startingBalanceUSD = startingBalanceUSD
-        self.cashBalanceUSD = cashBalanceUSD
-        self.reservedMarginUSD = reservedMarginUSD
-        self.realizedPnLUSD = realizedPnLUSD
-        self.totalFeesPaidUSD = totalFeesPaidUSD
-        self.updatedAt = updatedAt
+/// Legacy v1.1 (5-table) schema snapshot for crash-free over-the-top staged migration.
+public enum ConfluenceSchemaV11: VersionedSchema {
+    public static var versionIdentifier: Schema.Version { Schema.Version(1, 1, 0) }
+    public static var models: [any PersistentModel.Type] {
+        [
+            ConfluenceSchemaV16.PersistedSignalRecord.self,
+            StoredNotificationItem.self,
+            DiagnosticLogEntry.self,
+            TrapLogEntry.self,
+            TradeLedgerEntry.self
+        ]
     }
 }
 
-/// Migration-only v1.5 table retained in Schema so existing SQLite stores open without quarantine.
-@Model
-public final class DemoPositionRecord {
-    @Attribute(.unique) public var id: String = ""
-    public var symbol: String = ""
-    public var statusRaw: String = ""
-    public var positionJSON: Data = Data()
-    public var createdAt: Date = Date()
-    public var closedAt: Date? = nil
-    public var activeStrategyProfileKey: String = ""
-    public var enabledStrategyIDsCSV: String = ""
-    public var orderFlowStatus: String = "off"
-
-    public init(
-        id: String,
-        symbol: String,
-        statusRaw: String,
-        positionJSON: Data,
-        createdAt: Date,
-        closedAt: Date? = nil,
-        activeStrategyProfileKey: String = "",
-        enabledStrategyIDsCSV: String = "",
-        orderFlowStatus: String = "off"
-    ) {
-        self.id = id
-        self.symbol = symbol
-        self.statusRaw = statusRaw
-        self.positionJSON = positionJSON
-        self.createdAt = createdAt
-        self.closedAt = closedAt
-        self.activeStrategyProfileKey = activeStrategyProfileKey
-        self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
-        self.orderFlowStatus = orderFlowStatus
+/// Legacy v1.2 (6-table) schema snapshot for crash-free over-the-top staged migration.
+public enum ConfluenceSchemaV12: VersionedSchema {
+    public static var versionIdentifier: Schema.Version { Schema.Version(1, 2, 0) }
+    public static var models: [any PersistentModel.Type] {
+        [
+            ConfluenceSchemaV16.PersistedSignalRecord.self,
+            StoredNotificationItem.self,
+            DiagnosticLogEntry.self,
+            TrapLogEntry.self,
+            TradeLedgerEntry.self,
+            TradeReplayCandleCache.self
+        ]
     }
 }
 
-/// Migration-only v1.5 table retained in Schema so existing SQLite stores open without quarantine.
-@Model
-public final class DemoWalletTransactionRecord {
-    @Attribute(.unique) public var id: String = ""
-    public var timestamp: Date = Date()
-    public var kindRaw: String = ""
-    public var symbol: String? = nil
-    public var positionId: String? = nil
-    public var amountUSD: Double = 0
-    public var balanceAfterUSD: Double = 0
-    public var note: String = ""
+/// Legacy v1.3 (8-table) schema snapshot for crash-free over-the-top staged migration.
+public enum ConfluenceSchemaV13: VersionedSchema {
+    public static var versionIdentifier: Schema.Version { Schema.Version(1, 3, 0) }
+    public static var models: [any PersistentModel.Type] {
+        [
+            ConfluenceSchemaV16.PersistedSignalRecord.self,
+            StoredNotificationItem.self,
+            DiagnosticLogEntry.self,
+            TrapLogEntry.self,
+            TradeLedgerEntry.self,
+            TradeReplayCandleCache.self,
+            PersistedOutcomeRecord.self,
+            CrashLogEntry.self
+        ]
+    }
+}
 
-    public init(
-        id: String,
-        timestamp: Date,
-        kindRaw: String,
-        symbol: String? = nil,
-        positionId: String? = nil,
-        amountUSD: Double,
-        balanceAfterUSD: Double,
-        note: String
-    ) {
-        self.id = id
-        self.timestamp = timestamp
-        self.kindRaw = kindRaw
-        self.symbol = symbol
-        self.positionId = positionId
-        self.amountUSD = amountUSD
-        self.balanceAfterUSD = balanceAfterUSD
-        self.note = note
+/// Legacy v1.4 (9-table) schema snapshot for crash-free over-the-top staged migration.
+public enum ConfluenceSchemaV14: VersionedSchema {
+    public static var versionIdentifier: Schema.Version { Schema.Version(1, 4, 0) }
+    public static var models: [any PersistentModel.Type] {
+        [
+            ConfluenceSchemaV16.PersistedSignalRecord.self,
+            StoredNotificationItem.self,
+            DiagnosticLogEntry.self,
+            TrapLogEntry.self,
+            TradeLedgerEntry.self,
+            TradeReplayCandleCache.self,
+            PersistedOutcomeRecord.self,
+            CrashLogEntry.self,
+            ConfluenceSchemaV16.JournalEntry.self
+        ]
+    }
+}
+
+/// Legacy v1.5 (12-table) schema snapshot for crash-free over-the-top staged migration.
+public enum ConfluenceSchemaV15: VersionedSchema {
+    public static var versionIdentifier: Schema.Version { Schema.Version(1, 5, 0) }
+    public static var models: [any PersistentModel.Type] {
+        [
+            ConfluenceSchemaV16.PersistedSignalRecord.self,
+            StoredNotificationItem.self,
+            DiagnosticLogEntry.self,
+            TrapLogEntry.self,
+            TradeLedgerEntry.self,
+            TradeReplayCandleCache.self,
+            PersistedOutcomeRecord.self,
+            CrashLogEntry.self,
+            ConfluenceSchemaV16.JournalEntry.self,
+            ConfluenceSchemaV16.DemoWalletRecord.self,
+            ConfluenceSchemaV16.DemoPositionRecord.self,
+            ConfluenceSchemaV16.DemoWalletTransactionRecord.self
+        ]
+    }
+}
+
+/// Byte-for-byte v1.6 (13-table) SwiftData schema snapshot capturing all legacy tables
+/// and `PersistedSignalRecord.outcomeJSON` prior to v2.0 retirement.
+public enum ConfluenceSchemaV16: VersionedSchema {
+    public static var versionIdentifier: Schema.Version { Schema.Version(1, 6, 0) }
+
+    public static var models: [any PersistentModel.Type] {
+        [
+            ConfluenceSchemaV16.PersistedSignalRecord.self,
+            StoredNotificationItem.self,
+            DiagnosticLogEntry.self,
+            TrapLogEntry.self,
+            TradeLedgerEntry.self,
+            TradeReplayCandleCache.self,
+            PersistedOutcomeRecord.self,
+            CrashLogEntry.self,
+            ConfluenceSchemaV16.JournalEntry.self,
+            ConfluenceSchemaV16.DemoWalletRecord.self,
+            ConfluenceSchemaV16.DemoPositionRecord.self,
+            ConfluenceSchemaV16.DemoWalletTransactionRecord.self,
+            TrackedSignalJournalEntry.self
+        ]
+    }
+
+    /// v1.0–v1.6 persisted signal model carrying legacy `outcomeJSON: Data?`.
+    @Model
+    public final class PersistedSignalRecord {
+        @Attribute(.unique) public var fingerprint: String
+        public var symbol: String
+        public var directionRaw: String
+        public var categoryRaw: String
+        public var createdAt: Date
+        public var signalJSON: Data
+        public var outcomeJSON: Data?
+        public var activeStrategyProfileKey: String = ""
+        public var enabledStrategyIDsCSV: String = ""
+        public var orderFlowStatus: String = "off"
+
+        public init(
+            fingerprint: String,
+            symbol: String,
+            directionRaw: String,
+            categoryRaw: String,
+            createdAt: Date,
+            signalJSON: Data,
+            outcomeJSON: Data? = nil,
+            activeStrategyProfileKey: String = "",
+            enabledStrategyIDsCSV: String = "",
+            orderFlowStatus: String = "off"
+        ) {
+            self.fingerprint = fingerprint
+            self.symbol = symbol
+            self.directionRaw = directionRaw
+            self.categoryRaw = categoryRaw
+            self.createdAt = createdAt
+            self.signalJSON = signalJSON
+            self.outcomeJSON = outcomeJSON
+            self.activeStrategyProfileKey = activeStrategyProfileKey
+            self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
+            self.orderFlowStatus = orderFlowStatus
+        }
+    }
+
+    /// Legacy v1.4 manual trade journal table (retired in v2.0).
+    @Model
+    public final class JournalEntry {
+        @Attribute(.unique) public var id: String
+        public var signalFingerprint: String?
+        public var symbol: String
+        public var marketRaw: String
+        public var timeframeRaw: String
+        public var directionRaw: String
+        public var plannedEntry: Double
+        public var actualFillPrice: Double?
+        public var stopLoss: Double
+        public var tp1: Double
+        public var tp2: Double?
+        public var exitPrice: Double?
+        public var positionSizeText: String?
+        public var outcomeRaw: String
+        public var actualRMultiple: Double?
+        public var systemRMultiple: Double?
+        public var strategyIDsJSON: Data
+        public var tagsJSON: Data
+        public var notes: String
+        public var takenAt: Date
+        public var closedAt: Date?
+
+        public init(
+            id: String,
+            signalFingerprint: String? = nil,
+            symbol: String,
+            marketRaw: String,
+            timeframeRaw: String,
+            directionRaw: String,
+            plannedEntry: Double,
+            actualFillPrice: Double? = nil,
+            stopLoss: Double,
+            tp1: Double,
+            tp2: Double? = nil,
+            exitPrice: Double? = nil,
+            positionSizeText: String? = nil,
+            outcomeRaw: String = "OPEN",
+            actualRMultiple: Double? = nil,
+            systemRMultiple: Double? = nil,
+            strategyIDsJSON: Data = Data(),
+            tagsJSON: Data = Data(),
+            notes: String = "",
+            takenAt: Date = Date(),
+            closedAt: Date? = nil
+        ) {
+            self.id = id
+            self.signalFingerprint = signalFingerprint
+            self.symbol = symbol
+            self.marketRaw = marketRaw
+            self.timeframeRaw = timeframeRaw
+            self.directionRaw = directionRaw
+            self.plannedEntry = plannedEntry
+            self.actualFillPrice = actualFillPrice
+            self.stopLoss = stopLoss
+            self.tp1 = tp1
+            self.tp2 = tp2
+            self.exitPrice = exitPrice
+            self.positionSizeText = positionSizeText
+            self.outcomeRaw = outcomeRaw
+            self.actualRMultiple = actualRMultiple
+            self.systemRMultiple = systemRMultiple
+            self.strategyIDsJSON = strategyIDsJSON
+            self.tagsJSON = tagsJSON
+            self.notes = notes
+            self.takenAt = takenAt
+            self.closedAt = closedAt
+        }
+    }
+
+    /// Legacy v1.5 Demo Wallet summary table (retired in v2.0).
+    @Model
+    public final class DemoWalletRecord {
+        @Attribute(.unique) public var id: String = "primary"
+        public var startingBalanceUSD: Double = 1_000.0
+        public var cashBalanceUSD: Double = 1_000.0
+        public var reservedMarginUSD: Double = 0
+        public var realizedPnLUSD: Double = 0
+        public var totalFeesPaidUSD: Double = 0
+        public var updatedAt: Date = Date()
+
+        public init(
+            id: String = "primary",
+            startingBalanceUSD: Double = 1_000.0,
+            cashBalanceUSD: Double = 1_000.0,
+            reservedMarginUSD: Double = 0,
+            realizedPnLUSD: Double = 0,
+            totalFeesPaidUSD: Double = 0,
+            updatedAt: Date = Date()
+        ) {
+            self.id = id
+            self.startingBalanceUSD = startingBalanceUSD
+            self.cashBalanceUSD = cashBalanceUSD
+            self.reservedMarginUSD = reservedMarginUSD
+            self.realizedPnLUSD = realizedPnLUSD
+            self.totalFeesPaidUSD = totalFeesPaidUSD
+            self.updatedAt = updatedAt
+        }
+    }
+
+    /// Legacy v1.5 Demo Wallet position table (retired in v2.0).
+    @Model
+    public final class DemoPositionRecord {
+        @Attribute(.unique) public var id: String = ""
+        public var symbol: String = ""
+        public var statusRaw: String = ""
+        public var positionJSON: Data = Data()
+        public var createdAt: Date = Date()
+        public var closedAt: Date? = nil
+        public var activeStrategyProfileKey: String = ""
+        public var enabledStrategyIDsCSV: String = ""
+        public var orderFlowStatus: String = "off"
+
+        public init(
+            id: String,
+            symbol: String,
+            statusRaw: String,
+            positionJSON: Data,
+            createdAt: Date,
+            closedAt: Date? = nil,
+            activeStrategyProfileKey: String = "",
+            enabledStrategyIDsCSV: String = "",
+            orderFlowStatus: String = "off"
+        ) {
+            self.id = id
+            self.symbol = symbol
+            self.statusRaw = statusRaw
+            self.positionJSON = positionJSON
+            self.createdAt = createdAt
+            self.closedAt = closedAt
+            self.activeStrategyProfileKey = activeStrategyProfileKey
+            self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
+            self.orderFlowStatus = orderFlowStatus
+        }
+    }
+
+    /// Legacy v1.5 Demo Wallet transaction ledger table (retired in v2.0).
+    @Model
+    public final class DemoWalletTransactionRecord {
+        @Attribute(.unique) public var id: String = ""
+        public var timestamp: Date = Date()
+        public var kindRaw: String = ""
+        public var symbol: String? = nil
+        public var positionId: String? = nil
+        public var amountUSD: Double = 0
+        public var balanceAfterUSD: Double = 0
+        public var note: String = ""
+
+        public init(
+            id: String,
+            timestamp: Date,
+            kindRaw: String,
+            symbol: String? = nil,
+            positionId: String? = nil,
+            amountUSD: Double,
+            balanceAfterUSD: Double,
+            note: String
+        ) {
+            self.id = id
+            self.timestamp = timestamp
+            self.kindRaw = kindRaw
+            self.symbol = symbol
+            self.positionId = positionId
+            self.amountUSD = amountUSD
+            self.balanceAfterUSD = balanceAfterUSD
+            self.note = note
+        }
+    }
+}
+
+/// Active v2.0 (9-table) SwiftData schema retiring `JournalEntry`, `DemoWalletRecord`,
+/// `DemoPositionRecord`, `DemoWalletTransactionRecord`, and `PersistedSignalRecord.outcomeJSON`.
+public enum ConfluenceSchemaV20: VersionedSchema {
+    public static var versionIdentifier: Schema.Version { Schema.Version(2, 0, 0) }
+
+    public static var models: [any PersistentModel.Type] {
+        [
+            ConfluenceSchemaV20.PersistedSignalRecord.self,
+            StoredNotificationItem.self,
+            DiagnosticLogEntry.self,
+            TrapLogEntry.self,
+            TradeLedgerEntry.self,
+            TradeReplayCandleCache.self,
+            PersistedOutcomeRecord.self,
+            CrashLogEntry.self,
+            TrackedSignalJournalEntry.self
+        ]
+    }
+
+    /// v2.0 persisted signal model (decoupled outcomes live exclusively in `PersistedOutcomeRecord`).
+    @Model
+    public final class PersistedSignalRecord {
+        @Attribute(.unique) public var fingerprint: String
+        public var symbol: String
+        public var directionRaw: String
+        public var categoryRaw: String
+        public var createdAt: Date
+        public var signalJSON: Data
+        public var activeStrategyProfileKey: String = ""
+        public var enabledStrategyIDsCSV: String = ""
+        public var orderFlowStatus: String = "off"
+
+        public init(
+            fingerprint: String,
+            symbol: String,
+            directionRaw: String,
+            categoryRaw: String,
+            createdAt: Date,
+            signalJSON: Data,
+            activeStrategyProfileKey: String = "",
+            enabledStrategyIDsCSV: String = "",
+            orderFlowStatus: String = "off"
+        ) {
+            self.fingerprint = fingerprint
+            self.symbol = symbol
+            self.directionRaw = directionRaw
+            self.categoryRaw = categoryRaw
+            self.createdAt = createdAt
+            self.signalJSON = signalJSON
+            self.activeStrategyProfileKey = activeStrategyProfileKey
+            self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
+            self.orderFlowStatus = orderFlowStatus
+        }
+    }
+}
+
+/// Staged SwiftData migration plan upgrading any legacy v1.0–v1.6 SQLite store cleanly into v2.0
+/// with zero data loss and strict Swift 6 concurrency compliance (no mutable static state).
+public enum ConfluenceMigrationPlan: SchemaMigrationPlan {
+    public static var schemas: [any VersionedSchema.Type] {
+        [
+            ConfluenceSchemaV10.self,
+            ConfluenceSchemaV11.self,
+            ConfluenceSchemaV12.self,
+            ConfluenceSchemaV13.self,
+            ConfluenceSchemaV14.self,
+            ConfluenceSchemaV15.self,
+            ConfluenceSchemaV16.self,
+            ConfluenceSchemaV20.self
+        ]
+    }
+
+    public static var stages: [MigrationStage] {
+        [
+            MigrationStage.lightweight(
+                fromVersion: ConfluenceSchemaV10.self,
+                toVersion: ConfluenceSchemaV11.self
+            ),
+            MigrationStage.lightweight(
+                fromVersion: ConfluenceSchemaV11.self,
+                toVersion: ConfluenceSchemaV12.self
+            ),
+            MigrationStage.lightweight(
+                fromVersion: ConfluenceSchemaV12.self,
+                toVersion: ConfluenceSchemaV13.self
+            ),
+            MigrationStage.lightweight(
+                fromVersion: ConfluenceSchemaV13.self,
+                toVersion: ConfluenceSchemaV14.self
+            ),
+            MigrationStage.lightweight(
+                fromVersion: ConfluenceSchemaV14.self,
+                toVersion: ConfluenceSchemaV15.self
+            ),
+            MigrationStage.lightweight(
+                fromVersion: ConfluenceSchemaV15.self,
+                toVersion: ConfluenceSchemaV16.self
+            ),
+            MigrationStage.custom(
+                fromVersion: ConfluenceSchemaV16.self,
+                toVersion: ConfluenceSchemaV20.self,
+                willMigrate: { context in
+                    try ConfluenceMigrationPlan.backfillPersistedOutcomesIfNeeded(in: context)
+                },
+                didMigrate: nil
+            )
+        ]
+    }
+
+    /// Backfills any embedded pre-v1.3 `PersistedSignalRecord.outcomeJSON` blobs into
+    /// `PersistedOutcomeRecord` before Core Data drops the `outcomeJSON` column in v2.0.
+    public static func backfillPersistedOutcomesIfNeeded(in context: ModelContext) throws {
+        let legacyRows = try context.fetch(FetchDescriptor<ConfluenceSchemaV16.PersistedSignalRecord>())
+        guard !legacyRows.isEmpty else { return }
+
+        let existingOutcomes = try context.fetch(FetchDescriptor<PersistedOutcomeRecord>())
+        var existingOutcomeIDs = Set(existingOutcomes.map(\.signalId))
+
+        let decoder = JSONDecoder()
+        var insertedAny = false
+        for row in legacyRows {
+            guard let data = row.outcomeJSON,
+                  let decoded = try? decoder.decode(SignalOutcomeRecord.self, from: data),
+                  !existingOutcomeIDs.contains(decoded.signalId)
+            else { continue }
+            let resolvedDate = decoded.resolvedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) } ?? row.createdAt
+            context.insert(
+                PersistedOutcomeRecord(
+                    signalId: decoded.signalId,
+                    outcomeJSON: data,
+                    resolvedAt: resolvedDate
+                )
+            )
+            existingOutcomeIDs.insert(decoded.signalId)
+            insertedAny = true
+        }
+        if insertedAny {
+            try context.save()
+        }
     }
 }
 

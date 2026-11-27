@@ -9,7 +9,7 @@ public enum BackupImportMode: String, Codable, Sendable, CaseIterable, Identifia
 }
 
 public struct ConfluenceBackupArchive: Codable, Sendable {
-    public static let currentSchemaVersion = 2
+    public static let currentSchemaVersion = 3
 
     public let schemaVersion: Int
     public let exportedAtISO8601: String

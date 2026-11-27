@@ -173,7 +173,7 @@ final class AdapterIntegrationTests: XCTestCase {
 
         // 1. Create a v1.0-only container (PersistedSignalRecord only) and insert a signal
         do {
-            let v1Schema = Schema([PersistedSignalRecord.self])
+            let v1Schema = Schema([ConfluenceSchemaV16.PersistedSignalRecord.self])
             let v1Config = ModelConfiguration(schema: v1Schema, url: storeURL)
             let v1Container = try ModelContainer(for: v1Schema, configurations: [v1Config])
             let ctx = ModelContext(v1Container)
@@ -194,7 +194,7 @@ final class AdapterIntegrationTests: XCTestCase {
                 psychologyReport: psych, dataProvider: "biquote.io"
             )
             let data = try JSONEncoder().encode(sig)
-            ctx.insert(PersistedSignalRecord(
+            ctx.insert(ConfluenceSchemaV16.PersistedSignalRecord(
                 fingerprint: sig.fingerprint,
                 symbol: sig.symbol,
                 directionRaw: sig.direction.rawValue,
@@ -357,7 +357,7 @@ final class AdapterIntegrationTests: XCTestCase {
         // 1. Seed a v1.1 5-model container
         do {
             let v11Schema = Schema([
-                PersistedSignalRecord.self,
+                ConfluenceSchemaV16.PersistedSignalRecord.self,
                 StoredNotificationItem.self,
                 DiagnosticLogEntry.self,
                 TrapLogEntry.self,
@@ -517,7 +517,7 @@ final class AdapterIntegrationTests: XCTestCase {
         // 1. Seed a v1.2 6-model container with a legacy PersistedSignalRecord carrying outcomeJSON
         do {
             let v12Schema = Schema([
-                PersistedSignalRecord.self,
+                ConfluenceSchemaV16.PersistedSignalRecord.self,
                 StoredNotificationItem.self,
                 DiagnosticLogEntry.self,
                 TrapLogEntry.self,
@@ -527,7 +527,7 @@ final class AdapterIntegrationTests: XCTestCase {
             let v12Config = ModelConfiguration(schema: v12Schema, url: storeURL)
             let v12Container = try ModelContainer(for: v12Schema, configurations: [v12Config])
             let ctx = ModelContext(v12Container)
-            ctx.insert(PersistedSignalRecord(
+            ctx.insert(ConfluenceSchemaV16.PersistedSignalRecord(
                 fingerprint: "fp-legacy-v12",
                 symbol: "NAS100",
                 directionRaw: "short",
@@ -832,7 +832,7 @@ final class AdapterIntegrationTests: XCTestCase {
         // 1. Seed an on-disk v1.3 8-table SwiftData store (without JournalEntry)
         do {
             let v13Schema = Schema([
-                PersistedSignalRecord.self,
+                ConfluenceSchemaV16.PersistedSignalRecord.self,
                 StoredNotificationItem.self,
                 DiagnosticLogEntry.self,
                 TrapLogEntry.self,

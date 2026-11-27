@@ -2,46 +2,6 @@ import Foundation
 import SwiftData
 import SignalEngine
 
-/// v1.0 persisted signal model — kept top-level and structurally unchanged so existing
-/// sideloaded iPhones migrate automatically to v1.1's additive tables with zero data loss.
-@Model
-public final class PersistedSignalRecord {
-    @Attribute(.unique) public var fingerprint: String
-    public var symbol: String
-    public var directionRaw: String
-    public var categoryRaw: String
-    public var createdAt: Date
-    public var signalJSON: Data
-    public var outcomeJSON: Data?
-    public var activeStrategyProfileKey: String = ""
-    public var enabledStrategyIDsCSV: String = ""
-    public var orderFlowStatus: String = "off"
-
-    public init(
-        fingerprint: String,
-        symbol: String,
-        directionRaw: String,
-        categoryRaw: String,
-        createdAt: Date,
-        signalJSON: Data,
-        outcomeJSON: Data? = nil,
-        activeStrategyProfileKey: String = "",
-        enabledStrategyIDsCSV: String = "",
-        orderFlowStatus: String = "off"
-    ) {
-        self.fingerprint = fingerprint
-        self.symbol = symbol
-        self.directionRaw = directionRaw
-        self.categoryRaw = categoryRaw
-        self.createdAt = createdAt
-        self.signalJSON = signalJSON
-        self.outcomeJSON = outcomeJSON
-        self.activeStrategyProfileKey = activeStrategyProfileKey
-        self.enabledStrategyIDsCSV = enabledStrategyIDsCSV
-        self.orderFlowStatus = orderFlowStatus
-    }
-}
-
 public struct CalibrationExportBundle: Codable, Sendable {
     public let exportedAtISO8601: String
     public let appBundleId: String
@@ -62,21 +22,7 @@ public final class ConfluenceDataStore {
     public private(set) var didQuarantineCorruptStore: Bool = false
 
     public init(inMemory: Bool = false, customStoreURL: URL? = nil) {
-        let schema = Schema([
-            PersistedSignalRecord.self,
-            StoredNotificationItem.self,
-            DiagnosticLogEntry.self,
-            TrapLogEntry.self,
-            TradeLedgerEntry.self,
-            TradeReplayCandleCache.self,
-            PersistedOutcomeRecord.self,
-            CrashLogEntry.self,
-            JournalEntry.self,
-            DemoWalletRecord.self,
-            DemoPositionRecord.self,
-            DemoWalletTransactionRecord.self,
-            TrackedSignalJournalEntry.self
-        ])
+        let schema = Schema(versionedSchema: ConfluenceSchemaV20.self)
 
         let config: ModelConfiguration
         if let url = customStoreURL {
@@ -86,11 +32,15 @@ public final class ConfluenceDataStore {
         }
 
         do {
-            self.container = try ModelContainer(for: schema, configurations: [config])
+            self.container = try ModelContainer(
+                for: schema,
+                migrationPlan: ConfluenceMigrationPlan.self,
+                configurations: [config]
+            )
         } catch {
             let nsErr = error as NSError
             let isLikelySchemaOrCorruption =
-                nsErr.domain == NSCocoaErrorDomain && (nsErr.code == 134100 || nsErr.code == 134110 || nsErr.code == 134130 || nsErr.code == 134140 || nsErr.code == 259)
+                nsErr.domain == NSCocoaErrorDomain && (nsErr.code == 134100 || nsErr.code == 134110 || nsErr.code == 134130 || nsErr.code == 134140 || nsErr.code == 134504 || nsErr.code == 259)
                 || nsErr.localizedDescription.lowercased().contains("corrupt")
                 || nsErr.localizedDescription.lowercased().contains("migration")
                 || nsErr.localizedDescription.lowercased().contains("incompatible")
@@ -99,47 +49,31 @@ public final class ConfluenceDataStore {
                 // Quarantine corrupted/incompatible SQLite trio (.store, -wal, -shm) and recreate a clean store
                 Self.quarantineStoreFiles(at: config.url)
                 self.didQuarantineCorruptStore = true
-                if let recovered = try? ModelContainer(for: schema, configurations: [config]) {
+                if let recovered = try? ModelContainer(
+                    for: schema,
+                    migrationPlan: ConfluenceMigrationPlan.self,
+                    configurations: [config]
+                ) {
                     self.container = recovered
                 } else {
                     let fallback = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-                    self.container = try! ModelContainer(for: schema, configurations: [fallback])
+                    self.container = try! ModelContainer(
+                        for: schema,
+                        migrationPlan: ConfluenceMigrationPlan.self,
+                        configurations: [fallback]
+                    )
                 }
             } else {
                 // Transient lock/file-protection error: use safe in-memory fallback without wiping on-disk data
                 let fallback = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-                self.container = try! ModelContainer(for: schema, configurations: [fallback])
+                self.container = try! ModelContainer(
+                    for: schema,
+                    migrationPlan: ConfluenceMigrationPlan.self,
+                    configurations: [fallback]
+                )
             }
         }
         self.context = ModelContext(container)
-        backfillPersistedOutcomesIfNeeded(isCustomOrMemory: inMemory || customStoreURL != nil)
-    }
-
-    private func backfillPersistedOutcomesIfNeeded(isCustomOrMemory: Bool) {
-        let flagKey = "com.bilal.confluence.didBackfillOutcomes.v15"
-        if !isCustomOrMemory && UserDefaults.standard.bool(forKey: flagKey) {
-            return
-        }
-        guard let legacyRows = try? context.fetch(FetchDescriptor<PersistedSignalRecord>()) else { return }
-        let existingOutcomeIDs: Set<String> = Set(
-            ((try? context.fetch(FetchDescriptor<PersistedOutcomeRecord>())) ?? []).map(\.signalId)
-        )
-        var insertedAny = false
-        for row in legacyRows {
-            guard let data = row.outcomeJSON,
-                  let decoded = try? JSONDecoder().decode(SignalOutcomeRecord.self, from: data),
-                  !existingOutcomeIDs.contains(decoded.signalId)
-            else { continue }
-            let resolvedDate = decoded.resolvedAtEpochSeconds.map { Date(timeIntervalSince1970: $0) } ?? row.createdAt
-            context.insert(PersistedOutcomeRecord(signalId: decoded.signalId, outcomeJSON: data, resolvedAt: resolvedDate))
-            insertedAny = true
-        }
-        if insertedAny {
-            try? context.save()
-        }
-        if !isCustomOrMemory {
-            UserDefaults.standard.set(true, forKey: flagKey)
-        }
     }
 
     private static func quarantineStoreFiles(at storeURL: URL) {
@@ -204,14 +138,6 @@ public final class ConfluenceDataStore {
             existingOutcome.resolvedAt = resolvedDate
         } else {
             context.insert(PersistedOutcomeRecord(signalId: fp, outcomeJSON: encoded, resolvedAt: resolvedDate))
-        }
-
-        // Also mirror onto PersistedSignalRecord if still present
-        let descriptor = FetchDescriptor<PersistedSignalRecord>(
-            predicate: #Predicate { $0.fingerprint == fp }
-        )
-        if let existing = try? context.fetch(descriptor).first {
-            existing.outcomeJSON = encoded
         }
 
         let ledgerDesc = FetchDescriptor<TradeLedgerEntry>(
@@ -384,20 +310,6 @@ public final class ConfluenceDataStore {
                 if let decoded = try? JSONDecoder().decode(SignalOutcomeRecord.self, from: row.outcomeJSON) {
                     bySignalId[decoded.signalId] = decoded
                 }
-            }
-        }
-
-        // Legacy fallback merge
-        let legacyDesc = FetchDescriptor<PersistedSignalRecord>(
-            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
-        )
-        if let legacyRows = try? context.fetch(legacyDesc) {
-            for row in legacyRows {
-                guard let data = row.outcomeJSON,
-                      let decoded = try? JSONDecoder().decode(SignalOutcomeRecord.self, from: data),
-                      bySignalId[decoded.signalId] == nil
-                else { continue }
-                bySignalId[decoded.signalId] = decoded
             }
         }
 

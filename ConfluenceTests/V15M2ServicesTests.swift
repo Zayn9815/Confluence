@@ -120,9 +120,26 @@ final class V15M2ServicesTests: XCTestCase {
         let storeURL = dir.appendingPathComponent("confluence_v16.store")
 
         // 1. Seed a 12-table v1.5 on-disk store (including legacy Demo tables, without TrackedSignalJournalEntry)
+        let now: TimeInterval = 1_776_175_200
+        let sampleOutcome = SignalOutcomeRecord(
+            signalId: "fp-v15-keep",
+            symbol: "EUR/USD",
+            marketClass: .forex,
+            category: .strongSignal,
+            direction: .long,
+            predictedProbability: 0.76,
+            status: .hitTP1,
+            netReturnPercent: 0.9,
+            rMultiple: 2.0,
+            strategyIds: ["ict_bos"],
+            hadMacroCatalyst: false,
+            resolvedAtEpochSeconds: now
+        )
+        let outcomeData = try JSONEncoder().encode(sampleOutcome)
+
         do {
             let v15Schema = Schema([
-                PersistedSignalRecord.self,
+                ConfluenceSchemaV16.PersistedSignalRecord.self,
                 StoredNotificationItem.self,
                 DiagnosticLogEntry.self,
                 TrapLogEntry.self,
@@ -130,15 +147,20 @@ final class V15M2ServicesTests: XCTestCase {
                 TradeReplayCandleCache.self,
                 PersistedOutcomeRecord.self,
                 CrashLogEntry.self,
-                JournalEntry.self,
-                DemoWalletRecord.self,
-                DemoPositionRecord.self,
-                DemoWalletTransactionRecord.self
+                ConfluenceSchemaV16.JournalEntry.self,
+                ConfluenceSchemaV16.DemoWalletRecord.self,
+                ConfluenceSchemaV16.DemoPositionRecord.self,
+                ConfluenceSchemaV16.DemoWalletTransactionRecord.self
             ])
             let v15Config = ModelConfiguration(schema: v15Schema, url: storeURL)
             let v15Container = try ModelContainer(for: v15Schema, configurations: [v15Config])
             let ctx = ModelContext(v15Container)
-            ctx.insert(JournalEntry(
+            ctx.insert(PersistedOutcomeRecord(
+                signalId: sampleOutcome.signalId,
+                outcomeJSON: outcomeData,
+                resolvedAt: Date(timeIntervalSince1970: now)
+            ))
+            ctx.insert(ConfluenceSchemaV16.JournalEntry(
                 id: "j-v15-keep",
                 symbol: "EUR/USD",
                 marketRaw: MarketClass.forex.rawValue,
@@ -148,19 +170,16 @@ final class V15M2ServicesTests: XCTestCase {
                 stopLoss: 1.095,
                 tp1: 1.11
             ))
-            ctx.insert(DemoWalletRecord(id: "primary", cashBalanceUSD: 1_250))
+            ctx.insert(ConfluenceSchemaV16.DemoWalletRecord(id: "primary", cashBalanceUSD: 1_250))
             try ctx.save()
         }
 
-        // 2. Reopen with 13-table ConfluenceDataStore -> zero quarantine, existing rows preserved
+        // 2. Reopen with v2.0 ConfluenceDataStore -> zero quarantine, decoupled outcomes preserved & legacy tables retired
         let store = ConfluenceDataStore(inMemory: false, customStoreURL: storeURL)
         XCTAssertFalse(store.didQuarantineCorruptStore)
-        let verifyCtx = ModelContext(store.container)
-        let legacyRows = try verifyCtx.fetch(FetchDescriptor<JournalEntry>())
-        XCTAssertEqual(legacyRows.first?.id, "j-v15-keep")
+        XCTAssertEqual(store.fetchOutcomeRecords().first?.signalId, "fp-v15-keep")
 
         // 3. Persist TrackedJournalTrade and verify round-trip across disk reopen
-        let now: TimeInterval = 1_776_175_200
         let tracked = TrackedJournalTrade(
             id: "tj-disk-1",
             symbol: "BTC/USDT",
@@ -196,7 +215,7 @@ final class V15M2ServicesTests: XCTestCase {
         XCTAssertEqual(loaded.first?.section, .strongSignals)
     }
 
-    // MARK: - Backup v2 Round-Trip + Legacy Archive Import + SecretRedactor Tests
+    // MARK: - Backup v3 Round-Trip + Legacy Archive Import + SecretRedactor Tests
 
     @MainActor
     func testBackupV2RoundTripLegacyV1ImportAndSecretRedactor() throws {
@@ -208,7 +227,7 @@ final class V15M2ServicesTests: XCTestCase {
         XCTAssertTrue(scrubbed.contains("[REDACTED_API_KEY]"))
         XCTAssertTrue(scrubbed.contains("[REDACTED_OPENROUTER_KEY]"))
 
-        // 2. Backup v2 round-trip includes TrackedJournalTrade entries & CSV export
+        // 2. Backup v3 round-trip includes TrackedJournalTrade entries & CSV export
         let store = ConfluenceDataStore(inMemory: true)
         let settings = AppSettingsStore()
         let now: TimeInterval = 1_776_175_200
@@ -243,8 +262,9 @@ final class V15M2ServicesTests: XCTestCase {
         )
         store.upsertTrackedJournalEntry(sampleTracked)
 
-        let archive = BackupArchiveService.buildArchive(settings: settings.payload, store: store, appVersion: "1.5.0")
-        XCTAssertEqual(archive.schemaVersion, 2)
+        let archive = BackupArchiveService.buildArchive(settings: settings.payload, store: store, appVersion: "1.6.0")
+        XCTAssertEqual(archive.schemaVersion, ConfluenceBackupArchive.currentSchemaVersion)
+        XCTAssertEqual(archive.schemaVersion, 3)
         XCTAssertEqual(archive.trackedJournalEntries.count, 1)
         let encoded = try BackupArchiveService.encodeRedactedArchiveData(archive)
 
@@ -256,7 +276,7 @@ final class V15M2ServicesTests: XCTestCase {
             settingsStore: targetSettings,
             dataStore: targetStore
         )
-        XCTAssertEqual(summary.schemaVersion, 2)
+        XCTAssertEqual(summary.schemaVersion, 3)
         XCTAssertEqual(targetStore.loadTrackedJournalEntries().first?.id, "tj-backup-1")
 
         let csv = BackupArchiveService.buildTrackedJournalCSV(entries: [sampleTracked])
