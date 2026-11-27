@@ -623,11 +623,9 @@ public final class LivePriceService {
                 let lastPub = self.lastPublishTimeBySymbol[quote.symbol] ?? 0
                 // Always run trade monitor callback; throttle @Observable dictionary writes to <= 4 Hz per symbol
                 self.onQuoteReceived?(quote)
-                if prev == nil || prev?.price != quote.price || (now - lastPub) >= self.minimumUIQuoteIntervalSeconds {
-                    if (now - lastPub) >= self.minimumUIQuoteIntervalSeconds || prev == nil {
-                        self.lastPublishTimeBySymbol[quote.symbol] = now
-                        self.quotes[quote.symbol] = quote
-                    }
+                if prev == nil || (now - lastPub) >= self.minimumUIQuoteIntervalSeconds {
+                    self.lastPublishTimeBySymbol[quote.symbol] = now
+                    self.quotes[quote.symbol] = quote
                 }
             }
         }
