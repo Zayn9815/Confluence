@@ -85,10 +85,6 @@ public actor TwelveDataAdapter {
         latestQuota
     }
 
-    public func isPlanRestricted(_ rawSymbol: String) -> Bool {
-        planRestrictedSymbols.contains(rawSymbol.uppercased())
-    }
-
     public func fetchCandles(
         asset: AssetDescriptor,
         timeframe: Timeframe,
@@ -297,12 +293,14 @@ public actor TwelveDataAdapter {
         for v in values {
             guard let date = df.date(from: v.datetime) ?? dfDate.date(from: v.datetime),
                   let o = Double(v.open), let h = Double(v.high),
-                  let l = Double(v.low), let c = Double(v.close)
+                  let l = Double(v.low), let c = Double(v.close),
+                  o.isFinite, h.isFinite, l.isFinite, c.isFinite,
+                  o > 0, h > 0, l > 0, c > 0, h >= l
             else { continue }
             let openSec = date.timeIntervalSince1970
             let closeSec = openSec + timeframe.seconds
-            let volRaw = v.volume.flatMap(Double.init)
-            let cleanVol = (marketClass.isOTCVolumeUnavailable && (volRaw ?? 0) <= 0) ? nil : volRaw
+            let volRaw = v.volume.flatMap(Double.init).flatMap { ($0.isFinite && $0 >= 0) ? $0 : nil }
+            let cleanVol: Double? = marketClass.isOTCVolumeUnavailable ? nil : volRaw
             out.append(Candle(
                 openTimeEpochSeconds: openSec,
                 closeTimeEpochSeconds: closeSec,

@@ -26,13 +26,14 @@ public enum ChartProviderChoice: String, Codable, Sendable, CaseIterable, Identi
     case yahooFinance = "Yahoo Finance"
     case binanceVision = "Binance Vision"
     case okx = "OKX"
+    case bybit = "Bybit"
     case kraken = "Kraken"
 
     public var id: String { rawValue }
 
     public static func choices(for marketClass: MarketClass) -> [ChartProviderChoice] {
         if marketClass == .crypto {
-            return [.auto, .binanceVision, .okx, .kraken, .twelveData]
+            return [.auto, .binanceVision, .okx, .bybit, .kraken, .twelveData]
         }
         return [.auto, .twelveData, .biquote, .yahooFinance]
     }
@@ -316,7 +317,7 @@ public struct TradFiOHLCVRouter: Sendable {
             let closeSec = openSec + timeframe.seconds
             let rawVol: Double? = (volumes != nil && i < volumes!.count) ? volumes![i] : nil
             let validVol: Double? = rawVol.flatMap { ($0.isFinite && $0 >= 0) ? $0 : nil }
-            let cleanVol: Double? = (marketClass.isOTCVolumeUnavailable && (validVol ?? 0) <= 0) ? nil : validVol
+            let cleanVol: Double? = marketClass.isOTCVolumeUnavailable ? nil : validVol
             out.append(Candle(
                 openTimeEpochSeconds: openSec,
                 closeTimeEpochSeconds: closeSec,
@@ -358,10 +359,14 @@ public struct TradFiOHLCVRouter: Sendable {
 
         var out: [Candle] = []
         for b in decoded.bars {
-            guard let date = iso.date(from: b.openTime) ?? isoPlain.date(from: b.openTime) else { continue }
+            guard let date = iso.date(from: b.openTime) ?? isoPlain.date(from: b.openTime),
+                  b.open.isFinite, b.high.isFinite, b.low.isFinite, b.close.isFinite,
+                  b.open > 0, b.high > 0, b.low > 0, b.close > 0, b.high >= b.low
+            else { continue }
             let openSec = date.timeIntervalSince1970
             let isClosed = !(b.isOpen ?? false)
-            let vol: Double? = (asset.marketClass.isOTCVolumeUnavailable && (b.volume ?? 0) <= 0) ? nil : b.volume
+            let validVol: Double? = b.volume.flatMap { ($0.isFinite && $0 >= 0) ? $0 : nil }
+            let vol: Double? = asset.marketClass.isOTCVolumeUnavailable ? nil : validVol
             out.append(Candle(
                 openTimeEpochSeconds: openSec,
                 closeTimeEpochSeconds: openSec + timeframe.seconds,
