@@ -28,17 +28,30 @@ public final class LiveOrderFlowService {
     private var focusedEntryPrice: Double?
     private var focusedTP1: Double?
 
+    private struct WallBucketKey: Hashable, Sendable {
+        let isBid: Bool
+        let logBucket: Int64
+
+        init(isBid: Bool, price: Double) {
+            self.isBid = isBid
+            // 2 bps log-scale buckets so sub-cent coins (e.g. PEPE) and BTC never collide or overflow
+            let safePrice = max(price, 1e-12)
+            self.logBucket = Int64((log(safePrice) / log(1.0002)).rounded())
+        }
+    }
+
     private var streamTask: Task<Void, Never>?
-    private var powerModeObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var powerModeObserver: NSObjectProtocol?
     private var isLowPowerMode: Bool = ProcessInfo.processInfo.isLowPowerModeEnabled
     private var lastPublishTime: TimeInterval = 0
+    private var sessionGeneration: UInt64 = 0
 
     // Rolling in-memory live state for the single focused crypto symbol
     private var liveBids: [Double: Double] = [:]
     private var liveAsks: [Double: Double] = [:]
     private var liveTrades: [OrderFlowTrade] = []
     private var liveLiquidations: [OrderFlowLiquidation] = []
-    private var wallFirstSeen: [Int64: TimeInterval] = [:]
+    private var wallFirstSeen: [WallBucketKey: TimeInterval] = [:]
     private var bybitLastSeq: Int64?
 
     private static let wallConfirmationSeconds: TimeInterval = 6.0
@@ -55,6 +68,12 @@ public final class LiveOrderFlowService {
             Task { @MainActor [weak self] in
                 self?.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
             }
+        }
+    }
+
+    deinit {
+        if let observer = powerModeObserver {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 
@@ -121,6 +140,7 @@ public final class LiveOrderFlowService {
     }
 
     public func stopStream(clearState: Bool) {
+        sessionGeneration &+= 1
         streamTask?.cancel()
         streamTask = nil
         isStreaming = false
@@ -152,6 +172,8 @@ public final class LiveOrderFlowService {
             return
         }
 
+        sessionGeneration &+= 1
+        let myGen = sessionGeneration
         activeSymbol = symbol
         let syms = CryptoOrderFlowVenueSymbols.resolve(symbol: symbol)
 
@@ -160,7 +182,7 @@ public final class LiveOrderFlowService {
 
             // 1. Seed immediately with a fast REST snapshot so HUD appears within < 1s
             if let initial = await self.adapter.fetchSnapshot(symbol: symbol, assetClass: .crypto) {
-                if Task.isCancelled { return }
+                guard !Task.isCancelled, self.sessionGeneration == myGen else { return }
                 self.seedBuffers(from: initial)
                 self.publishEvaluation(from: initial, force: true)
             }
@@ -170,15 +192,16 @@ public final class LiveOrderFlowService {
             var venueIndex = 0
             var backoffSeconds: Double = 1.5
 
-            while !Task.isCancelled {
+            while !Task.isCancelled && self.sessionGeneration == myGen {
                 let venue = venues[venueIndex % venues.count]
                 self.activeVenue = venue
                 let didReceiveMessages = await self.runVenueWebSocketSession(
                     venue: venue,
                     symbol: symbol,
-                    venueSymbols: syms
+                    venueSymbols: syms,
+                    generation: myGen
                 )
-                if Task.isCancelled { break }
+                if Task.isCancelled || self.sessionGeneration != myGen { break }
                 self.isStreaming = false
 
                 if didReceiveMessages {
@@ -194,24 +217,41 @@ public final class LiveOrderFlowService {
 
     // MARK: - 3-Venue Live WebSocket Runners
 
+    private func receiveMessage(
+        from ws: URLSessionWebSocketTask,
+        session: URLSession
+    ) async throws -> URLSessionWebSocketTask.Message {
+        try await withTaskCancellationHandler {
+            try await ws.receive()
+        } onCancel: {
+            ws.cancel(with: .normalClosure, reason: nil)
+            session.invalidateAndCancel()
+        }
+    }
+
     private func runVenueWebSocketSession(
         venue: String,
         symbol: String,
-        venueSymbols: CryptoOrderFlowVenueSymbols
+        venueSymbols: CryptoOrderFlowVenueSymbols,
+        generation: UInt64
     ) async -> Bool {
         switch venue {
         case "OKX":
-            return await runOKXSession(symbol: symbol, venueSymbols: venueSymbols)
+            return await runOKXSession(symbol: symbol, venueSymbols: venueSymbols, generation: generation)
         case "Bybit":
-            return await runBybitSession(symbol: symbol, venueSymbols: venueSymbols)
+            return await runBybitSession(symbol: symbol, venueSymbols: venueSymbols, generation: generation)
         case "Binance":
-            return await runBinanceSession(symbol: symbol, venueSymbols: venueSymbols)
+            return await runBinanceSession(symbol: symbol, venueSymbols: venueSymbols, generation: generation)
         default:
             return false
         }
     }
 
-    private func runOKXSession(symbol: String, venueSymbols: CryptoOrderFlowVenueSymbols) async -> Bool {
+    private func runOKXSession(
+        symbol: String,
+        venueSymbols: CryptoOrderFlowVenueSymbols,
+        generation: UInt64
+    ) async -> Bool {
         guard let url = URL(string: "wss://ws.okx.com:8443/ws/v5/public") else { return false }
         let session = URLSession(configuration: .ephemeral)
         let ws = session.webSocketTask(with: url)
@@ -257,8 +297,9 @@ public final class LiveOrderFlowService {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(14))
                 if Task.isCancelled { break }
-                guard let self else { break }
+                guard let self, self.sessionGeneration == generation else { break }
                 if let deep = await self.adapter.fetchDeepBook(symbol: symbol, assetClass: .crypto, venue: "OKX") {
+                    guard !Task.isCancelled, self.sessionGeneration == generation else { break }
                     self.replaceDeepBook(bids: deep.bids, asks: deep.asks)
                 }
             }
@@ -269,9 +310,10 @@ public final class LiveOrderFlowService {
         }
 
         var receivedAny = false
-        while !Task.isCancelled {
+        while !Task.isCancelled && sessionGeneration == generation {
             do {
-                let message = try await ws.receive()
+                let message = try await receiveMessage(from: ws, session: session)
+                guard sessionGeneration == generation else { break }
                 let text: String
                 switch message {
                 case .string(let s): text = s
@@ -291,7 +333,11 @@ public final class LiveOrderFlowService {
         return receivedAny
     }
 
-    private func runBybitSession(symbol: String, venueSymbols: CryptoOrderFlowVenueSymbols) async -> Bool {
+    private func runBybitSession(
+        symbol: String,
+        venueSymbols: CryptoOrderFlowVenueSymbols,
+        generation: UInt64
+    ) async -> Bool {
         guard let url = URL(string: "wss://stream.bybit.com/v5/public/linear") else { return false }
         let session = URLSession(configuration: .ephemeral)
         let ws = session.webSocketTask(with: url)
@@ -335,9 +381,10 @@ public final class LiveOrderFlowService {
 
         bybitLastSeq = nil
         var receivedAny = false
-        while !Task.isCancelled {
+        while !Task.isCancelled && sessionGeneration == generation {
             do {
-                let message = try await ws.receive()
+                let message = try await receiveMessage(from: ws, session: session)
+                guard sessionGeneration == generation else { break }
                 let text: String
                 switch message {
                 case .string(let s): text = s
@@ -347,6 +394,7 @@ public final class LiveOrderFlowService {
                 let result = handleBybitMessage(text)
                 if result.needsResync {
                     if let deep = await adapter.fetchDeepBook(symbol: symbol, assetClass: .crypto, venue: "Bybit") {
+                        guard !Task.isCancelled, sessionGeneration == generation else { break }
                         replaceDeepBook(bids: deep.bids, asks: deep.asks)
                     }
                     bybitLastSeq = nil
@@ -363,7 +411,11 @@ public final class LiveOrderFlowService {
         return receivedAny
     }
 
-    private func runBinanceSession(symbol: String, venueSymbols: CryptoOrderFlowVenueSymbols) async -> Bool {
+    private func runBinanceSession(
+        symbol: String,
+        venueSymbols: CryptoOrderFlowVenueSymbols,
+        generation: UInt64
+    ) async -> Bool {
         let lowerSym = venueSymbols.binanceFuturesSymbol.lowercased()
         guard let url = URL(string: "wss://fstream.binance.com/stream?streams=\(lowerSym)@depth20@500ms/\(lowerSym)@aggTrade/!forceOrder@arr") else {
             return false
@@ -380,10 +432,11 @@ public final class LiveOrderFlowService {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(14))
                 if Task.isCancelled { break }
-                guard let self else { break }
+                guard let self, self.sessionGeneration == generation else { break }
                 // Refresh limit=100 if top-20 span < 25 bps
                 if self.currentBookSpanBps() < 25.0,
                    let deep = await self.adapter.fetchDeepBook(symbol: symbol, assetClass: .crypto, venue: "Binance") {
+                    guard !Task.isCancelled, self.sessionGeneration == generation else { break }
                     self.replaceDeepBook(bids: deep.bids, asks: deep.asks)
                 }
             }
@@ -391,9 +444,10 @@ public final class LiveOrderFlowService {
         defer { deepBookTask.cancel() }
 
         var receivedAny = false
-        while !Task.isCancelled {
+        while !Task.isCancelled && sessionGeneration == generation {
             do {
-                let message = try await ws.receive()
+                let message = try await receiveMessage(from: ws, session: session)
+                guard sessionGeneration == generation else { break }
                 let text: String
                 switch message {
                 case .string(let s): text = s
@@ -612,12 +666,15 @@ public final class LiveOrderFlowService {
 
     private func mergeTopOfBook(bids: [OrderBookLevel], asks: [OrderBookLevel]) {
         guard let minNewBid = bids.map(\.price).min(),
-              let maxNewAsk = asks.map(\.price).max()
+              let maxNewBid = bids.map(\.price).max(),
+              let minNewAsk = asks.map(\.price).min(),
+              let maxNewAsk = asks.map(\.price).max(),
+              maxNewBid < minNewAsk
         else { return }
-        // Refresh the top-of-book window while preserving deeper resting levels from sz=100 REST refresh
-        liveBids = liveBids.filter { $0.key < minNewBid }
+        // Refresh top-of-book window while preserving deeper resting levels and pruning any stale crossed levels
+        liveBids = liveBids.filter { $0.key < minNewBid && $0.key < minNewAsk }
         for b in bids { liveBids[b.price] = b.quantity }
-        liveAsks = liveAsks.filter { $0.key > maxNewAsk }
+        liveAsks = liveAsks.filter { $0.key > maxNewAsk && $0.key > maxNewBid }
         for a in asks { liveAsks[a.price] = a.quantity }
     }
 
@@ -679,9 +736,9 @@ public final class LiveOrderFlowService {
         asks: [OrderBookLevel],
         now: TimeInterval
     ) -> [Double] {
-        var currentWallBuckets: [Int64: Double] = [:]
+        var currentWallBuckets: [WallBucketKey: Double] = [:]
 
-        func scanSide(_ levels: [OrderBookLevel]) {
+        func scanSide(_ levels: [OrderBookLevel], isBid: Bool) {
             guard levels.count >= 3 else { return }
             let sizes = levels.map(\.quantity).sorted()
             let midIdx = sizes.count / 2
@@ -689,13 +746,13 @@ public final class LiveOrderFlowService {
             guard median > 0 else { return }
             let threshold = median * OrderFlowAnalyzer.wallMedianMultipleThreshold
             for lv in levels where lv.quantity >= threshold {
-                let bucket = Int64((lv.price * 10_000.0).rounded())
+                let bucket = WallBucketKey(isBid: isBid, price: lv.price)
                 currentWallBuckets[bucket] = lv.price
             }
         }
 
-        scanSide(bids)
-        scanSide(asks)
+        scanSide(bids, isBid: true)
+        scanSide(asks, isBid: false)
 
         // Drop disappeared walls immediately (anti-spoofing flash-wall filter)
         wallFirstSeen = wallFirstSeen.filter { currentWallBuckets[$0.key] != nil }

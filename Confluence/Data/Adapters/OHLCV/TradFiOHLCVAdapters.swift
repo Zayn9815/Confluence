@@ -236,7 +236,12 @@ public struct TradFiOHLCVRouter: Sendable {
                 guard !finalBars.isEmpty else {
                     throw NetworkAdapterError.decodingFailed("Yahoo Finance returned 0 valid candles")
                 }
-                return OHLCVFetchResult(candles: finalBars, providerName: "Yahoo Finance", latencyMs: res.latencyMs)
+                return OHLCVFetchResult(
+                    candles: finalBars,
+                    providerName: "Yahoo Finance",
+                    latencyMs: res.latencyMs,
+                    serverDateEpochSeconds: serverNow
+                )
             } catch is CancellationError {
                 throw CancellationError()
             } catch let urlErr as URLError where urlErr.code == .cancelled {
@@ -249,13 +254,18 @@ public struct TradFiOHLCVRouter: Sendable {
         // Automatic 15m -> 30m causal resampling fallback when Yahoo native 30m fails or returns empty
         if timeframe == .m30 {
             let m15Res = try await fetchYahooFinance(asset: asset, timeframe: .m15, endTimeEpochSeconds: endTimeEpochSeconds)
-            let serverNow = Date().timeIntervalSince1970
+            let serverNow = m15Res.serverDateEpochSeconds ?? Date().timeIntervalSince1970
             let resampled = CandleHygieneEngine.resample15MTo30M(
                 m15Candles: m15Res.candles,
                 serverNowEpochSeconds: serverNow
             )
             if !resampled.isEmpty {
-                return OHLCVFetchResult(candles: resampled, providerName: "Yahoo Finance (15m→30m)", latencyMs: m15Res.latencyMs)
+                return OHLCVFetchResult(
+                    candles: resampled,
+                    providerName: "Yahoo Finance (15m→30m)",
+                    latencyMs: m15Res.latencyMs,
+                    serverDateEpochSeconds: serverNow
+                )
             }
         }
         throw lastErr
@@ -316,7 +326,7 @@ public struct TradFiOHLCVRouter: Sendable {
             guard openSec.isFinite, openSec > 0 else { continue }
             let closeSec = openSec + timeframe.seconds
             let rawVol: Double? = (volumes != nil && i < volumes!.count) ? volumes![i] : nil
-            let validVol: Double? = rawVol.flatMap { ($0.isFinite && $0 >= 0) ? $0 : nil }
+            let validVol: Double? = rawVol.flatMap { ($0.isFinite && $0 > 0) ? $0 : nil }
             let cleanVol: Double? = marketClass.isOTCVolumeUnavailable ? nil : validVol
             out.append(Candle(
                 openTimeEpochSeconds: openSec,
@@ -339,6 +349,7 @@ public struct TradFiOHLCVRouter: Sendable {
         guard let url = URL(string: urlStr) else { throw NetworkAdapterError.invalidURL(urlStr) }
 
         let res = try await http.send(URLRequest(url: url), maxRetries: 1)
+        let serverNow = (res.serverDate ?? Date()).timeIntervalSince1970
         struct BiquoteOHLCRoot: Decodable {
             struct Bar: Decodable {
                 let openTime: String
@@ -364,17 +375,23 @@ public struct TradFiOHLCVRouter: Sendable {
                   b.open > 0, b.high > 0, b.low > 0, b.close > 0, b.high >= b.low
             else { continue }
             let openSec = date.timeIntervalSince1970
-            let isClosed = !(b.isOpen ?? false)
-            let validVol: Double? = b.volume.flatMap { ($0.isFinite && $0 >= 0) ? $0 : nil }
+            let closeSec = openSec + timeframe.seconds
+            let isClosed = (b.isOpen != true) && (closeSec <= serverNow)
+            let validVol: Double? = b.volume.flatMap { ($0.isFinite && $0 > 0) ? $0 : nil }
             let vol: Double? = asset.marketClass.isOTCVolumeUnavailable ? nil : validVol
             out.append(Candle(
                 openTimeEpochSeconds: openSec,
-                closeTimeEpochSeconds: openSec + timeframe.seconds,
+                closeTimeEpochSeconds: closeSec,
                 open: b.open, high: b.high, low: b.low, close: b.close,
                 volume: vol,
                 isClosed: isClosed
             ))
         }
-        return OHLCVFetchResult(candles: out.sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }, providerName: "biquote.io", latencyMs: res.latencyMs)
+        return OHLCVFetchResult(
+            candles: out.sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds },
+            providerName: "biquote.io",
+            latencyMs: res.latencyMs,
+            serverDateEpochSeconds: serverNow
+        )
     }
 }

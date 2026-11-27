@@ -12,12 +12,13 @@ public enum SecretRedactor {
     private static let compiledRules: [CompiledRule] = {
         let rawPatterns: [(String, String)] = [
             (#"(?i)(apikey|api_key|token|key)\s*=\s*[^&\s"'`]+"#, "$1=[REDACTED]"),
-            (#"(?i)(x-goog-api-key|authorization)\s*:\s*[^\r\n,;"{}\[\]]+"#, "$1: [REDACTED]"),
+            (#"(?i)("(?:x-goog-api-key|x-finnhub-token|api_key|apikey|authorization)"\s*:\s*")[^"]+(")"#, "$1[REDACTED]$2"),
+            (#"(?i)(x-goog-api-key|x-finnhub-token|authorization)\s*:\s*[^\r\n,;"{}\[\]]+"#, "$1: [REDACTED]"),
+            (#"(?i)\bapikey\s+[A-Za-z0-9\-_\.=]{8,}"#, "apikey [REDACTED]"),
             (#"(?i)bearer\s+[A-Za-z0-9\-_\.=]+"#, "Bearer [REDACTED]"),
             (#"AIza[0-9A-Za-z\-_]{20,}"#, "[REDACTED_GEMINI_KEY]"),
             (#"sk-or-[A-Za-z0-9\-_]{16,}"#, "[REDACTED_OPENROUTER_KEY]"),
-            (#"sk-[A-Za-z0-9\-_]{16,}"#, "[REDACTED_API_KEY]"),
-            (#"\b[a-fA-F0-9]{32,64}\b"#, "[REDACTED_HEX_TOKEN]")
+            (#"sk-[A-Za-z0-9\-_]{16,}"#, "[REDACTED_API_KEY]")
         ]
         return rawPatterns.compactMap { pattern, replacement in
             guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }

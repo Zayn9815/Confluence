@@ -93,23 +93,44 @@ public enum MarketRegimeClassifier {
 
         // Kaufman Efficiency Ratio over 20 bars (0 = noisy mean-reverting, 1 = clean trend)
         let erLookback = min(20, lastIdx)
-        let netMove = abs(candles[lastIdx].close - candles[lastIdx - erLookback].close)
+        let rawNetMove = abs(candles[lastIdx].close - candles[lastIdx - erLookback].close)
+        let netMove = rawNetMove.isFinite ? rawNetMove : 0.0
         var pathLength = 0.0
         for i in (lastIdx - erLookback + 1)...lastIdx {
-            pathLength += abs(candles[i].close - candles[i - 1].close)
-        }
-        let efficiencyRatio = pathLength > relEps ? min(1.0, max(0.0, netMove / pathLength)) : 0.0
-
-        // Shock / drawdown check over last 24 bars + single-bar shock (asset-class calibrated)
-        let shockStart = max(0, lastIdx - 24)
-        var peakHigh = candles[shockStart].high
-        for i in shockStart...lastIdx {
-            if candles[i].high.isFinite {
-                peakHigh = max(peakHigh, candles[i].high)
+            let step = abs(candles[i].close - candles[i - 1].close)
+            if step.isFinite {
+                pathLength += step
             }
         }
-        let drawdownPct = peakHigh > 0 ? max(0.0, ((peakHigh - lastClose) / peakHigh) * 100.0) : 0.0
-        let lastBarTRMultiple = meanATR > relEps ? trs[lastIdx] / meanATR : 1.0
+        let efficiencyRatio = (pathLength.isFinite && pathLength > relEps) ? min(1.0, max(0.0, netMove / pathLength)) : 0.0
+
+        // Shock / drawdown & squeeze run-up check over last 24 bars + single-bar shock (asset-class calibrated)
+        let shockStart = max(0, lastIdx - 24)
+        var peakHigh: Double? = nil
+        var troughLow: Double? = nil
+        for i in shockStart...lastIdx {
+            let hi = candles[i].high
+            let lo = candles[i].low
+            if hi.isFinite && hi > 0 {
+                peakHigh = peakHigh.map { max($0, hi) } ?? hi
+            }
+            if lo.isFinite && lo > 0 {
+                troughLow = troughLow.map { min($0, lo) } ?? lo
+            }
+        }
+        let downsideDDPct: Double = {
+            guard let pk = peakHigh, pk > 0, lastClose.isFinite else { return 0.0 }
+            let val = ((pk - lastClose) / pk) * 100.0
+            return val.isFinite ? max(0.0, val) : 0.0
+        }()
+        let upsideRunUpPct: Double = {
+            guard let tr = troughLow, tr > 0, lastClose.isFinite else { return 0.0 }
+            let val = ((lastClose - tr) / tr) * 100.0
+            return val.isFinite ? max(0.0, val) : 0.0
+        }()
+        let drawdownPct = max(downsideDDPct, upsideRunUpPct)
+        let rawBarTRMult = meanATR > relEps ? trs[lastIdx] / meanATR : 1.0
+        let lastBarTRMultiple = rawBarTRMult.isFinite ? rawBarTRMult : 1.0
 
         let crisisDrawdownThreshold: Double
         switch marketClass {
@@ -128,7 +149,7 @@ public enum MarketRegimeClassifier {
                 atrZScore: atrZScore,
                 efficiencyRatio: efficiencyRatio,
                 rollingDrawdownPercent: drawdownPct,
-                summary: "Crisis volatility shock detected (ATR z=\(String(format: "%.2f", atrZScore)), bar=\(String(format: "%.1f", lastBarTRMultiple))x avg, DD=\(String(format: "%.1f", drawdownPct))%). Risk forced to REDUCE."
+                summary: "Crisis volatility shock detected (ATR z=\(String(format: "%.2f", atrZScore)), bar=\(String(format: "%.1f", lastBarTRMultiple))x avg, shock=\(String(format: "%.1f", drawdownPct))%). Risk forced to REDUCE."
             )
         }
 

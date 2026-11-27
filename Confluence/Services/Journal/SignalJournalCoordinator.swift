@@ -198,11 +198,27 @@ public final class SignalJournalCoordinator {
         guard tickCoalesceTask == nil else { return }
 
         tickCoalesceTask = Task { [weak self] in
+            defer {
+                if let self {
+                    self.tickCoalesceTask = nil
+                    if !self.pendingQuotesBySymbol.isEmpty,
+                       let nextQuote = self.pendingQuotesBySymbol.values.first {
+                        self.enqueueLiveQuote(nextQuote)
+                    }
+                }
+            }
             try? await Task.sleep(nanoseconds: Self.tickFlushIntervalNs)
             guard let self, !Task.isCancelled else { return }
-            self.tickCoalesceTask = nil
             await self.flushPendingLiveTicks()
         }
+    }
+
+    /// Monotonic non-regressing merge guard: never overwrite an already-closed entry and never regress `isWinLocked == true` to `false`.
+    private static func canApplyUpdate(current: TrackedJournalTrade, candidate: TrackedJournalTrade) -> Bool {
+        if !current.status.isOpen { return false }
+        if current.isWinLocked && !candidate.isWinLocked { return false }
+        if current.isWinLocked && candidate.status == .loss { return false }
+        return true
     }
 
     private func flushPendingLiveTicks() async {
@@ -236,6 +252,10 @@ public final class SignalJournalCoordinator {
         let shouldPeriodicDiskSync = (now - lastDiskSyncAt) >= 15.0
 
         for (orig, next) in updatedBatch {
+            guard let idx = indexById[next.id] else { continue }
+            let latestInMemory = mutatedAll[idx]
+            guard Self.canApplyUpdate(current: latestInMemory, candidate: next) else { continue }
+
             let metrics = JournalLiveTickMetrics(
                 price: next.currentPrice,
                 pnlPercent: next.livePnLPercent,
@@ -244,17 +264,13 @@ public final class SignalJournalCoordinator {
             if liveTicksByEntryID[next.id] != metrics {
                 liveTicksByEntryID[next.id] = metrics
             }
-            if orig.status != next.status {
+            if orig.status != next.status || latestInMemory.status != next.status {
                 statusChanged = true
                 entriesNeedingPersist.append(next)
-                if let idx = indexById[next.id] {
-                    mutatedAll[idx] = next
-                }
+                mutatedAll[idx] = next
             } else if shouldPeriodicDiskSync && orig.currentPrice != next.currentPrice {
                 entriesNeedingPersist.append(next)
-                if let idx = indexById[next.id] {
-                    mutatedAll[idx] = next
-                }
+                mutatedAll[idx] = next
             }
         }
 
@@ -274,13 +290,14 @@ public final class SignalJournalCoordinator {
         }
     }
 
-    /// Reconciles all open entries against closed candles (run on foreground resume and after every scan).
+    /// Reconciles open entries strictly matching `candlesTimeframe` against closed candles (run on foreground resume and after every scan).
     public func reconcileClosedCandles(
         candlesBySymbol: [String: [Candle]],
+        candlesTimeframe: Timeframe,
         livePrices: [String: Double],
         now: TimeInterval = Date().timeIntervalSince1970
     ) async {
-        let openEntries = allEntries.filter { $0.status.isOpen }
+        let openEntries = allEntries.filter { $0.status.isOpen && $0.timeframe == candlesTimeframe }
         guard !openEntries.isEmpty else { return }
 
         let reconciled: [TrackedJournalTrade] = await Task.detached(priority: .utility) {
@@ -302,7 +319,13 @@ public final class SignalJournalCoordinator {
         }.value
 
         guard !reconciled.isEmpty else { return }
-        store.upsertTrackedJournalEntries(reconciled)
+        let currentById = Dictionary(uniqueKeysWithValues: allEntries.map { ($0.id, $0) })
+        let safeUpdates = reconciled.filter { candidate in
+            guard let current = currentById[candidate.id] else { return true }
+            return Self.canApplyUpdate(current: current, candidate: candidate)
+        }
+        guard !safeUpdates.isEmpty else { return }
+        store.upsertTrackedJournalEntries(safeUpdates)
         store.pruneClosedJournalEntries(keepingNewest: Self.maxClosedHistoryCount)
         loadFromStore()
         onStatsChanged?()

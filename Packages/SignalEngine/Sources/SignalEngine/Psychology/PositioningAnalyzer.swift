@@ -39,11 +39,14 @@ public enum PositioningAnalyzer {
             .sorted { $0.timestampEpochSeconds < $1.timestampEpochSeconds }
 
         var oiChangePct: Double? = nil
-        if causalOI.count >= 2 {
-            let latest = causalOI.last!.openInterestUSD
-            let earlier = causalOI[max(0, causalOI.count - 7)].openInterestUSD
-            if earlier > 0 {
-                let pct = ((latest - earlier) / earlier) * 100.0
+        if causalOI.count >= 2, let latestPoint = causalOI.last {
+            let targetEarlierTs = (lastIdx >= 0 && lookbackIdx >= 0 && lookbackIdx < candles.count)
+                ? candles[lookbackIdx].closeTimeEpochSeconds
+                : causalOI[max(0, causalOI.count - 7)].timestampEpochSeconds
+            let earlierPoint = causalOI.last(where: { $0.timestampEpochSeconds <= targetEarlierTs })
+                ?? causalOI.first
+            if let earlier = earlierPoint, earlier.timestampEpochSeconds < latestPoint.timestampEpochSeconds, earlier.openInterestUSD > 0 {
+                let pct = ((latestPoint.openInterestUSD - earlier.openInterestUSD) / earlier.openInterestUSD) * 100.0
                 if pct.isFinite {
                     oiChangePct = pct
                 }

@@ -112,13 +112,12 @@ public final class MarketScannerCoordinator {
     public let liveOrderFlowService: LiveOrderFlowService
     public let journalCoordinator: SignalJournalCoordinator
     public var journalSectionStats: [JournalSectionStat] = WinRateBreakdown.byJournalSection(entries: [])
-    public var manualTradeSuggestions: [String: ManualTradeLevelSuggestion] = [:]
     public var originWinRates: [OriginWinRateStat] = WinRateBreakdown.byOrigin(records: [])
     public var strengthBuckets: [StrengthBucketStat] = WinRateBreakdown.byStrengthBucket(records: [])
     public var nextScheduledScanEpochSeconds: TimeInterval? = nil
-    private var dismissedManualSuggestionIds: Set<String> = []
     private var autoScanTask: Task<Void, Never>?
     private var activeScanTask: Task<Void, Never>?
+    private var scanGeneration: UInt64 = 0
 
     public static let maxCachedBarsPerSymbol = 300
 
@@ -227,7 +226,7 @@ public final class MarketScannerCoordinator {
             aiKeyTestMessage = "Connected to \(provider.displayName) · \(models.count) models listed."
             diagnosticLog.log(.info, category: .ai, message: "AI discovery (\(provider.shortLabel)): \(models.count) models.")
         } catch {
-            aiKeyTestMessage = "Failed: \(error.localizedDescription)"
+            aiKeyTestMessage = "Failed: \(SecretRedactor.redact(error.localizedDescription))"
             diagnosticLog.log(.warn, category: .ai, message: "AI key test failed (\(provider.shortLabel)): \(error.localizedDescription)")
         }
     }
@@ -282,6 +281,7 @@ public final class MarketScannerCoordinator {
                 let liveMap = self.currentLivePricesMap()
                 await self.journalCoordinator.reconcileClosedCandles(
                     candlesBySymbol: self.cachedClosedCandlesBySymbol,
+                    candlesTimeframe: self.settings.payload.entryTimeframe,
                     livePrices: liveMap
                 )
             }
@@ -293,6 +293,19 @@ public final class MarketScannerCoordinator {
         }
     }
 
+    public func startScan(isBackground: Bool = false, forceRestart: Bool = false) {
+        if isScanning && !forceRestart { return }
+        if forceRestart {
+            activeScanTask?.cancel()
+            activeScanTask = nil
+            scanGeneration &+= 1
+            isScanning = false
+        }
+        activeScanTask = Task { [weak self] in
+            await self?.scanAllMarkets(isBackground: isBackground)
+        }
+    }
+
     public func scanOnOpenIfDue(nowEpochSeconds: TimeInterval = Date().timeIntervalSince1970) {
         guard !isScanning else { return }
         let due = ScanSchedulePolicy.shouldScanOnOpen(
@@ -301,10 +314,7 @@ public final class MarketScannerCoordinator {
             nowEpochSeconds: nowEpochSeconds
         )
         guard due else { return }
-        activeScanTask?.cancel()
-        activeScanTask = Task { [weak self] in
-            await self?.scanAllMarkets(isBackground: false)
-        }
+        startScan(isBackground: false, forceRestart: true)
     }
 
     public func restartAutoScanLoop() {
@@ -382,50 +392,6 @@ public final class MarketScannerCoordinator {
 
     public func handleLivePriceTick(_ quote: LivePriceQuote) {
         journalCoordinator.enqueueLiveQuote(quote)
-
-        let alerts = TradeMonitor.evaluateManualJournalAlerts(
-            entries: journalEntries,
-            quote: quote,
-            dismissedIds: dismissedManualSuggestionIds
-        )
-        for alert in alerts {
-            manualTradeSuggestions[alert.journalEntryId] = alert
-        }
-    }
-
-    public func applyManualTradeSuggestion(_ suggestion: ManualTradeLevelSuggestion) {
-        guard let existing = journalEntries.first(where: { $0.id == suggestion.journalEntryId }) else { return }
-        let updated = JournalEntrySnapshot(
-            id: existing.id,
-            signalFingerprint: existing.signalFingerprint,
-            symbol: existing.symbol,
-            marketClass: existing.marketClass,
-            timeframe: existing.timeframe,
-            direction: existing.direction,
-            plannedEntry: existing.plannedEntry,
-            actualFillPrice: existing.actualFillPrice,
-            stopLoss: existing.stopLoss,
-            tp1: existing.tp1,
-            tp2: existing.tp2,
-            exitPrice: suggestion.suggestedExitPrice,
-            positionSizeText: existing.positionSizeText,
-            outcome: suggestion.suggestedOutcome,
-            actualRMultiple: suggestion.suggestedRMultiple,
-            systemRMultiple: existing.systemRMultiple,
-            strategyIDs: existing.strategyIDs,
-            tags: existing.tags,
-            notes: existing.notes,
-            takenAt: existing.takenAt,
-            closedAt: Date()
-        )
-        manualTradeSuggestions.removeValue(forKey: suggestion.journalEntryId)
-        saveJournalEntry(updated)
-        acquireActivePositionsLiveFeed()
-    }
-
-    public func dismissManualTradeSuggestion(entryId: String) {
-        dismissedManualSuggestionIds.insert(entryId)
-        manualTradeSuggestions.removeValue(forKey: entryId)
     }
 
     private func wireNotificationRouter() {
@@ -909,6 +875,8 @@ public final class MarketScannerCoordinator {
             diagnosticLog.log(.warn, category: isBackground ? .background : .engine, message: "Scan skipped: 0 strategies enabled.")
             return
         }
+        scanGeneration &+= 1
+        let generation = scanGeneration
         isScanning = true
         lastScanError = nil
         newlyArrivedSignalIds = []
@@ -922,8 +890,10 @@ public final class MarketScannerCoordinator {
         )
 
         defer {
-            isScanning = false
-            lastScanDate = Date()
+            if generation == scanGeneration {
+                isScanning = false
+                lastScanDate = Date()
+            }
         }
 
         let assets = settings.activeWatchlistAssets
@@ -1276,6 +1246,7 @@ public final class MarketScannerCoordinator {
         )
         await journalCoordinator.reconcileClosedCandles(
             candlesBySymbol: sanitizedClosedBySymbol,
+            candlesTimeframe: entryTF,
             livePrices: livePriceMap,
             now: postScanNow
         )

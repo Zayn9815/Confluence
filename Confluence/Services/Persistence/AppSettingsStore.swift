@@ -333,6 +333,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
 @Observable
 public final class AppSettingsStore {
     private static let storageKey = "com.bilal.confluence.settings.v1"
+    private let defaults: UserDefaults
 
     public var payload: PersistedSettingsPayload {
         didSet {
@@ -340,16 +341,17 @@ public final class AppSettingsStore {
         }
     }
 
-    public init() {
-        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let data = defaults.data(forKey: Self.storageKey),
            var decoded = try? JSONDecoder().decode(PersistedSettingsPayload.self, from: data) {
-            if let storedEngineRaw = UserDefaults.standard.string(forKey: ChartEngineOption.appStorageKey) {
+            if let storedEngineRaw = defaults.string(forKey: ChartEngineOption.appStorageKey) {
                 decoded.chartEngine = ChartEngineOption.fromStoredRawValue(storedEngineRaw)
             }
             self.payload = decoded
         } else {
             var initial = PersistedSettingsPayload()
-            if let storedEngineRaw = UserDefaults.standard.string(forKey: ChartEngineOption.appStorageKey) {
+            if let storedEngineRaw = defaults.string(forKey: ChartEngineOption.appStorageKey) {
                 initial.chartEngine = ChartEngineOption.fromStoredRawValue(storedEngineRaw)
             }
             self.payload = initial
@@ -357,9 +359,9 @@ public final class AppSettingsStore {
     }
 
     private func save() {
-        UserDefaults.standard.set(payload.chartEngine.rawValue, forKey: ChartEngineOption.appStorageKey)
+        defaults.set(payload.chartEngine.rawValue, forKey: ChartEngineOption.appStorageKey)
         if let data = try? JSONEncoder().encode(payload) {
-            UserDefaults.standard.set(data, forKey: Self.storageKey)
+            defaults.set(data, forKey: Self.storageKey)
         }
     }
 
@@ -380,6 +382,7 @@ public final class AppSettingsStore {
     }
 
     public func setBrokerOffset(_ offset: Double, for symbol: String) {
+        guard offset.isFinite else { return }
         if abs(offset) < 1e-12 {
             payload.brokerPriceOffsets.removeValue(forKey: symbol)
         } else {

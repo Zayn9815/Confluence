@@ -61,8 +61,10 @@ public struct MarketsFeedsSettingsView: View {
                     .autocorrectionDisabled()
 
                     Button("Save") {
+                        let trimmed = twelveDataKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
                         Task {
-                            try? await KeychainStore.shared.save(twelveDataKeyInput, for: .twelveDataAPIKey)
+                            try? await KeychainStore.shared.save(trimmed, for: .twelveDataAPIKey)
                             twelveDataKeyInput = ""
                             hasTwelveDataKey = await KeychainStore.shared.hasValue(for: .twelveDataAPIKey)
                         }
@@ -129,8 +131,10 @@ public struct MarketsFeedsSettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         Button("Save") {
+                            let trimmed = finnhubKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { return }
                             Task {
-                                try? await KeychainStore.shared.save(finnhubKeyInput, for: .finnhubAPIKey)
+                                try? await KeychainStore.shared.save(trimmed, for: .finnhubAPIKey)
                                 finnhubKeyInput = ""
                                 hasFinnhubKey = await KeychainStore.shared.hasValue(for: .finnhubAPIKey)
                             }

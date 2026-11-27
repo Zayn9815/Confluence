@@ -102,17 +102,30 @@ public final class ConfluenceDataStore {
                 if let recovered = try? ModelContainer(for: schema, configurations: [config]) {
                     self.container = recovered
                 } else {
-                    let fallback = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-                    self.container = try! ModelContainer(for: schema, configurations: [fallback])
+                    self.container = Self.makeSafeInMemoryContainer(schema: schema)
                 }
             } else {
                 // Transient lock/file-protection error: use safe in-memory fallback without wiping on-disk data
-                let fallback = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-                self.container = try! ModelContainer(for: schema, configurations: [fallback])
+                self.container = Self.makeSafeInMemoryContainer(schema: schema)
             }
         }
         self.context = ModelContext(container)
         backfillPersistedOutcomesIfNeeded(isCustomOrMemory: inMemory || customStoreURL != nil)
+    }
+
+    private static func makeSafeInMemoryContainer(schema: Schema) -> ModelContainer {
+        let fallback = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        if let container = try? ModelContainer(for: schema, configurations: [fallback]) {
+            return container
+        }
+        // Final minimal schema fallback (zero force-try on full store config)
+        let minimalSchema = Schema([PersistedSignalRecord.self])
+        let minimalConfig = ModelConfiguration(schema: minimalSchema, isStoredInMemoryOnly: true)
+        do {
+            return try ModelContainer(for: minimalSchema, configurations: [minimalConfig])
+        } catch {
+            preconditionFailure("Unable to initialize in-memory SwiftData container: \(error)")
+        }
     }
 
     private func backfillPersistedOutcomesIfNeeded(isCustomOrMemory: Bool) {
@@ -552,11 +565,12 @@ public final class ConfluenceDataStore {
     }
 
     private func pruneLogsIfNeeded() {
-        let desc = FetchDescriptor<DiagnosticLogEntry>(
+        var desc = FetchDescriptor<DiagnosticLogEntry>(
             sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
         )
-        guard let all = try? context.fetch(desc), all.count > Self.maxStoredLogs else { return }
-        for stale in all.dropFirst(Self.maxStoredLogs) {
+        desc.fetchOffset = Self.maxStoredLogs
+        guard let overflow = try? context.fetch(desc), !overflow.isEmpty else { return }
+        for stale in overflow {
             context.delete(stale)
         }
     }

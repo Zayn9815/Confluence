@@ -296,10 +296,17 @@ public actor LivePriceEngine {
             switch tradFiMode {
             case .autoStreamWithBackup:
                 await startYahooStream(assets: tradFiAssets, allowPollBackup: true)
-                guard myGen == streamGeneration, isForegroundActive else { return }
+                if myGen != streamGeneration || !isForegroundActive {
+                    await yahooStream.disconnect()
+                    return
+                }
                 startTradFiPolling(assets: tradFiAssets, backupOnly: true)
             case .liveStreamOnly:
                 await startYahooStream(assets: tradFiAssets, allowPollBackup: false)
+                if myGen != streamGeneration || !isForegroundActive {
+                    await yahooStream.disconnect()
+                    return
+                }
             case .poll10s:
                 startTradFiPolling(assets: tradFiAssets, backupOnly: false)
             case .off:
@@ -613,6 +620,7 @@ public final class LivePriceService {
     private var engine: LivePriceEngine?
     private var lastPublishTimeBySymbol: [String: TimeInterval] = [:]
     private let minimumUIQuoteIntervalSeconds: TimeInterval = 0.25
+    private var commandQueueTail: Task<Void, Never>?
 
     public init(http: any HTTPTransport = URLSessionHTTPClient()) {
         self.engine = LivePriceEngine(http: http) { [weak self] quote in
@@ -631,6 +639,14 @@ public final class LivePriceService {
         }
     }
 
+    private func enqueueCommand(_ operation: @escaping @MainActor () async -> Void) {
+        let previous = commandQueueTail
+        commandQueueTail = Task { @MainActor in
+            await previous?.value
+            await operation()
+        }
+    }
+
     public func latest(for symbol: String) -> LivePriceQuote? {
         quotes[symbol]
     }
@@ -645,38 +661,38 @@ public final class LivePriceService {
 
     public func acquire(owner: String, symbols: [String]) {
         guard let engine else { return }
-        Task {
+        enqueueCommand { [weak self] in
             let active = await engine.acquire(owner: owner, symbols: symbols)
-            self.activeSymbols = active
+            self?.activeSymbols = active
         }
     }
 
     public func release(owner: String) {
         guard let engine else { return }
-        Task {
+        enqueueCommand { [weak self] in
             let active = await engine.release(owner: owner)
-            self.activeSymbols = active
+            self?.activeSymbols = active
         }
     }
 
     public func setForegroundActive(_ active: Bool) {
         isForegroundActive = active
         guard let engine else { return }
-        Task {
+        enqueueCommand {
             await engine.setForegroundActive(active)
         }
     }
 
     public func updateModes(tradFi: TradFiLiveFeedMode, crypto: CryptoLiveFeedMode) {
         guard let engine else { return }
-        Task {
+        enqueueCommand {
             await engine.updateModes(tradFi: tradFi, crypto: crypto)
         }
     }
 
     public func seedReferenceClose(_ price: Double, for symbol: String) {
         guard let engine else { return }
-        Task {
+        enqueueCommand {
             await engine.seedReferenceClose(price, for: symbol)
         }
     }

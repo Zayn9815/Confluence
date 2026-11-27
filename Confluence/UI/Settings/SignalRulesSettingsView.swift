@@ -476,8 +476,10 @@ public struct SignalRulesSettingsView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     Button("Save") {
+                        let trimmed = geminiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
                         Task {
-                            try? await KeychainStore.shared.save(geminiKeyInput, for: activeProvider.keychainKey)
+                            try? await KeychainStore.shared.save(trimmed, for: activeProvider.keychainKey)
                             geminiKeyInput = ""
                             hasGeminiKey = await KeychainStore.shared.hasValue(for: activeProvider.keychainKey)
                         }

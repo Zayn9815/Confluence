@@ -22,6 +22,7 @@ public actor EconomicCalendarService {
         didLoadFFCache = true
         if let disk = Self.loadFFCache(from: self.ffCacheURL) {
             self.lastFFFetchDate = disk.fetchedAt
+            self.lastFFAttemptDate = disk.lastAttemptAt ?? disk.fetchedAt
             self.cachedFFEvents = disk.events
         }
     }
@@ -63,6 +64,34 @@ public actor EconomicCalendarService {
         return try Self.parseBiquoteCalendarJSON(data: res.data)
     }
 
+    private struct FlexibleOptionalDouble: Decodable {
+        let value: Double?
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if container.decodeNil() {
+                self.value = nil
+                return
+            }
+            if let d = try? container.decode(Double.self) {
+                self.value = d.isFinite ? d : nil
+                return
+            }
+            if let s = try? container.decode(String.self) {
+                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    self.value = nil
+                } else if let parsed = Double(trimmed.replacingOccurrences(of: ",", with: "")), parsed.isFinite {
+                    self.value = parsed
+                } else {
+                    self.value = nil
+                }
+                return
+            }
+            self.value = nil
+        }
+    }
+
     public static func parseBiquoteCalendarJSON(data: Data) throws -> [EconomicEvent] {
         struct Row: Decodable {
             let id: String?
@@ -74,10 +103,10 @@ public actor EconomicCalendarService {
             let importance: String
             let unit: String?
             let multiplier: String?
-            let actual: Double?
-            let forecast: Double?
-            let previous: Double?
-            let revisedPrevious: Double?
+            let actual: FlexibleOptionalDouble?
+            let forecast: FlexibleOptionalDouble?
+            let previous: FlexibleOptionalDouble?
+            let revisedPrevious: FlexibleOptionalDouble?
             let timeMode: String?
         }
 
@@ -113,10 +142,10 @@ public actor EconomicCalendarService {
                 scheduledEpochSeconds: date.timeIntervalSince1970,
                 unit: r.unit,
                 multiplier: r.multiplier,
-                actual: r.actual,                   // Strictly nil if unpublished; NEVER 0
-                forecast: r.forecast,
-                previous: r.previous,
-                revisedPrevious: r.revisedPrevious,
+                actual: r.actual?.value,                   // Strictly nil if unpublished; NEVER 0
+                forecast: r.forecast?.value,
+                previous: r.previous?.value,
+                revisedPrevious: r.revisedPrevious?.value,
                 supportsActualRelease: true
             )
             dedup[semanticKey] = ev
@@ -130,7 +159,8 @@ public actor EconomicCalendarService {
         ensureFFCacheLoaded()
         let now = Date()
         let previousAttempt = lastFFAttemptDate
-        // Enforce strict >= 60-minute refresh cooldown (including after errors) to never trip FF's "Request Denied" HTML block
+        // Enforce strict >= 60-minute refresh cooldown (including after errors and across relaunches)
+        // to never trip FF's "Request Denied" HTML block.
         if let lastAttempt = lastFFAttemptDate ?? lastFFFetchDate, now.timeIntervalSince(lastAttempt) < 3_600.0 {
             if let lastSuccess = lastFFFetchDate, now.timeIntervalSince(lastSuccess) <= 86_400.0 {
                 return cachedFFEvents
@@ -142,10 +172,11 @@ public actor EconomicCalendarService {
         do {
             let url = URL(string: "https://nfs.faireconomy.media/ff_calendar_thisweek.json")!
             let res = try await http.send(URLRequest(url: url), maxRetries: 0)
-            let parsed = try Self.parseForexFactoryPayload(data: res.data, contentType: res.headers["content-type"])
+            let contentType = res.headers.first(where: { $0.key.lowercased() == "content-type" })?.value
+            let parsed = try Self.parseForexFactoryPayload(data: res.data, contentType: contentType)
             self.cachedFFEvents = parsed
             self.lastFFFetchDate = now
-            Self.saveFFCache(FFDiskCache(fetchedAt: now, events: parsed), to: ffCacheURL)
+            Self.saveFFCache(FFDiskCache(fetchedAt: now, lastAttemptAt: now, events: parsed), to: ffCacheURL)
             return parsed
         } catch is CancellationError {
             self.lastFFAttemptDate = previousAttempt
@@ -154,6 +185,11 @@ public actor EconomicCalendarService {
             self.lastFFAttemptDate = previousAttempt
             return cachedFFEvents
         } catch {
+            // Persist attempt timestamp so relaunch does not hammer Forex Factory inside 60m cooldown
+            Self.saveFFCache(
+                FFDiskCache(fetchedAt: lastFFFetchDate, lastAttemptAt: now, events: cachedFFEvents),
+                to: ffCacheURL
+            )
             // 24-hour offline disk cache fallback
             if let last = lastFFFetchDate, now.timeIntervalSince(last) <= 86_400.0 {
                 return cachedFFEvents
@@ -162,16 +198,16 @@ public actor EconomicCalendarService {
         }
     }
 
-    /// Validates both Content-Type and leading `[` byte so HTTP 200 HTML "Request Denied" pages
+    /// Validates both Content-Type and leading `[` byte (BOM-safe) so HTTP 200 HTML "Request Denied" pages
     /// are safely rejected instead of corrupting the calendar cache.
     public static func parseForexFactoryPayload(data: Data, contentType: String?) throws -> [EconomicEvent] {
         if let ct = contentType?.lowercased(), ct.contains("text/html") {
             throw NetworkAdapterError.htmlRateLimitPage("nfs.faireconomy.media")
         }
-        guard let trimmedFirst = String(data: data.prefix(64), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              trimmedFirst.hasPrefix("[")
-        else {
+        let prefixText = String(data: data.prefix(64), encoding: .utf8)?
+            .replacingOccurrences(of: "\u{FEFF}", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmedFirst = prefixText, trimmedFirst.hasPrefix("[") else {
             throw NetworkAdapterError.htmlRateLimitPage("nfs.faireconomy.media")
         }
 
@@ -264,8 +300,15 @@ public actor EconomicCalendarService {
     }
 
     private struct FFDiskCache: Codable {
-        let fetchedAt: Date
+        let fetchedAt: Date?
+        let lastAttemptAt: Date?
         let events: [EconomicEvent]
+
+        init(fetchedAt: Date?, lastAttemptAt: Date? = nil, events: [EconomicEvent]) {
+            self.fetchedAt = fetchedAt
+            self.lastAttemptAt = lastAttemptAt ?? fetchedAt
+            self.events = events
+        }
     }
 
     private static func loadFFCache(from url: URL) -> FFDiskCache? {

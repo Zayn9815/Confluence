@@ -93,11 +93,14 @@ public enum SignalEngine {
 
         // Compute causal positioning assessment (OKX for Crypto, CFTC COT for FX/Gold/Indices/CME BTC)
         var positioning: PositioningAssessment? = nil
-        if let okx = okxDerivatives, config.enabledStrategies.contains(.positioningOkx) {
+        if asset.marketClass == .crypto, let okx = okxDerivatives, config.enabledStrategies.contains(.positioningOkx) {
             positioning = PositioningAnalyzer.analyzeOKX(snapshot: okx, candles: entrySeries.candles, timeframe: timeframe, isLiveEvaluation: isLiveEvaluation)
         }
-        if positioning == nil, !cftcCOTRecords.isEmpty, config.enabledStrategies.contains(.positioningCot) {
-            positioning = PositioningAnalyzer.analyzeCFTCCOT(records: cftcCOTRecords, asOfEpochSeconds: serverNowEpochSeconds)
+        let isOKXNeutral = positioning.map { $0.proDirection == .neutral && $0.retailCrowdDirection == .neutral } ?? true
+        if isOKXNeutral, !cftcCOTRecords.isEmpty, config.enabledStrategies.contains(.positioningCot) {
+            if let cot = PositioningAnalyzer.analyzeCFTCCOT(records: cftcCOTRecords, asOfEpochSeconds: serverNowEpochSeconds) {
+                positioning = cot
+            }
         }
 
         // Anti-repainting hard guard: historical evaluations MUST never consume live order flow
@@ -381,11 +384,13 @@ public enum SignalEngine {
 
         let orderFlowPayload: CompactOrderFlowPayload?
         if signal.marketClass == .crypto, let of = signal.orderFlowSummary {
+            let safeOBI = of.obiWeighted.isFinite ? (of.obiWeighted * 100.0).rounded() / 100.0 : 0.0
+            let safeCVD = of.cvdRatio.isFinite ? (of.cvdRatio * 100.0).rounded() / 100.0 : 0.0
             orderFlowPayload = CompactOrderFlowPayload(
                 venue: of.venue,
                 live_ws: of.isLiveStream,
-                obi_weighted: (of.obiWeighted * 100.0).rounded() / 100.0,
-                cvd_ratio: (of.cvdRatio * 100.0).rounded() / 100.0,
+                obi_weighted: safeOBI,
+                cvd_ratio: safeCVD,
                 divergence: of.divergenceTag,
                 absorption: of.absorptionTag,
                 alignment: of.alignment,

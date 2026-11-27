@@ -299,7 +299,7 @@ public actor TwelveDataAdapter {
             else { continue }
             let openSec = date.timeIntervalSince1970
             let closeSec = openSec + timeframe.seconds
-            let volRaw = v.volume.flatMap(Double.init).flatMap { ($0.isFinite && $0 >= 0) ? $0 : nil }
+            let volRaw = v.volume.flatMap(Double.init).flatMap { ($0.isFinite && $0 > 0) ? $0 : nil }
             let cleanVol: Double? = marketClass.isOTCVolumeUnavailable ? nil : volRaw
             out.append(Candle(
                 openTimeEpochSeconds: openSec,
@@ -310,6 +310,9 @@ public actor TwelveDataAdapter {
             ))
         }
 
+        guard !out.isEmpty else {
+            throw NetworkAdapterError.decodingFailed("Twelve Data returned 0 valid candles")
+        }
         return out.sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
     }
 
