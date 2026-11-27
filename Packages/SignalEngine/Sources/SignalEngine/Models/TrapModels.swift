@@ -37,8 +37,6 @@ public enum TrapTriggerKind: String, Codable, Sendable, Equatable {
     case liquiditySwingSweep = "Liquidity Swing Sweep"
     case attentionFOMOSpike = "Attention FOMO Spike"
     case postNewsWhipsawTrap = "News Whipsaw Trap"
-    case shortSqueezeTrap = "Short Squeeze"
-    case longSqueezeTrap = "Long Squeeze"
 }
 
 public struct BehavioralTrap: Codable, Sendable, Equatable, Hashable, Identifiable {
