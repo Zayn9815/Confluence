@@ -9,12 +9,12 @@ final class V16AuditCoverageTests: XCTestCase {
             signalCategory: .strongSignal,
             proDirection: .long,
             retailCrowdDirection: .short,
-            retailSideLabel: "Retail short",
-            proSideLabel: "Pro long",
+            provenanceBadge: "Test",
+            whatHappened: "Structure aligned.",
+            beginnerPsychology: "Clean trend.",
+            proPsychology: "Institutional demand held.",
             behavioralBadges: [],
-            whatHappenedAndWhy: "Structure aligned.",
-            crowdTrapSummary: "Clean trend.",
-            invalidationRule: "Close below SL."
+            evidence: ["BOS confirmed"]
         )
         let validJudgment = ReflexJudgment(
             regime: "trending",

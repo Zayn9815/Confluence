@@ -84,6 +84,7 @@ public final class MarketScannerCoordinator {
     public var isNotificationInboxPresented: Bool = false
     public var pendingDeepLink: NavigationDeepLink?
     public var highlightedSignalFingerprint: String?
+    public var highlightedNewsEventID: String?
 
     // Scanning, Quota & Diagnostics state
     public var isScanning: Bool = false
@@ -843,6 +844,22 @@ public final class MarketScannerCoordinator {
     public func requestNotifications() async {
         _ = await PreNewsNotificationScheduler.shared.requestAuthorizationIfNeeded()
         await refreshNotificationStatus()
+    }
+
+    public func reschedulePreNewsCountdownsNow() async {
+        guard settings.payload.economicCalendarEnabled else {
+            self.scheduledPreNewsCount = await PreNewsNotificationScheduler.shared.reschedulePreNewsCountdowns(
+                events: [],
+                settings: settings.payload,
+                nowEpochSeconds: Date().timeIntervalSince1970
+            )
+            return
+        }
+        self.scheduledPreNewsCount = await PreNewsNotificationScheduler.shared.reschedulePreNewsCountdowns(
+            events: calendarEvents,
+            settings: settings.payload,
+            nowEpochSeconds: Date().timeIntervalSince1970
+        )
     }
 
     /// Nearest upcoming exact-clock high-impact event within 60 minutes (for sticky Signals header strip).

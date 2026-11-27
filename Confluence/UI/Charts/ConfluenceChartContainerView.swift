@@ -16,6 +16,7 @@ public struct ConfluenceChartContainerView: View {
     public let timeframe: Timeframe
     public let palette: ConfluencePalette
     public let isDark: Bool
+    public let showMovingAverages: Bool
     @Binding public var tradingViewPreferDesktop: Bool
 
     @State private var crosshairReadout: ChartCrosshairReadout? = nil
@@ -32,6 +33,7 @@ public struct ConfluenceChartContainerView: View {
         timeframe: Timeframe,
         palette: ConfluencePalette,
         isDark: Bool,
+        showMovingAverages: Bool = true,
         tradingViewPreferDesktop: Binding<Bool> = .constant(false)
     ) {
         self.selectedEngine = selectedEngine
@@ -45,6 +47,7 @@ public struct ConfluenceChartContainerView: View {
         self.timeframe = timeframe
         self.palette = palette
         self.isDark = isDark
+        self.showMovingAverages = showMovingAverages
         self._tradingViewPreferDesktop = tradingViewPreferDesktop
     }
 
@@ -107,6 +110,7 @@ public struct ConfluenceChartContainerView: View {
                     palette: palette,
                     isDark: isDark,
                     resetTrigger: fitRequestToken,
+                    showMovingAverages: showMovingAverages,
                     onCrosshairChange: { readout in
                         crosshairReadout = readout
                     }

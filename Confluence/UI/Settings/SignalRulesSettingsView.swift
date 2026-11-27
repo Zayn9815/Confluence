@@ -547,6 +547,8 @@ public struct SignalRulesSettingsView: View {
                 Text("Confluence works 100% natively with this off. When enabled, your selected provider reviews new Strong setups, Trap warnings, and News setups, but can NEVER override deterministic Stop loss, Target 1, Target 2, risk limits, or Crisis suppression.")
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
         .navigationTitle("Signal Rules & AI")
         .navigationBarTitleDisplayMode(.inline)
         .task {

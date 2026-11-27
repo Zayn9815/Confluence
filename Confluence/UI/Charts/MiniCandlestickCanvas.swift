@@ -5,13 +5,25 @@ import SignalEngine
 /// Plots closed candles, optional display-only live price tick (throttled <= 1/s by caller),
 /// active FVG/OB zones, active Trap lifecycle lines (`Trigger`/`Active`),
 /// and numeric Entry / Stop loss / Target 1 / Target 2 levels with zero WKWebView overhead.
-public struct MiniCandlestickCanvas: View {
+public struct MiniCandlestickCanvas: View, Equatable {
     let candles: [Candle]
     let levels: TradeLevels?
     let overlays: ChartOverlayData
     let palette: ConfluencePalette
     let height: CGFloat
     let livePrice: Double?
+
+    public static func == (lhs: MiniCandlestickCanvas, rhs: MiniCandlestickCanvas) -> Bool {
+        lhs.height == rhs.height &&
+        lhs.livePrice == rhs.livePrice &&
+        lhs.levels == rhs.levels &&
+        lhs.overlays == rhs.overlays &&
+        lhs.candles.count == rhs.candles.count &&
+        lhs.candles.last == rhs.candles.last &&
+        lhs.palette.isLight == rhs.palette.isLight &&
+        lhs.palette.isPureBlackAMOLED == rhs.palette.isPureBlackAMOLED &&
+        lhs.palette.themePreset == rhs.palette.themePreset
+    }
 
     public init(
         candles: [Candle],
@@ -71,7 +83,7 @@ public struct MiniCandlestickCanvas: View {
                 var grid = Path()
                 grid.move(to: CGPoint(x: 0, y: y))
                 grid.addLine(to: CGPoint(x: size.width, y: y))
-                context.stroke(grid, with: .color(palette.border.opacity(0.45)), lineWidth: 0.5)
+                context.stroke(grid, with: .color(palette.chart.grid.color), lineWidth: 0.5)
             }
 
             // 2. Active FVG & Order Block Zones
@@ -79,7 +91,7 @@ public struct MiniCandlestickCanvas: View {
                 let yTop = yFor(zone.top)
                 let yBot = yFor(zone.bottom)
                 let rect = CGRect(x: 0, y: min(yTop, yBot), width: size.width, height: max(2, abs(yBot - yTop)))
-                let fillColor: Color = (zone.direction == .long ? palette.longEmerald : palette.shortCrimson).opacity(zone.kind == .orderBlock ? 0.14 : 0.09)
+                let fillColor: Color = (zone.direction == .long ? palette.chart.bullCandle.color : palette.chart.bearCandle.color).opacity(zone.kind == .orderBlock ? 0.14 : 0.09)
                 context.fill(Path(rect), with: .color(fillColor))
             }
 
@@ -92,7 +104,7 @@ public struct MiniCandlestickCanvas: View {
                 line.addLine(to: CGPoint(x: size.width, y: y))
                 context.stroke(
                     line,
-                    with: .color(palette.trapAmber.opacity(0.85)),
+                    with: .color(palette.chart.trap.color.opacity(0.85)),
                     style: StrokeStyle(lineWidth: 1.0, dash: [4, 3])
                 )
             }
@@ -102,12 +114,12 @@ public struct MiniCandlestickCanvas: View {
                 let entryTop = yFor(lv.entryHigh)
                 let entryBot = yFor(lv.entryLow)
                 let entryRect = CGRect(x: 0, y: min(entryTop, entryBot), width: size.width, height: max(2, abs(entryBot - entryTop)))
-                context.fill(Path(entryRect), with: .color(palette.champagneGold.opacity(0.18)))
+                context.fill(Path(entryRect), with: .color(palette.chart.entry.color.opacity(0.18)))
 
-                drawLevelLine(context: context, width: size.width, y: yFor(lv.stopLoss), color: palette.shortCrimson.opacity(0.85), dash: [3, 3])
-                drawLevelLine(context: context, width: size.width, y: yFor(lv.tp1), color: palette.longEmerald.opacity(0.85), dash: [4, 2])
+                drawLevelLine(context: context, width: size.width, y: yFor(lv.stopLoss), color: palette.chart.stopLoss.color.opacity(0.85), dash: [3, 3])
+                drawLevelLine(context: context, width: size.width, y: yFor(lv.tp1), color: palette.chart.tp1.color.opacity(0.85), dash: [4, 2])
                 if lv.isTP2Enabled && lv.tp2 >= lowBound && lv.tp2 <= highBound {
-                    drawLevelLine(context: context, width: size.width, y: yFor(lv.tp2), color: palette.longEmerald.opacity(0.85), dash: [2, 3])
+                    drawLevelLine(context: context, width: size.width, y: yFor(lv.tp2), color: palette.chart.tp2.color.opacity(0.85), dash: [2, 3])
                 }
             }
 

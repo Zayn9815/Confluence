@@ -215,11 +215,19 @@ private final class TradingViewWebDelegateProxy: NSObject, WKNavigationDelegate,
         return top
     }
 
+    @MainActor
+    private final class ResumeOnce {
+        var didResume = false
+    }
+
     private func presentAlert(message: String) async {
-        guard let presenter = topMostViewController() else { return }
+        guard let presenter = topMostViewController(), presenter.presentedViewController == nil else { return }
+        let state = ResumeOnce()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let alert = UIAlertController(title: "TradingView", message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+                guard !state.didResume else { return }
+                state.didResume = true
                 continuation.resume()
             })
             presenter.present(alert, animated: true)
@@ -227,13 +235,18 @@ private final class TradingViewWebDelegateProxy: NSObject, WKNavigationDelegate,
     }
 
     private func presentConfirm(message: String) async -> Bool {
-        guard let presenter = topMostViewController() else { return false }
+        guard let presenter = topMostViewController(), presenter.presentedViewController == nil else { return false }
+        let state = ResumeOnce()
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let alert = UIAlertController(title: "TradingView", message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+                guard !state.didResume else { return }
+                state.didResume = true
                 continuation.resume(returning: false)
             })
             alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+                guard !state.didResume else { return }
+                state.didResume = true
                 continuation.resume(returning: true)
             })
             presenter.present(alert, animated: true)
@@ -273,6 +286,8 @@ public final class TradingViewWebSessionManager {
     private var forwardObservation: NSKeyValueObservation?
     private var hasLoadedInitialPage: Bool = false
     private var cookieFlushTask: Task<Void, Never>?
+    private var idleTeardownTask: Task<Void, Never>?
+    private var backgroundFlushTaskID: UIBackgroundTaskIdentifier = .invalid
     private let cookieVault = CookieVaultStorage(fileName: "tv_session_cookies.json")
 
     private static let scriptBridgeName = "confluenceBridge"
@@ -290,11 +305,14 @@ public final class TradingViewWebSessionManager {
         initialSymbol: String,
         initialTimeframe: Timeframe,
         preferDesktop: Bool,
-        isDark: Bool
+        isDark: Bool,
+        chartPalette: ConfluenceChartPalette? = nil
     ) -> WKWebView {
+        idleTeardownTask?.cancel()
+        idleTeardownTask = nil
         self.preferDesktop = preferDesktop
         if let existing = webView {
-            applyTheme(isDark: isDark, to: existing)
+            applyTheme(isDark: isDark, chartPalette: chartPalette, to: existing)
             if !hasLoadedInitialPage {
                 seedCookiesAndLoadInitial(
                     webView: existing,
@@ -331,7 +349,7 @@ public final class TradingViewWebSessionManager {
         wv.allowsBackForwardNavigationGestures = false
         wv.isOpaque = false
         wv.scrollView.contentInsetAdjustmentBehavior = .never
-        applyTheme(isDark: isDark, to: wv)
+        applyTheme(isDark: isDark, chartPalette: chartPalette, to: wv)
 
         let proxy = TradingViewWebDelegateProxy(manager: self)
         self.delegateProxy = proxy
@@ -351,9 +369,54 @@ public final class TradingViewWebSessionManager {
         return wv
     }
 
-    public func updateAppearance(isDark: Bool) {
+    /// Called when the chart sheet dismantles: flushes cookies and schedules an idle WebView teardown
+    /// after 5 seconds off-screen so heavy WebKit RAM is reclaimed while preserving login & layouts.
+    public func detachFromHost() {
+        scheduleCookieVaultFlush()
+        idleTeardownTask?.cancel()
+        idleTeardownTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, let self else { return }
+            if self.webView?.superview == nil {
+                await self.teardownWebViewKeepingCookies()
+            }
+        }
+    }
+
+    private func teardownWebViewKeepingCookies() async {
+        await persistCookiesNow()
+        guard webView?.superview == nil else { return }
+
+        urlObservation?.invalidate()
+        urlObservation = nil
+        progressObservation?.invalidate()
+        progressObservation = nil
+        backObservation?.invalidate()
+        forwardObservation?.invalidate()
+        backObservation = nil
+        forwardObservation = nil
+
+        if let proxy = delegateProxy {
+            WKWebsiteDataStore.default().httpCookieStore.remove(proxy)
+        }
+        if let wv = webView {
+            wv.stopLoading()
+            wv.navigationDelegate = nil
+            wv.uiDelegate = nil
+            wv.configuration.userContentController.removeScriptMessageHandler(forName: Self.scriptBridgeName)
+            wv.removeFromSuperview()
+        }
+        webView = nil
+        delegateProxy = nil
+        scriptHandler = nil
+        hasLoadedInitialPage = false
+        isLoading = false
+        estimatedProgress = 0
+    }
+
+    public func updateAppearance(isDark: Bool, chartPalette: ConfluenceChartPalette? = nil) {
         guard let wv = webView else { return }
-        applyTheme(isDark: isDark, to: wv)
+        applyTheme(isDark: isDark, chartPalette: chartPalette, to: wv)
     }
 
     public func setPreferDesktop(_ newValue: Bool) {
@@ -447,8 +510,25 @@ public final class TradingViewWebSessionManager {
     public func flushCookieVaultOnBackground() {
         guard webView != nil else { return }
         cookieFlushTask?.cancel()
+        if backgroundFlushTaskID != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundFlushTaskID)
+            backgroundFlushTaskID = .invalid
+        }
+        let taskID = UIApplication.shared.beginBackgroundTask(withName: "ConfluenceTVCookieFlush") { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.backgroundFlushTaskID != .invalid else { return }
+                UIApplication.shared.endBackgroundTask(self.backgroundFlushTaskID)
+                self.backgroundFlushTaskID = .invalid
+            }
+        }
+        backgroundFlushTaskID = taskID
         Task { @MainActor [weak self] in
             await self?.persistCookiesNow()
+            guard let self else { return }
+            if self.backgroundFlushTaskID == taskID, taskID != .invalid {
+                UIApplication.shared.endBackgroundTask(taskID)
+                self.backgroundFlushTaskID = .invalid
+            }
         }
     }
 
@@ -491,6 +571,8 @@ public final class TradingViewWebSessionManager {
     public func clearSessionAndCache() async {
         cookieFlushTask?.cancel()
         cookieFlushTask = nil
+        idleTeardownTask?.cancel()
+        idleTeardownTask = nil
 
         urlObservation?.invalidate()
         urlObservation = nil
@@ -668,10 +750,10 @@ public final class TradingViewWebSessionManager {
         return url
     }
 
-    private func applyTheme(isDark: Bool, to wv: WKWebView) {
-        let bg = isDark
+    private func applyTheme(isDark: Bool, chartPalette: ConfluenceChartPalette? = nil, to wv: WKWebView) {
+        let bg = chartPalette?.background.uiColor ?? (isDark
             ? UIColor(red: 11.0 / 255.0, green: 14.0 / 255.0, blue: 20.0 / 255.0, alpha: 1.0)
-            : UIColor(red: 248.0 / 255.0, green: 247.0 / 255.0, blue: 244.0 / 255.0, alpha: 1.0)
+            : UIColor(red: 248.0 / 255.0, green: 247.0 / 255.0, blue: 244.0 / 255.0, alpha: 1.0))
         wv.backgroundColor = bg
         wv.scrollView.backgroundColor = bg
     }
@@ -748,8 +830,13 @@ public final class TradingViewWebSessionManager {
       }
 
       hideAppNags();
+      var nagDebounceTimer = null;
       var observer = new MutationObserver(function() {
-        hideAppNags();
+        if (nagDebounceTimer) return;
+        nagDebounceTimer = setTimeout(function() {
+          nagDebounceTimer = null;
+          hideAppNags();
+        }, 250);
       });
       if (document.body) {
         observer.observe(document.body, { childList: true, subtree: true });
@@ -787,6 +874,7 @@ private struct TradingViewWebContainerView: UIViewRepresentable {
     let timeframe: Timeframe
     let preferDesktop: Bool
     let isDark: Bool
+    let chartPalette: ConfluenceChartPalette
 
     func makeUIView(context: Context) -> UIView {
         let host = UIView(frame: .zero)
@@ -797,17 +885,16 @@ private struct TradingViewWebContainerView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIView, context: Context) {
         let manager = TradingViewWebSessionManager.shared
-        manager.updateAppearance(isDark: isDark)
+        manager.updateAppearance(isDark: isDark, chartPalette: chartPalette)
         manager.setPreferDesktop(preferDesktop)
         attachPersistentWebView(to: uiView)
     }
 
     static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
-        // Keep the WKWebView alive inside TradingViewWebSessionManager so login, layouts,
-        // drawings, and watchlists persist across sheet dismissals. Only detach from this host.
         for subview in uiView.subviews where subview is WKWebView {
             subview.removeFromSuperview()
         }
+        TradingViewWebSessionManager.shared.detachFromHost()
     }
 
     private func attachPersistentWebView(to host: UIView) {
@@ -815,7 +902,8 @@ private struct TradingViewWebContainerView: UIViewRepresentable {
             initialSymbol: symbol,
             initialTimeframe: timeframe,
             preferDesktop: preferDesktop,
-            isDark: isDark
+            isDark: isDark,
+            chartPalette: chartPalette
         )
         if wv.superview !== host {
             wv.removeFromSuperview()
@@ -874,7 +962,7 @@ public struct TradingViewWebAdapterView: View {
                             .font(.system(size: 10, weight: .bold))
                             .lineLimit(1)
                     }
-                    .foregroundStyle(palette.canvas)
+                    .foregroundStyle(palette.onAccentInk)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
                     .background(palette.champagneGold, in: Capsule())
@@ -988,7 +1076,7 @@ public struct TradingViewWebAdapterView: View {
                         session.reload()
                     }
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(palette.canvas)
+                    .foregroundStyle(palette.onAccentInk)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 4)
                     .background(palette.champagneGold, in: Capsule())
@@ -1004,7 +1092,8 @@ public struct TradingViewWebAdapterView: View {
                 symbol: symbol,
                 timeframe: timeframe,
                 preferDesktop: preferDesktop,
-                isDark: isDark
+                isDark: isDark,
+                chartPalette: palette.chart
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

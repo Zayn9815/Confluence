@@ -13,6 +13,7 @@ public struct SignalsTabView: View {
     @Bindable var coordinator: MarketScannerCoordinator
     let palette: ConfluencePalette
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var selectedMarket: MarketClass? = nil // nil == All
     @State private var feedFilter: SignalFeedFilter = .strong
@@ -71,7 +72,7 @@ public struct SignalsTabView: View {
                         Spacer()
                         if shield.isBlackoutActive {
                             Text("SHIELD ON")
-                                .font(.system(size: 9, weight: .bold))
+                                .font(.caption2.weight(.bold))
                                 .foregroundStyle(palette.trapAmber)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -126,7 +127,7 @@ public struct SignalsTabView: View {
                     }
                 }
 
-                // Market & Category Filter Bar
+                // Market & Category Filter Bar + 1-Tap Compact/Terminal Density Toggle
                 VStack(spacing: 8) {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 7) {
@@ -142,14 +143,21 @@ public struct SignalsTabView: View {
                         .padding(.horizontal, 14)
                     }
 
-                    Picker("Category", selection: $feedFilter) {
-                        ForEach(SignalFeedFilter.allCases) { f in
-                            if f != .weak || coordinator.settings.payload.showWeakFilteredSignals {
-                                Text(f.rawValue).tag(f)
+                    HStack(spacing: 8) {
+                        Picker("Category", selection: $feedFilter) {
+                            ForEach(SignalFeedFilter.allCases) { f in
+                                if f != .weak || coordinator.settings.payload.showWeakFilteredSignals {
+                                    Text(f.rawValue).tag(f)
+                                }
                             }
                         }
+                        .pickerStyle(.segmented)
+
+                        CardDensityQuickToggle(
+                            density: $coordinator.settings.payload.cardDensity,
+                            palette: palette
+                        )
                     }
-                    .pickerStyle(.segmented)
                     .padding(.horizontal, 14)
                 }
                 .padding(.vertical, 10)
@@ -198,10 +206,15 @@ public struct SignalsTabView: View {
                                             toggleSelection(for: sig.fingerprint)
                                         },
                                         onDelete: {
-                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                            let deleteAction = {
                                                 coordinator.deleteSignal(fingerprint: sig.fingerprint)
                                                 selectedFingerprints.remove(sig.fingerprint)
                                                 expandedSignalIDs.remove(sig.fingerprint)
+                                            }
+                                            if reduceMotion {
+                                                deleteAction()
+                                            } else {
+                                                withAnimation(.easeInOut(duration: 0.2)) { deleteAction() }
                                             }
                                         },
                                         onToggleBrokerAdjusted: {
@@ -239,9 +252,9 @@ public struct SignalsTabView: View {
                             }
                         }
                         .padding(.horizontal, 14)
-                        .padding(.bottom, isSelecting ? 84 : 12)
+                        .padding(.bottom, isSelecting ? 72 : 8)
                     }
-                    .safeAreaPadding(.bottom, 96)
+                    .contentMargins(.bottom, 24, for: .scrollContent)
                     .refreshable {
                         await coordinator.scanAllMarkets()
                     }
@@ -444,7 +457,7 @@ public struct SignalsTabView: View {
     }
 
     private func toggleExpanded(_ fingerprint: String) {
-        withAnimation(.snappy(duration: 0.24, extraBounce: 0.0)) {
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0.0)) {
             if expandedSignalIDs.contains(fingerprint) {
                 expandedSignalIDs.remove(fingerprint)
             } else {
@@ -462,7 +475,7 @@ public struct SignalsTabView: View {
     }
 
     private func exitSelectionMode() {
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
             isSelecting = false
             selectedFingerprints.removeAll()
         }
@@ -496,7 +509,7 @@ public struct SignalsTabView: View {
             } label: {
                 Label("Delete (\(selectedFingerprints.count))", systemImage: "trash.fill")
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.onDestructiveInk)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(
@@ -532,7 +545,7 @@ public struct SignalsTabView: View {
         coordinator.pendingDeepLink = nil
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
-            withAnimation(.easeInOut(duration: 0.35)) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
                 proxy.scrollTo(fp, anchor: .top)
             }
             try? await Task.sleep(for: .seconds(2.2))
@@ -546,7 +559,7 @@ public struct SignalsTabView: View {
         Button(action: action) {
             Text(title)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(isSelected ? palette.canvas : palette.secondaryInk)
+                .foregroundStyle(isSelected ? palette.onAccentInk : palette.secondaryInk)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(
@@ -592,7 +605,7 @@ public struct SignalsTabView: View {
             } label: {
                 Label("Run Live Scan", systemImage: "play.fill")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(palette.canvas)
+                    .foregroundStyle(palette.onAccentInk)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 10)
                     .background(palette.champagneGold, in: Capsule())

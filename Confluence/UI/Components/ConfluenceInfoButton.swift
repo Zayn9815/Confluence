@@ -9,6 +9,7 @@ public struct ConfluenceInfoButton: View {
     public let title: String?
     public let message: String
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var isPresented = false
 
     private static let popoverWidth: CGFloat = 290
@@ -28,6 +29,7 @@ public struct ConfluenceInfoButton: View {
     }
 
     private var measuredLayout: (height: CGFloat, needsScroll: Bool) {
+        let _ = dynamicTypeSize
         let innerWidth = Self.popoverWidth - (Self.innerPadding * 2) // 258pt
         let constraint = CGSize(width: innerWidth, height: .greatestFiniteMagnitude)
         let options: NSStringDrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
@@ -65,6 +67,7 @@ public struct ConfluenceInfoButton: View {
             Image(systemName: "info.circle")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .frame(minWidth: 36, minHeight: 36)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

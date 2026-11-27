@@ -109,23 +109,30 @@ private struct JournalLiveMetricsLeafView: View {
             }
             .frame(height: 10)
 
-            HStack(spacing: 4) {
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), alignment: .leading),
+                    GridItem(.flexible(), alignment: .trailing)
+                ],
+                spacing: 2
+            ) {
                 Text("SL \(precision.format(entry.stopLoss))")
                     .foregroundStyle(palette.shortCrimson)
-                Spacer()
                 Text("E \(precision.format(entry.anchorEntryPrice))")
                     .foregroundStyle(palette.champagneGold)
-                Spacer()
                 Text("T1 \(precision.format(entry.target1))")
                     .foregroundStyle(palette.longEmerald)
                 if entry.hasDistinctTP2 {
-                    Text("· T2 \(precision.format(entry.target2))")
+                    Text("T2 \(precision.format(entry.target2))")
                         .foregroundStyle(palette.longEmerald.opacity(0.9))
+                } else {
+                    Text("TP1 Only")
+                        .foregroundStyle(palette.tertiaryInk)
                 }
             }
-            .font(.system(size: 9.5, weight: .medium).monospacedDigit())
+            .font(.caption2.weight(.medium).monospacedDigit())
             .lineLimit(1)
-            .minimumScaleFactor(0.75)
+            .minimumScaleFactor(0.8)
         }
     }
 }
@@ -186,10 +193,10 @@ public struct TradeJournalView: View {
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.8)
                                 Text(liveBadge > 0 ? "\(liveBadge) live · \(totalCount)" : "\(totalCount) total")
-                                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                                    .font(.caption2.weight(.semibold).monospacedDigit())
                                     .opacity(isSelected ? 0.9 : 0.75)
                             }
-                            .foregroundStyle(isSelected ? palette.canvas : palette.primaryInk)
+                            .foregroundStyle(isSelected ? palette.onAccentInk : palette.primaryInk)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 7)
                             .frame(maxWidth: .infinity)
@@ -232,7 +239,7 @@ public struct TradeJournalView: View {
                                 } label: {
                                     Text(tab.rawValue)
                                         .font(.caption2.weight(.bold))
-                                        .foregroundStyle(selected ? palette.canvas : palette.secondaryInk)
+                                        .foregroundStyle(selected ? palette.onAccentInk : palette.secondaryInk)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 5)
                                         .background(selected ? palette.champagneGold : palette.elevatedSurface, in: Capsule())
@@ -283,7 +290,7 @@ public struct TradeJournalView: View {
             }
             .padding(14)
         }
-        .safeAreaPadding(.bottom, 96)
+        .contentMargins(.bottom, 24, for: .scrollContent)
         .background(palette.canvas)
         .onAppear {
             coordinator.acquireActivePositionsLiveFeed()
@@ -335,6 +342,7 @@ public struct TradeJournalView: View {
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(palette.primaryInk)
                     .lineLimit(1)
+                    .layoutPriority(1)
 
                 Text(entry.timeframe.displayLabel)
                     .font(.system(size: 10, weight: .bold).monospacedDigit())

@@ -48,16 +48,19 @@ public final class PreNewsNotificationScheduler {
         if settings.preNewsLead5m { leads.append(5) }
         guard !leads.isEmpty else { return 0 }
 
-        let slots = MacroSurpriseEngine.planPreNewsNotificationSlots(
+        // Request an expanded candidate pool so slots skipped for quiet hours can be backfilled up to 40
+        let candidateSlots = MacroSurpriseEngine.planPreNewsNotificationSlots(
             events: events,
             nowEpochSeconds: nowEpochSeconds,
             leadTimesMinutes: leads,
             minimumImportance: settings.calendarPushImpactFilter.minimumImportance,
-            maxSlots: Self.maxPreNewsSlots
+            maxSlots: Self.maxPreNewsSlots * 4
         )
 
+        let utcCal = MarketHolidayCalendar.utcCalendar
         var scheduled = 0
-        for slot in slots {
+        for slot in candidateSlots {
+            if scheduled >= Self.maxPreNewsSlots { break }
             let fireDate = Date(timeIntervalSince1970: slot.fireEpochSeconds)
             guard AlertRuleEvaluator.shouldAllowPreNews(rules: settings.alertRules, at: fireDate) else {
                 continue
@@ -77,7 +80,8 @@ public final class PreNewsNotificationScheduler {
                 content.sound = UNNotificationSound(named: UNNotificationSoundName("news_release_ping.caf"))
             }
 
-            let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: fireDate)
+            var comps = utcCal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: fireDate)
+            comps.timeZone = utcCal.timeZone
             let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
             let req = UNNotificationRequest(identifier: slot.identifier, content: content, trigger: trigger)
             do {

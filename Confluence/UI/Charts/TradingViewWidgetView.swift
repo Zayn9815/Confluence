@@ -84,12 +84,17 @@ public enum TradingViewSymbolMapper: Sendable {
     }
 
     /// Official TradingView Advanced Chart embed snippet with visible TradingView attribution.
-    public static func embedHTML(symbol canonicalSymbol: String, timeframe: Timeframe, isDark: Bool) -> String {
+    public static func embedHTML(
+        symbol canonicalSymbol: String,
+        timeframe: Timeframe,
+        isDark: Bool,
+        chartPalette: ConfluenceChartPalette? = nil
+    ) -> String {
         let tvSymbol = tradingViewSymbol(for: canonicalSymbol)
         let tvInterval = interval(for: timeframe)
         let theme = isDark ? "dark" : "light"
-        let bgHex = isDark ? "#0B0E14" : "#F8F7F4"
-        let textHex = isDark ? "#9CA7BA" : "#5A6577"
+        let bgHex = chartPalette?.background.hexString ?? (isDark ? "#0B0E14" : "#F8F7F4")
+        let textHex = chartPalette?.axisText.hexString ?? (isDark ? "#9CA7BA" : "#5A6577")
 
         // Strict symbol character whitelist to prevent HTML/JS injection inside <script>
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:_.-/")
@@ -173,11 +178,13 @@ public struct TradingViewWidgetView: UIViewRepresentable {
     public let symbol: String
     public let timeframe: Timeframe
     public let isDark: Bool
+    public let chartPalette: ConfluenceChartPalette?
 
-    public init(symbol: String, timeframe: Timeframe, isDark: Bool) {
+    public init(symbol: String, timeframe: Timeframe, isDark: Bool, chartPalette: ConfluenceChartPalette? = nil) {
         self.symbol = symbol
         self.timeframe = timeframe
         self.isDark = isDark
+        self.chartPalette = chartPalette
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -209,9 +216,9 @@ public struct TradingViewWidgetView: UIViewRepresentable {
     }
 
     private func applyBackground(to webView: WKWebView, isDark: Bool) {
-        let bg = isDark
+        let bg = chartPalette?.background.uiColor ?? (isDark
             ? UIColor(red: 11.0 / 255.0, green: 14.0 / 255.0, blue: 20.0 / 255.0, alpha: 1.0)
-            : UIColor(red: 248.0 / 255.0, green: 247.0 / 255.0, blue: 244.0 / 255.0, alpha: 1.0)
+            : UIColor(red: 248.0 / 255.0, green: 247.0 / 255.0, blue: 244.0 / 255.0, alpha: 1.0))
         webView.backgroundColor = bg
         webView.scrollView.backgroundColor = bg
     }
@@ -219,10 +226,16 @@ public struct TradingViewWidgetView: UIViewRepresentable {
     private func loadIfNeeded(webView: WKWebView, coordinator: Coordinator) {
         let tvSymbol = TradingViewSymbolMapper.tradingViewSymbol(for: symbol)
         let tvInterval = TradingViewSymbolMapper.interval(for: timeframe)
-        let key = "\(tvSymbol)|\(tvInterval)|\(isDark)"
+        let bgHex = chartPalette?.background.hexString ?? (isDark ? "#0B0E14" : "#F8F7F4")
+        let key = "\(tvSymbol)|\(tvInterval)|\(isDark)|\(bgHex)"
         guard coordinator.lastLoadedKey != key else { return }
         coordinator.lastLoadedKey = key
-        let html = TradingViewSymbolMapper.embedHTML(symbol: symbol, timeframe: timeframe, isDark: isDark)
+        let html = TradingViewSymbolMapper.embedHTML(
+            symbol: symbol,
+            timeframe: timeframe,
+            isDark: isDark,
+            chartPalette: chartPalette
+        )
         webView.loadHTMLString(html, baseURL: URL(string: "https://www.tradingview.com"))
     }
 

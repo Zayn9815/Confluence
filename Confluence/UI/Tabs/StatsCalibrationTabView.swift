@@ -268,7 +268,7 @@ public struct StatsCalibrationTabView: View {
                         }
                         .padding(14)
                     }
-                    .safeAreaPadding(.bottom, 96)
+                    .contentMargins(.bottom, 24, for: .scrollContent)
                     .background(palette.canvas)
                 }
             }

@@ -7,6 +7,7 @@ public struct ConfluenceRootView: View {
     @Bindable var coordinator: MarketScannerCoordinator
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedTab: Int = 0
 
     public init(coordinator: MarketScannerCoordinator) {
@@ -26,7 +27,9 @@ public struct ConfluenceRootView: View {
             colorScheme: effectiveColorScheme,
             usePureBlackAMOLED: coordinator.settings.payload.usePureBlackAMOLED,
             useColorBlindSafe: coordinator.settings.payload.useColorBlindSafePalette,
-            increaseContrast: colorSchemeContrast == .increased
+            increaseContrast: colorSchemeContrast == .increased,
+            themePreset: coordinator.settings.payload.terminalThemePreset,
+            glassIntensity: coordinator.settings.payload.liquidGlassIntensity
         )
     }
 
@@ -61,12 +64,14 @@ public struct ConfluenceRootView: View {
                 .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
                 .tag(4)
         }
+        .environment(\.confluencePalette, palette)
         .tint(palette.champagneGold)
         .preferredColorScheme(coordinator.settings.payload.appearanceMode.colorScheme)
         .fullScreenCover(isPresented: isOnboardingPresented) {
             OnboardingFlowView(palette: palette) {
                 coordinator.settings.payload.hasCompletedOnboarding = true
             }
+            .environment(\.confluencePalette, palette)
         }
         .alert(
             "Scan not started",
@@ -81,15 +86,19 @@ public struct ConfluenceRootView: View {
         }
         .sheet(isPresented: $coordinator.isNotificationInboxPresented) {
             NotificationInboxSheet(coordinator: coordinator, palette: palette)
+                .environment(\.confluencePalette, palette)
         }
-        .onChange(of: coordinator.pendingDeepLink) { _, link in
+        .onChange(of: coordinator.pendingDeepLink, initial: true) { _, link in
             guard let link else { return }
             switch link {
             case .signal(let fingerprint, _, _, _):
                 selectedTab = 0
                 coordinator.highlightedSignalFingerprint = fingerprint
-            case .news:
+            case .news(let eventID):
                 selectedTab = 1
+                if let eventID, !eventID.isEmpty {
+                    coordinator.highlightedNewsEventID = eventID
+                }
                 coordinator.pendingDeepLink = nil
             }
         }
@@ -99,12 +108,13 @@ public struct ConfluenceRootView: View {
         .popup(isPresented: isBannerPresented) {
             if let banner = coordinator.activeBanner {
                 floatingBannerView(banner)
+                    .environment(\.confluencePalette, palette)
             }
         } customize: { params in
             params
                 .type(.floater(verticalPadding: 16, horizontalPadding: 14, useSafeAreaInset: true))
                 .position(.top)
-                .animation(.spring(response: 0.38, dampingFraction: 0.85))
+                .animation(reduceMotion ? .linear(duration: 0.01) : .spring(response: 0.38, dampingFraction: 0.85))
                 .autohideIn(4.5)
                 .dragToDismiss(true)
                 .closeOnTap(true)
@@ -149,12 +159,8 @@ public struct ConfluenceRootView: View {
                     .foregroundStyle(palette.tertiaryInk)
             }
             .padding(12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(accent.opacity(0.6), lineWidth: 1.0)
-            )
-            .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
+            .confluenceLiquidGlass(cornerRadius: 14, borderColor: accent.opacity(0.6))
+            .shadow(color: .black.opacity(palette.isLight ? 0.14 : 0.28), radius: 12, y: 6)
         }
         .buttonStyle(.plain)
         .safeAreaPadding(.top, 4)

@@ -308,6 +308,8 @@ public struct MarketsFeedsSettingsView: View {
                 Text(SettingHelpKey.matchToBrokerPrice.copy.subtitle)
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
         .navigationTitle("Markets & Data")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Sign Out & Clear TradingView Cache?", isPresented: $showClearTradingViewAlert) {

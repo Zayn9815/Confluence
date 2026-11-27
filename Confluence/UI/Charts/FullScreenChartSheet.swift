@@ -161,6 +161,7 @@ public struct FullScreenChartSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(ChartEngineOption.appStorageKey) private var storedChartEngineRaw: String = ChartEngineOption.candleKit.rawValue
+    @AppStorage(ChartOverlayLayerSet.appStorageKey) private var overlayLayersRaw: Int = ChartOverlayLayerSet.all.rawValue
 
     @State private var sheetInstanceId: String = UUID().uuidString
     @State private var session: ChartSessionController
@@ -170,6 +171,21 @@ public struct FullScreenChartSheet: View {
     @State private var loadError: String? = nil
     @State private var showRiskStrip: Bool = true
     @State private var chartViewMode: DefaultChartViewMode
+    @State private var loadTask: Task<Void, Never>? = nil
+
+    private var activeLayers: ChartOverlayLayerSet {
+        ChartOverlayLayerSet(rawValue: overlayLayersRaw)
+    }
+
+    private func toggleOverlayLayer(_ layer: ChartOverlayLayerSet) {
+        var next = activeLayers
+        if next.contains(layer) {
+            next.remove(layer)
+        } else {
+            next.insert(layer)
+        }
+        overlayLayersRaw = next.rawValue
+    }
 
     private static let dailyUTCFormat = Date.VerbatimFormatStyle(
         format: "\(month: .abbreviated) \(day: .defaultDigits) UTC",
@@ -266,17 +282,28 @@ public struct FullScreenChartSheet: View {
             ?? sourceSignal?.recentCandles.last?.openTimeEpochSeconds
             ?? sourceSignal?.barCloseEpochSeconds
             ?? session.closedCandles.last?.openTimeEpochSeconds
+        let filteredOverlays: ChartOverlayData = shouldShowSignalLevels
+            ? ChartOverlayData(
+                zones: activeLayers.contains(.zones) ? overlays.zones : [],
+                traps: activeLayers.contains(.traps) ? overlays.traps : [],
+                structureEvents: overlays.structureEvents,
+                equilibriumPrice: overlays.equilibriumPrice,
+                ema20: activeLayers.contains(.movingAverages) ? overlays.ema20 : nil,
+                ema50: activeLayers.contains(.movingAverages) ? overlays.ema50 : nil,
+                ema200: activeLayers.contains(.movingAverages) ? overlays.ema200 : nil
+            )
+            : ChartOverlayData()
         return ChartSignalOverlayModel.build(
             symbol: symbol,
             marketClass: marketClass,
             timeframe: session.timeframe,
             direction: dir,
-            levels: effectiveLevels,
-            overlays: shouldShowSignalLevels ? overlays : ChartOverlayData(),
+            levels: activeLayers.contains(.tradeLevels) ? effectiveLevels : nil,
+            overlays: filteredOverlays,
             entryTimestamp: entryTS,
             breakevenPrice: nil,
             livePrice: activeQuote?.price,
-            orderFlowSummary: activeOrderFlowSummary
+            orderFlowSummary: activeLayers.contains(.walls) ? activeOrderFlowSummary : nil
         )
     }
 
@@ -456,7 +483,8 @@ public struct FullScreenChartSheet: View {
                         TradingViewWidgetView(
                             symbol: symbol,
                             timeframe: session.timeframe,
-                            isDark: colorScheme == .dark
+                            isDark: colorScheme == .dark,
+                            chartPalette: palette.chart
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
@@ -472,6 +500,7 @@ public struct FullScreenChartSheet: View {
                             timeframe: session.timeframe,
                             palette: palette,
                             isDark: colorScheme == .dark,
+                            showMovingAverages: activeLayers.contains(.movingAverages),
                             tradingViewPreferDesktop: Binding(
                                 get: { coordinator?.settings.payload.tradingViewPreferDesktop ?? false },
                                 set: { newVal in
@@ -530,7 +559,7 @@ public struct FullScreenChartSheet: View {
                 ToolbarItem(placement: .topBarLeading) {
                     if coordinator != nil && !isReplayMode {
                         Button {
-                            Task { await reloadChartData() }
+                            scheduleReloadChartData()
                         } label: {
                             Image(systemName: "arrow.clockwise")
                                 .font(.subheadline.weight(.semibold))
@@ -559,11 +588,13 @@ public struct FullScreenChartSheet: View {
                         )
                     }
                     if session.closedCandles.count < 120 {
-                        await reloadChartData()
+                        scheduleReloadChartData()
                     }
                 }
             }
             .onDisappear {
+                loadTask?.cancel()
+                loadTask = nil
                 if !isReplayMode {
                     coordinator?.livePriceService.release(owner: "chart_\(symbol)_\(sheetInstanceId)")
                     coordinator?.liveOrderFlowService.unfocus(symbol: symbol)
@@ -771,21 +802,40 @@ public struct FullScreenChartSheet: View {
                     Button {
                         guard session.timeframe != tf else { return }
                         session.timeframe = tf
-                        Task { await reloadChartData() }
+                        scheduleReloadChartData()
                     } label: {
                         Text(tf.displayLabel)
                             .font(.caption2.weight(.bold).monospacedDigit())
-                            .foregroundStyle(isSelected ? palette.canvas : palette.secondaryInk)
+                            .foregroundStyle(isSelected ? palette.onAccentInk : palette.secondaryInk)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 5)
                             .background(isSelected ? palette.champagneGold : palette.elevatedSurface, in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(session.isLoadingInitial)
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 2)
+
+            // Overlay Layers Toggle Menu (Native Engines)
+            if effectiveChartViewMode == .confluence && activeChartEngine != .tradingViewWeb {
+                Menu {
+                    layerToggleButton("Trade Levels", layer: .tradeLevels)
+                    layerToggleButton("FVG / OB Zones", layer: .zones)
+                    layerToggleButton("Behavioral Traps", layer: .traps)
+                    layerToggleButton("Order Flow Walls", layer: .walls)
+                    layerToggleButton("Moving Averages", layer: .movingAverages)
+                } label: {
+                    Image(systemName: "square.3.layers.3d")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(activeLayers == .all ? palette.primaryInk : palette.champagneGold)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(palette.elevatedSurface, in: Capsule())
+                        .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
+                }
+                .accessibilityLabel("Chart Overlay Layers")
+            }
 
             // Reset button (fits content + scrolls to real time + restores Y-scale)
             Button {
@@ -806,7 +856,7 @@ public struct FullScreenChartSheet: View {
                 ForEach(ChartProviderChoice.choices(for: marketClass)) { choice in
                     Button {
                         selectedProvider = choice
-                        Task { await reloadChartData() }
+                        scheduleReloadChartData()
                     } label: {
                         if selectedProvider == choice {
                             Label(choice.rawValue, systemImage: "checkmark")
@@ -829,7 +879,26 @@ public struct FullScreenChartSheet: View {
                 .background(palette.elevatedSurface, in: Capsule())
                 .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.75))
             }
-            .disabled(session.isLoadingInitial)
+        }
+    }
+
+    @ViewBuilder
+    private func layerToggleButton(_ title: String, layer: ChartOverlayLayerSet) -> some View {
+        Button {
+            toggleOverlayLayer(layer)
+        } label: {
+            if activeLayers.contains(layer) {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+    }
+
+    private func scheduleReloadChartData() {
+        loadTask?.cancel()
+        loadTask = Task { @MainActor in
+            await reloadChartData()
         }
     }
 
@@ -845,6 +914,7 @@ public struct FullScreenChartSheet: View {
                 providerChoice: selectedProvider,
                 limit: 500
             )
+            guard !Task.isCancelled else { return }
             guard !res.candles.isEmpty else {
                 loadError = "Provider returned 0 closed candles for \(symbol)."
                 session.failInitialLoad()

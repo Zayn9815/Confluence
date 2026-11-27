@@ -223,7 +223,7 @@ public struct MarketsScannerTabView: View {
                 }
                 .padding(14)
             }
-            .safeAreaPadding(.bottom, 96)
+            .contentMargins(.bottom, 24, for: .scrollContent)
             .background(palette.canvas)
             .navigationTitle("Markets & Scanner")
             .navigationBarTitleDisplayMode(.inline)

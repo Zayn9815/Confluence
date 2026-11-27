@@ -70,7 +70,7 @@ public struct StrategyTradesView: View {
                     } label: {
                         Text("\(tab.rawValue) (\(count(for: tab)))")
                             .font(.caption2.weight(.bold).monospacedDigit())
-                            .foregroundStyle(isSelected ? palette.canvas : palette.secondaryInk)
+                            .foregroundStyle(isSelected ? palette.onAccentInk : palette.secondaryInk)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                             .background(isSelected ? palette.champagneGold : palette.elevatedSurface, in: Capsule())
@@ -99,9 +99,9 @@ public struct StrategyTradesView: View {
                         }
                     }
                     .padding(.horizontal, 14)
-                    .padding(.bottom, 16)
+                    .padding(.top, 4)
                 }
-                .safeAreaPadding(.bottom, 96)
+                .contentMargins(.bottom, 24, for: .scrollContent)
                 .background(palette.canvas)
             }
         }
@@ -134,22 +134,28 @@ public struct StrategyTradesView: View {
     }
 
     private func strategySummaryHeader(_ s: StrategyDiagnosticBreakdown) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                let wrText: String = {
-                    let pct = String(format: "%.1f%%", s.winRate * 100.0)
-                    if let ci = s.winRateCI {
-                        return "\(pct) (\(ci.percentRangeLabel))"
-                    }
-                    return pct
-                }()
+        let wrText: String = {
+            let pct = String(format: "%.1f%%", s.winRate * 100.0)
+            if let ci = s.winRateCI {
+                return "\(pct) (\(ci.percentRangeLabel))"
+            }
+            return pct
+        }()
+        return VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 10),
+                    GridItem(.flexible(), spacing: 10)
+                ],
+                spacing: 8
+            ) {
                 statPill("WIN RATE (95% CI)", wrText, s.winRate >= 0.5 ? palette.longEmerald : palette.shortCrimson)
                 statPill("EXPECTANCY", String(format: "%+.2fR", s.expectancyR), s.expectancyR >= 0 ? palette.champagneGold : palette.shortCrimson)
                 statPill("RECORD", "\(s.wins)W / \(s.losses)L", palette.primaryInk)
                 statPill("BRIER", String(format: "%.3f", s.brierContribution), palette.champagneGold)
             }
             if !s.bestPairs.isEmpty || !s.worstPairs.isEmpty {
-                HStack(spacing: 8) {
+                ConfluenceFlowLayout(horizontalSpacing: 8, verticalSpacing: 4) {
                     if !s.bestPairs.isEmpty {
                         Text("Best: \(s.bestPairs.joined(separator: ", "))")
                             .foregroundStyle(palette.longEmerald)
@@ -170,13 +176,13 @@ public struct StrategyTradesView: View {
     private func statPill(_ title: String, _ value: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.system(size: 9, weight: .bold))
+                .font(.caption2.weight(.bold))
                 .foregroundStyle(palette.tertiaryInk)
             Text(value)
                 .font(.caption.weight(.bold).monospacedDigit())
                 .foregroundStyle(color)
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -204,6 +210,7 @@ public struct StrategyTradesView: View {
                     Text(trade.symbol)
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(palette.primaryInk)
+                        .layoutPriority(1)
                     Text(trade.timeframe.displayLabel)
                         .font(.caption2.weight(.semibold).monospacedDigit())
                         .foregroundStyle(palette.secondaryInk)
@@ -216,7 +223,7 @@ public struct StrategyTradesView: View {
                     Spacer()
 
                     Text(trade.status.rawValue)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.caption2.weight(.bold))
                         .foregroundStyle(outcomeColor)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
@@ -233,7 +240,19 @@ public struct StrategyTradesView: View {
                     }
                 }
 
-                // Footer: Net R, Score, Entry/Exit UTC, Replay cue
+                // Dedicated timestamps line (prevents 390pt crowding with R & Replay button)
+                HStack(spacing: 6) {
+                    Text("In \(formatUTC(trade.entryEpochSeconds))")
+                    if let ex = trade.exitEpochSeconds {
+                        Text("→ Out \(formatUTC(ex))")
+                    }
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(palette.tertiaryInk)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+
+                // Footer: Net R, Score, Replay cue
                 HStack(spacing: 8) {
                     Text(String(format: "%+.2fR", trade.netRMultiple))
                         .font(.caption.weight(.bold).monospacedDigit())
@@ -241,14 +260,6 @@ public struct StrategyTradesView: View {
                     Text("· Score \(Int(trade.confidencePercent.rounded()))")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(palette.secondaryInk)
-                    Text("· In \(formatUTC(trade.entryEpochSeconds))")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(palette.tertiaryInk)
-                    if let ex = trade.exitEpochSeconds {
-                        Text("→ Out \(formatUTC(ex))")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(palette.tertiaryInk)
-                    }
                     Spacer()
                     if isLoading {
                         ProgressView().controlSize(.mini)
