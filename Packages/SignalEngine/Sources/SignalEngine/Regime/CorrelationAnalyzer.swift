@@ -101,12 +101,24 @@ public enum CorrelationAnalyzer {
             return nil
         }
 
-        let mapA = Dictionary(closedA.map { (Int($0.openTimeEpochSeconds.rounded()), $0.close) }, uniquingKeysWith: { _, latest in latest })
-        let mapB = Dictionary(closedB.map { (Int($0.openTimeEpochSeconds.rounded()), $0.close) }, uniquingKeysWith: { _, latest in latest })
+        let validA = closedA.filter { $0.openTimeEpochSeconds.isFinite && $0.close.isFinite && $0.close > 0 }
+        let validB = closedB.filter { $0.openTimeEpochSeconds.isFinite && $0.close.isFinite && $0.close > 0 }
+        let mapA = Dictionary(validA.map { (Int($0.openTimeEpochSeconds.rounded()), $0.close) }, uniquingKeysWith: { _, latest in latest })
+        let mapB = Dictionary(validB.map { (Int($0.openTimeEpochSeconds.rounded()), $0.close) }, uniquingKeysWith: { _, latest in latest })
 
         let commonTimestamps = mapA.keys.filter { mapB[$0] != nil }.sorted()
         let recent = Array(commonTimestamps.suffix(maxLookbackBars + 1))
         guard recent.count >= minimumAlignedReturnBars + 1 else { return nil }
+
+        var steps: [Int] = []
+        steps.reserveCapacity(recent.count - 1)
+        for i in 1..<recent.count {
+            let dt = recent[i] - recent[i - 1]
+            if dt > 0 { steps.append(dt) }
+        }
+        steps.sort()
+        let medianStep = steps.isEmpty ? Int.max : steps[steps.count / 2]
+        let maxAllowedGap = (medianStep <= Int.max / 3) ? (medianStep * 3) : Int.max
 
         var retA: [Double] = []
         var retB: [Double] = []
@@ -116,12 +128,17 @@ public enum CorrelationAnalyzer {
         for i in 1..<recent.count {
             let tPrev = recent[i - 1]
             let tCurr = recent[i]
+            let dt = tCurr - tPrev
+            guard dt > 0, dt <= maxAllowedGap else { continue }
             guard let a0 = mapA[tPrev], let a1 = mapA[tCurr], a0 > 0, a1 > 0,
                   let b0 = mapB[tPrev], let b1 = mapB[tCurr], b0 > 0, b1 > 0 else {
                 continue
             }
-            retA.append(log(a1 / a0))
-            retB.append(log(b1 / b0))
+            let la = log(a1 / a0)
+            let lb = log(b1 / b0)
+            guard la.isFinite, lb.isFinite else { continue }
+            retA.append(la)
+            retB.append(lb)
         }
 
         let n = retA.count

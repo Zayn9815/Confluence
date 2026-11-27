@@ -83,11 +83,17 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
             ))
         }
 
-        let gold = DrawingColor(red: 0.871, green: 0.722, blue: 0.325, opacity: 0.95)
-        let crimson = DrawingColor(red: 0.937, green: 0.267, blue: 0.267, opacity: 0.95)
-        let emerald = DrawingColor(red: 0.063, green: 0.725, blue: 0.506, opacity: 0.95)
-        let mutedSlate = DrawingColor(red: 0.580, green: 0.639, blue: 0.722, opacity: 0.90)
-        let amber = DrawingColor(red: 0.961, green: 0.620, blue: 0.043, opacity: 0.90)
+        func drawingColor(_ rgb: ConfluenceRGB, opacity: Double = 0.95) -> DrawingColor {
+            DrawingColor(red: rgb.r, green: rgb.g, blue: rgb.b, opacity: opacity)
+        }
+
+        let chartTokens = palette.chart
+        let gold = drawingColor(chartTokens.entry, opacity: 0.95)
+        let crimson = drawingColor(chartTokens.stopLoss, opacity: 0.95)
+        let emerald = drawingColor(chartTokens.tp1, opacity: 0.95)
+        let tp2Emerald = drawingColor(chartTokens.tp2, opacity: 0.95)
+        let mutedSlate = drawingColor(chartTokens.equilibrium, opacity: 0.90)
+        let amber = drawingColor(chartTokens.trap, opacity: 0.90)
 
         if let entry = overlayModel.entryPrice {
             addLine(price: entry, color: gold, lineWidth: 1.5, dash: [6, 4])
@@ -99,7 +105,7 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
             addLine(price: tp1, color: emerald, lineWidth: 1.8, dash: nil)
         }
         if overlayModel.isTP2Enabled, let tp2 = overlayModel.takeProfit2 {
-            addLine(price: tp2, color: emerald, lineWidth: 1.3, dash: [5, 4])
+            addLine(price: tp2, color: tp2Emerald, lineWidth: 1.3, dash: [5, 4])
         }
         if let be = overlayModel.breakevenPrice {
             addLine(price: be, color: mutedSlate, lineWidth: 1.2, dash: [2, 3])

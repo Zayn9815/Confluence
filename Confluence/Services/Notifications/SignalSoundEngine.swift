@@ -39,6 +39,16 @@ public final class SignalSoundEngine {
         do {
             let engine = try CHHapticEngine()
             engine.isAutoShutdownEnabled = true
+            engine.resetHandler = { [weak self] in
+                Task { @MainActor [weak self] in
+                    try? self?.hapticEngine?.start()
+                }
+            }
+            engine.stoppedHandler = { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.hapticEngine = nil
+                }
+            }
             try engine.start()
             self.hapticEngine = engine
         } catch {
@@ -69,13 +79,17 @@ public final class SignalSoundEngine {
         }
     }
 
-    public func previewSound(preset: SoundPreset) {
+    public func previewSound(preset: SoundPreset, hapticsEnabled: Bool = true) {
         guard let fileName = preset.cafFileName else {
-            triggerDoubleTapHaptic(strong: false)
+            if hapticsEnabled {
+                triggerDoubleTapHaptic(strong: false)
+            }
             return
         }
         playBundledCAF(named: fileName)
-        triggerDoubleTapHaptic(strong: true)
+        if hapticsEnabled {
+            triggerDoubleTapHaptic(strong: true)
+        }
     }
 
     public func playCopyConfirmationHaptic(enabled: Bool) {

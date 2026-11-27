@@ -476,8 +476,10 @@ public struct SignalRulesSettingsView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     Button("Save") {
+                        let trimmed = geminiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
                         Task {
-                            try? await KeychainStore.shared.save(geminiKeyInput, for: activeProvider.keychainKey)
+                            try? await KeychainStore.shared.save(trimmed, for: activeProvider.keychainKey)
                             geminiKeyInput = ""
                             hasGeminiKey = await KeychainStore.shared.hasValue(for: activeProvider.keychainKey)
                         }
@@ -545,6 +547,8 @@ public struct SignalRulesSettingsView: View {
                 Text("Confluence works 100% natively with this off. When enabled, your selected provider reviews new Strong setups, Trap warnings, and News setups, but can NEVER override deterministic Stop loss, Target 1, Target 2, risk limits, or Crisis suppression.")
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
         .navigationTitle("Signal Rules & AI")
         .navigationBarTitleDisplayMode(.inline)
         .task {

@@ -197,7 +197,10 @@ public enum CandleHygieneEngine {
     ) -> [Candle] {
         let bucketSeconds: TimeInterval = Timeframe.h4.seconds
         var dedupedByOpen: [TimeInterval: Candle] = [:]
-        for bar in hourlyCandles where bar.isClosed && bar.closeTimeEpochSeconds <= serverNowEpochSeconds {
+        for bar in hourlyCandles where bar.isClosed
+            && bar.closeTimeEpochSeconds <= serverNowEpochSeconds
+            && bar.open.isFinite && bar.high.isFinite && bar.low.isFinite && bar.close.isFinite
+            && bar.open > 0 && bar.high >= max(bar.open, bar.close) && bar.low <= min(bar.open, bar.close) {
             dedupedByOpen[bar.openTimeEpochSeconds] = bar
         }
         var buckets: [TimeInterval: [Candle]] = [:]
@@ -218,7 +221,7 @@ public enum CandleHygieneEngine {
             let high = group.map(\.high).max() ?? first.high
             let low = group.map(\.low).min() ?? first.low
             let volumes = group.compactMap(\.volume)
-            let totalVolume: Double? = volumes.isEmpty ? nil : volumes.reduce(0, +)
+            let totalVolume: Double? = (volumes.count == group.count && !volumes.isEmpty) ? volumes.reduce(0, +) : nil
 
             result.append(
                 Candle(
@@ -238,7 +241,7 @@ public enum CandleHygieneEngine {
 
     /// Causally resamples closed 15m candles into exact UTC-aligned 30m candles (:00 / :30 UTC boundaries).
     /// Drops any incomplete forming bucket whose `bucketClose > serverNowEpochSeconds` so forming bars
-    /// are never falsely marked closed. Preserves `nil` volume for OTC feeds when all constituent bars lack volume.
+    /// are never falsely marked closed. Preserves `nil` volume for OTC feeds when constituent bars lack volume.
     public static func resample15MTo30M(
         m15Candles: [Candle],
         serverNowEpochSeconds: TimeInterval
@@ -273,7 +276,7 @@ public enum CandleHygieneEngine {
             let high = group.map(\.high).max() ?? first.high
             let low = group.map(\.low).min() ?? first.low
             let volumes = group.compactMap(\.volume)
-            let totalVolume: Double? = volumes.isEmpty ? nil : volumes.reduce(0, +)
+            let totalVolume: Double? = (volumes.count == group.count && !volumes.isEmpty) ? volumes.reduce(0, +) : nil
 
             result.append(
                 Candle(

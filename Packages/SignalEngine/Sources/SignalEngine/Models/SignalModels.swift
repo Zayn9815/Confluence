@@ -213,9 +213,14 @@ public struct ReflexJudgment: Codable, Sendable, Equatable, Hashable {
 
     /// Returns a sanitized judgment or `nil` when LLM output violates numeric/schema bounds.
     public func isSchemaValid() -> Bool {
+        let validRegimes: Set<String> = ["trending", "mean_reverting", "high_vol", "crisis"]
+        let validCatalysts: Set<String> = ["bullish", "bearish", "neutral", "none"]
+        guard validRegimes.contains(regime.lowercased()) else { return false }
+        guard validCatalysts.contains(catalystBias.lowercased()) else { return false }
         guard confidence.isFinite, (0.0...1.0).contains(confidence) else { return false }
         guard (0...3).contains(setupQuality) else { return false }
-        guard !invalidationCheck.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        let trimmedCheck = invalidationCheck.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCheck.isEmpty, trimmedCheck.count <= 220 else { return false }
         return true
     }
 
@@ -522,7 +527,9 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
     }
 
     public func withAIJudgment(_ judgment: ReflexJudgment, threshold: Double) -> TradeSignal {
-        TradeSignal(
+        let codeAllowsConfirmation = (category == .strongSignal) && (riskState == .safe) && (regime != .crisis)
+        let confirmed = codeAllowsConfirmation && judgment.isConfirmedByCodeRule(minimumConfidence: threshold)
+        return TradeSignal(
             id: id,
             fingerprint: fingerprint,
             symbol: symbol,
@@ -550,7 +557,7 @@ public struct TradeSignal: Codable, Sendable, Equatable, Hashable, Identifiable 
             overlays: overlays,
             recentCandles: recentCandles,
             aiJudgment: judgment,
-            aiConfirmed: judgment.isConfirmedByCodeRule(minimumConfidence: threshold),
+            aiConfirmed: confirmed,
             dataProvider: dataProvider,
             isMarketClosedSnapshot: isMarketClosedSnapshot,
             marketClosedReason: marketClosedReason,

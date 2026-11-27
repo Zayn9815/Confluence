@@ -210,16 +210,16 @@ public struct OrderFlowInsightSheet: View {
 
     private func heroVerdictCard(_ info: OrderFlowNarrative) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
+            ConfluenceFlowLayout(horizontalSpacing: 8, verticalSpacing: 6) {
                 Text(alignmentTitle)
-                    .font(.system(size: 10, weight: .heavy))
+                    .font(.caption2.weight(.heavy))
                     .foregroundStyle(alignmentAccent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(alignmentAccent.opacity(0.16), in: Capsule())
 
                 Text("\(info.venue) · \(info.isLiveStream ? "Live Stream" : "REST Snapshot")")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.caption2.weight(.semibold))
                     .foregroundStyle(palette.primaryInk)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -227,10 +227,9 @@ public struct OrderFlowInsightSheet: View {
 
                 if let spread = info.spreadBps, spread.isFinite {
                     Text(String(format: "%.1f bps spread", spread))
-                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .font(.caption2.weight(.medium).monospacedDigit())
                         .foregroundStyle(palette.secondaryInk)
                 }
-                Spacer()
             }
 
             Text(info.heroVerdict)
@@ -410,28 +409,36 @@ public struct OrderFlowInsightSheet: View {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(spacing: 6) {
                             Text(wall.side.uppercased())
-                                .font(.system(size: 10, weight: .heavy))
+                                .font(.caption2.weight(.heavy))
                                 .foregroundStyle(sideColor)
                             Text(wall.formattedPrice)
                                 .font(.subheadline.weight(.bold).monospacedDigit())
                                 .foregroundStyle(palette.primaryInk)
-                            if let bps = wall.distanceBps, bps.isFinite {
-                                Text(String(format: "%.0f bps", bps))
-                                    .font(.caption2.monospacedDigit())
-                                    .foregroundStyle(palette.tertiaryInk)
-                            }
-                            if let mult = wall.sizeMultiple, mult.isFinite, mult > 0 {
-                                Text(String(format: "%.1fx depth", mult))
-                                    .font(.caption2.weight(.semibold).monospacedDigit())
-                                    .foregroundStyle(palette.secondaryInk)
-                            }
-                            Spacer()
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                            Spacer(minLength: 4)
                             Text(wall.statusBadge)
-                                .font(.system(size: 9, weight: .bold))
+                                .font(.caption2.weight(.bold))
                                 .foregroundStyle(wall.isConfirmed ? sideColor : palette.secondaryInk)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 3)
                                 .background((wall.isConfirmed ? sideColor : palette.secondaryInk).opacity(0.14), in: Capsule())
+                                .lineLimit(1)
+                        }
+
+                        if (wall.distanceBps?.isFinite == true) || ((wall.sizeMultiple ?? 0).isFinite && (wall.sizeMultiple ?? 0) > 0) {
+                            HStack(spacing: 8) {
+                                if let bps = wall.distanceBps, bps.isFinite {
+                                    Text(String(format: "%.0f bps away", bps))
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(palette.tertiaryInk)
+                                }
+                                if let mult = wall.sizeMultiple, mult.isFinite, mult > 0 {
+                                    Text(String(format: "%.1fx depth", mult))
+                                        .font(.caption2.weight(.semibold).monospacedDigit())
+                                        .foregroundStyle(palette.secondaryInk)
+                                }
+                            }
                         }
 
                         Text(wall.levelRelation)

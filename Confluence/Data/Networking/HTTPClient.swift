@@ -98,12 +98,12 @@ public actor URLSessionHTTPClient: HTTPTransport {
                     if http.statusCode == 429 {
                         throw NetworkAdapterError.rateLimited(retryAfterSeconds: retryAfter)
                     }
-                    let snippet = String(data: data.prefix(160), encoding: .utf8) ?? ""
+                    let snippet = SecretRedactor.redact(String(data: data.prefix(160), encoding: .utf8) ?? "")
                     throw NetworkAdapterError.httpStatus(http.statusCode, snippet)
                 }
 
                 if !(200...299).contains(http.statusCode) {
-                    let snippet = String(data: data.prefix(160), encoding: .utf8) ?? ""
+                    let snippet = SecretRedactor.redact(String(data: data.prefix(160), encoding: .utf8) ?? "")
                     throw NetworkAdapterError.httpStatus(http.statusCode, snippet)
                 }
 

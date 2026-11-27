@@ -52,7 +52,8 @@ public enum TrapLifecycleEngine {
                 guard t.state != .invalid else { continue }
                 guard i > t.triggerBarIndex else { continue }
 
-                // Step trigger -> active on the bar after creation
+                // Step trigger -> active on the bar after creation (never double-jump trigger -> active -> returned on the same bar)
+                let wasAlreadyActive = (t.state == .active)
                 var nextState = (t.state == .trigger) ? TrapLifecycleState.active : t.state
                 var returnedIdx = t.returnedAtBarIndex
                 var invalidIdx = t.invalidatedAtBarIndex
@@ -73,8 +74,8 @@ public enum TrapLifecycleEngine {
                     if closedThrough {
                         nextState = .invalid
                         invalidIdx = i
-                    } else {
-                        // Price retested the trap level without closing through it -> Returned (disposition wall)
+                    } else if wasAlreadyActive {
+                        // Price retested an already-active trap level without closing through it -> Returned (disposition wall)
                         let touched: Bool
                         switch t.direction {
                         case .bullTrap:
@@ -82,7 +83,7 @@ public enum TrapLifecycleEngine {
                         case .bearTrap:
                             touched = bar.low <= t.level
                         }
-                        if touched && nextState == .active {
+                        if touched {
                             nextState = .returned
                             returnedIdx = i
                         }
@@ -294,8 +295,14 @@ public enum TrapLifecycleEngine {
             }
         }
 
-        // Keep most recent 6 traps (including any freshly invalidated ones for diagnostics)
-        return Array(traps.suffix(6))
+        // Preserve actionable traps before slicing to 6 (with remaining slots filled by latest invalidated traps)
+        let actionable = traps.filter(\.isActionable)
+        if actionable.count >= 6 {
+            return Array(actionable.suffix(6))
+        }
+        let actionableIDs = Set(actionable.map(\.id))
+        let inactiveTail = traps.filter { !actionableIDs.contains($0.id) }.suffix(6 - actionable.count)
+        return (Array(inactiveTail) + actionable).sorted { $0.triggerBarIndex < $1.triggerBarIndex }
     }
 
     private static func formatLevel(_ value: Double, symbol: String) -> String {

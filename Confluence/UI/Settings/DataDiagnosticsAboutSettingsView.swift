@@ -183,6 +183,8 @@ public struct DataDiagnosticsAboutSettingsView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
         .navigationTitle("Data, Diagnostics & About")
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(

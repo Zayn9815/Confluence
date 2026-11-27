@@ -35,23 +35,23 @@ public struct MarketHolidayEntry: Codable, Sendable, Equatable {
 /// Anchors US equities, Index CFDs, Metals, and FX rollovers to `America/New_York`
 /// and London sessions to `Europe/London` — zero hardcoded year tables.
 public enum MarketHolidayCalendar {
-    public static var newYorkCalendar: Calendar {
+    public static let newYorkCalendar: Calendar = {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "America/New_York") ?? TimeZone(secondsFromGMT: -5 * 3600)!
         return cal
-    }
+    }()
 
-    public static var londonCalendar: Calendar {
+    public static let londonCalendar: Calendar = {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Europe/London") ?? TimeZone(secondsFromGMT: 0)!
         return cal
-    }
+    }()
 
-    public static var utcCalendar: Calendar {
+    public static let utcCalendar: Calendar = {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(secondsFromGMT: 0)!
         return cal
-    }
+    }()
 
     // MARK: - Algorithmic Gregorian Easter (Meeus / Jones / Butcher)
 
@@ -136,8 +136,8 @@ public enum MarketHolidayCalendar {
             return MarketHolidayEntry(name: "Memorial Day", kind: .fullClose)
         }
 
-        // 6. Juneteenth National Independence Day (June 19 observed: Sat -> Fri 18, Sun -> Mon 20)
-        if matchesObservedFixedHoliday(month: month, day: day, weekday: weekday, targetMonth: 6, targetDay: 19) {
+        // 6. Juneteenth National Independence Day (NYSE holiday starting in 2022)
+        if year >= 2022 && matchesObservedFixedHoliday(month: month, day: day, weekday: weekday, targetMonth: 6, targetDay: 19) {
             let label = (day == 19) ? "Juneteenth" : "Juneteenth (Observed)"
             return MarketHolidayEntry(name: label, kind: .fullClose)
         }

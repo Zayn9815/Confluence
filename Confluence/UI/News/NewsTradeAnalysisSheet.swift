@@ -118,7 +118,11 @@ public struct NewsTradeAnalysisSheet: View {
                 pill(s.severity.rawValue.uppercased(), color: severityColor(s.severity))
                 pill(s.headlineBias.rawValue, color: biasColor(s.headlineBias))
                 Spacer()
-                Text(Date(timeIntervalSince1970: s.timestampEpochSeconds).formatted(date: .abbreviated, time: .shortened))
+                Text(TimeDisplayFormatter.formatDateTime(
+                    epochSeconds: s.timestampEpochSeconds,
+                    use24Hour: coordinator.settings.payload.use24HourTime,
+                    useUTC: coordinator.settings.payload.useUTCTimeZone
+                ))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(palette.tertiaryInk)
             }

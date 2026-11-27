@@ -94,11 +94,15 @@ public struct ConfidenceCalibrator: Codable, Sendable, Equatable {
     }
 
     /// Fits walk-forward Platt scaling directly over resolved automatic `TrackedJournalTrade` entries
-    /// (excluding `.pending`, `.live`, and `.expired`; strictly inactive until `N >= minimumSamples`).
+    /// (defaults to `.strongSignals`, excluding `.pending`, `.live`, and `.expired`; strictly inactive until `N >= minimumSamples`).
     public static func fit(
-        journalEntries: [TrackedJournalTrade]
+        journalEntries: [TrackedJournalTrade],
+        section: JournalSection? = .strongSignals
     ) -> ConfidenceCalibrator {
-        let eligible = journalEntries.filter { $0.status.isCountedWin || $0.status.isCountedLoss }
+        let eligible = journalEntries.filter { entry in
+            let sectionMatches = section.map { entry.section == $0 } ?? true
+            return sectionMatches && (entry.status.isCountedWin || entry.status.isCountedLoss)
+        }
         let samples: [(score: Double, isWin: Bool)] = eligible.map { entry in
             let safeScore = entry.score.isFinite ? min(100.0, max(0.0, entry.score)) : 50.0
             return (score: safeScore, isWin: entry.status.isCountedWin)
@@ -129,6 +133,16 @@ public struct ConfidenceCalibrator: Codable, Sendable, Equatable {
         var b = 0.0
         let lambda = 1e-2
 
+        func loss(_ ca: Double, _ cb: Double) -> Double {
+            var total = 0.5 * lambda * ((ca - 1.0) * (ca - 1.0) + cb * cb)
+            for idx in 0..<xs.count {
+                let z = max(-30.0, min(30.0, ca * xs[idx] + cb))
+                let log1pExp = z > 0 ? (z + log1p(exp(-z))) : log1p(exp(z))
+                total += log1pExp - ts[idx] * z
+            }
+            return total
+        }
+
         for _ in 0..<60 {
             var gA = lambda * (a - 1.0)
             var gB = lambda * b
@@ -157,20 +171,32 @@ public struct ConfidenceCalibrator: Codable, Sendable, Equatable {
             let stepA = (hBB * gA - hAB * gB) / det
             let stepB = (-hAB * gA + hAA * gB) / det
 
-            let rawNextA = a - stepA
-            let nextA = max(0.05, min(10.0, rawNextA))
-            let rawNextB: Double
-            if nextA != rawNextA {
-                let dA = nextA - a
-                rawNextB = b - (gB + hAB * dA) / max(hBB, 1e-12)
-            } else {
-                rawNextB = b - stepB
-            }
-            let nextB = max(-8.0, min(8.0, rawNextB))
+            let currentLoss = loss(a, b)
+            var alpha = 1.0
+            var acceptedA = a
+            var acceptedB = b
+            var improved = false
 
-            let delta = abs(nextA - a) + abs(nextB - b)
-            a = nextA
-            b = nextB
+            for _ in 0..<12 {
+                let candA = max(0.05, min(10.0, a - alpha * stepA))
+                let candB = max(-8.0, min(8.0, b - alpha * stepB))
+                let candLoss = loss(candA, candB)
+                let dA = candA - a
+                let dB = candB - b
+                let directionalDeriv = gA * dA + gB * dB
+                if candLoss.isFinite && candLoss <= currentLoss + 1e-4 * directionalDeriv {
+                    acceptedA = candA
+                    acceptedB = candB
+                    improved = true
+                    break
+                }
+                alpha *= 0.5
+            }
+
+            if !improved { break }
+            let delta = abs(acceptedA - a) + abs(acceptedB - b)
+            a = acceptedA
+            b = acceptedB
             if delta < 1e-7 { break }
         }
 

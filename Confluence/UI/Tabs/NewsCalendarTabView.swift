@@ -101,7 +101,7 @@ public struct NewsCalendarTabView: View {
                             } label: {
                                 Text(ccy == "ALL" ? "All / Gold & Crypto" : ccy)
                                     .font(.caption.weight(.semibold))
-                                    .foregroundStyle(selectedCurrency == ccy ? palette.canvas : palette.secondaryInk)
+                                    .foregroundStyle(selectedCurrency == ccy ? palette.onAccentInk : palette.secondaryInk)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
                                     .background(Capsule().fill(selectedCurrency == ccy ? palette.champagneGold : palette.surface))
@@ -113,39 +113,55 @@ public struct NewsCalendarTabView: View {
             }
             .padding(.horizontal, 14)
 
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    // Source & Pre-News queue status banner
-                    HStack {
-                        Text("Feed: \(coordinator.calendarSourceLabel)")
-                            .font(.caption2)
-                            .foregroundStyle(palette.tertiaryInk)
-                        Spacer()
-                        Text("\(coordinator.scheduledPreNewsCount) pre-news alerts queued")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(palette.champagneGold)
-                    }
-                    .padding(.horizontal, 4)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        // Source & Pre-News queue status banner
+                        HStack {
+                            Text("Feed: \(coordinator.calendarSourceLabel)")
+                                .font(.caption2)
+                                .foregroundStyle(palette.tertiaryInk)
+                            Spacer()
+                            Text("\(coordinator.scheduledPreNewsCount) pre-news alerts queued")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(palette.champagneGold)
+                        }
+                        .padding(.horizontal, 4)
 
-                    if filteredCalendar.isEmpty {
-                        emptyCard(
-                            icon: "calendar.badge.clock",
-                            title: "No Macro Events Loaded",
-                            body: "Tap refresh to fetch live scheduled economic releases from biquote.io (with cached Forex Factory fallback)."
-                        )
-                    } else {
-                        let nowEpoch = Date().timeIntervalSince1970
-                        ForEach(filteredCalendar) { ev in
-                            calendarEventCard(ev, nowEpoch: nowEpoch)
+                        if filteredCalendar.isEmpty {
+                            emptyCard(
+                                icon: "calendar.badge.clock",
+                                title: "No Macro Events Loaded",
+                                body: "Tap refresh to fetch live scheduled economic releases from biquote.io (with cached Forex Factory fallback)."
+                            )
+                        } else {
+                            let nowEpoch = Date().timeIntervalSince1970
+                            ForEach(filteredCalendar) { ev in
+                                calendarEventCard(ev, nowEpoch: nowEpoch)
+                                    .id(ev.id)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 16)
+                }
+                .contentMargins(.bottom, 24, for: .scrollContent)
+                .refreshable {
+                    await coordinator.scanAllMarkets()
+                }
+                .onChange(of: coordinator.highlightedNewsEventID) { _, eventID in
+                    guard let eventID else { return }
+                    selectedCurrency = "ALL"
+                    impactFilter = .low
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(120))
+                        proxy.scrollTo(eventID, anchor: .top)
+                        try? await Task.sleep(for: .seconds(2.5))
+                        if coordinator.highlightedNewsEventID == eventID {
+                            coordinator.highlightedNewsEventID = nil
                         }
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 16)
-            }
-            .safeAreaPadding(.bottom, 96)
-            .refreshable {
-                await coordinator.scanAllMarkets()
             }
         }
     }
@@ -258,7 +274,10 @@ public struct NewsCalendarTabView: View {
             .padding(.top, 2)
         }
         .padding(12)
-        .institutionalCard(palette: palette)
+        .institutionalCard(
+            palette: palette,
+            accentBorder: coordinator.highlightedNewsEventID == ev.id ? palette.champagneGold : nil
+        )
         .contentShape(Rectangle())
         .onTapGesture {
             selectedAnalysisTarget = .event(ev)
@@ -325,7 +344,7 @@ public struct NewsCalendarTabView: View {
             .padding(.horizontal, 14)
             .padding(.bottom, 16)
         }
-        .safeAreaPadding(.bottom, 96)
+        .contentMargins(.bottom, 24, for: .scrollContent)
         .refreshable {
             await coordinator.scanAllMarkets()
         }

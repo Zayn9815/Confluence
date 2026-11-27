@@ -26,9 +26,12 @@ public enum ConfluenceScorer {
             return true
         }
         return recentHistory.contains { item in
-            item.symbol == symbol &&
-            item.direction == direction &&
-            abs(nowEpochSeconds - item.epochSeconds) < cooldownSeconds
+            let elapsed = nowEpochSeconds - item.epochSeconds
+            return item.symbol == symbol &&
+                item.direction == direction &&
+                elapsed.isFinite &&
+                elapsed >= 0 &&
+                elapsed < cooldownSeconds
         }
     }
 
@@ -399,8 +402,10 @@ public enum ConfluenceScorer {
         // Hard Gate Checks (all enforced in deterministic Swift code)
         var rejectionReasons: [String] = []
         let distinctGroups = Set(aligned.map(\.group))
-        let requiredAlignedCount = config.effectiveMinConfluence(configured: max(3, config.minimumAlignedStrategies))
-        let enabledGroupCount = Set(enabled.map(\.group)).count
+        let applicableForMarket = profile.applicableStrategies(for: asset.marketClass)
+        let applicableCount = max(1, applicableForMarket.count)
+        let requiredAlignedCount = min(max(3, config.minimumAlignedStrategies), applicableCount)
+        let enabledGroupCount = Set(applicableForMarket.map(\.group)).count
 
         if dominantDirection == .neutral || aligned.count < requiredAlignedCount {
             rejectionReasons.append("Only \(aligned.count)/\(requiredAlignedCount) independent strategies aligned")
@@ -732,14 +737,26 @@ public enum ConfluenceScorer {
         var notes: [String] = []
 
         // Pillar 1: Technical Math (ICT/SMC + Candlesticks + Trend/Momentum + HTF + Killzone)
-        // Incorporates 100% dynamically re-normalized active-profile share (zero dead weight from disabled strategies).
-        let weightedSum = aligned.reduce(0.0) { $0 + ($1.weight * $1.historicalWinRate) }
-        let opposingPenalty = opposing.reduce(0.0) { $0 + ($1.weight * 4.5) }
-        let distinctGroups = Set(aligned.map(\.group)).count
+        // Filter strictly to technical groups so Trap/Positioning/Macro are NOT double-counted across Pillar 1 and Pillars 2-3.
+        let technicalGroups: Set<StrategyGroup> = [.ictSmc, .candlestick, .trendMomentum]
+        let techAligned = aligned.filter { technicalGroups.contains($0.group) }
+        let techOpposing = opposing.filter { technicalGroups.contains($0.group) }
+        let weightedSum = techAligned.reduce(0.0) { $0 + ($1.weight * $1.historicalWinRate) }
+        let opposingPenalty = techOpposing.reduce(0.0) { $0 + ($1.weight * 4.5) }
+        let distinctGroups = Set(techAligned.map(\.group)).count
 
-        let normalizedAlignedShare = activeEntries
-            .filter { $0.rawScore > 0 }
-            .reduce(0.0) { $0 + $1.effectiveWeight }
+        let techActiveEntries = activeEntries.filter { entry in
+            guard let sid = StrategyID(rawValue: entry.id) else { return false }
+            return technicalGroups.contains(sid.group)
+        }
+        let techWeightDenom = techActiveEntries.reduce(0.0) { $0 + $1.effectiveWeight }
+        let normalizedAlignedShare: Double = {
+            guard techWeightDenom > 1e-9 else { return 0.0 }
+            let alignedTechW = techActiveEntries
+                .filter { $0.rawScore > 0 }
+                .reduce(0.0) { $0 + $1.effectiveWeight }
+            return alignedTechW / techWeightDenom
+        }()
         let rawTech = weightedSum * 11.5
         // When user narrows enabled profile (e.g. 1–4 strategies), re-normalized weight prevents dead-weight drag
         let normalizedTechFloor = min(22.0, normalizedAlignedShare * 24.0)

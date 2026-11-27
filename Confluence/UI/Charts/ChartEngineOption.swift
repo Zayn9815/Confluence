@@ -147,3 +147,21 @@ public protocol ConfluenceChartAdapter: View {
     var resetTrigger: Int { get }
     var onCrosshairChange: (ChartCrosshairReadout?) -> Void { get }
 }
+
+/// Persisted overlay layer visibility toggles for full-screen native charts.
+public struct ChartOverlayLayerSet: OptionSet, Sendable, Equatable, Hashable {
+    public let rawValue: Int
+
+    public init(rawValue: Int) {
+        self.rawValue = rawValue
+    }
+
+    public static let tradeLevels = ChartOverlayLayerSet(rawValue: 1 << 0)
+    public static let zones = ChartOverlayLayerSet(rawValue: 1 << 1)
+    public static let traps = ChartOverlayLayerSet(rawValue: 1 << 2)
+    public static let walls = ChartOverlayLayerSet(rawValue: 1 << 3)
+    public static let movingAverages = ChartOverlayLayerSet(rawValue: 1 << 4)
+
+    public static let all: ChartOverlayLayerSet = [.tradeLevels, .zones, .traps, .walls, .movingAverages]
+    public static let appStorageKey = "com.bilal.confluence.chartOverlayLayers"
+}

@@ -26,9 +26,29 @@ public enum NavigationDeepLink: Equatable, Sendable {
 public final class NotificationCenterRouter: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     public static let shared = NotificationCenterRouter()
 
-    @MainActor public var onDeepLink: ((NavigationDeepLink) -> Void)?
+    @MainActor private var bufferedDeepLink: NavigationDeepLink?
+    @MainActor private var bufferedReadIDs: [String] = []
+
+    @MainActor public var onDeepLink: ((NavigationDeepLink) -> Void)? {
+        didSet {
+            if let handler = onDeepLink, let pending = bufferedDeepLink {
+                bufferedDeepLink = nil
+                handler(pending)
+            }
+        }
+    }
     @MainActor public var onForegroundSystemNotification: ((NotificationItemSnapshot) -> Void)?
-    @MainActor public var onMarkReadById: ((String) -> Void)?
+    @MainActor public var onMarkReadById: ((String) -> Void)? {
+        didSet {
+            if let handler = onMarkReadById, !bufferedReadIDs.isEmpty {
+                let ids = bufferedReadIDs
+                bufferedReadIDs.removeAll()
+                for id in ids {
+                    handler(id)
+                }
+            }
+        }
+    }
 
     private override init() {
         super.init()
@@ -104,9 +124,17 @@ public final class NotificationCenterRouter: NSObject, UNUserNotificationCenterD
         let deepLink = Self.parseDeepLink(from: info)
 
         await MainActor.run {
-            self.onMarkReadById?(notifId)
+            if let handler = self.onMarkReadById {
+                handler(notifId)
+            } else {
+                self.bufferedReadIDs.append(notifId)
+            }
             if let deepLink {
-                self.onDeepLink?(deepLink)
+                if let handler = self.onDeepLink {
+                    handler(deepLink)
+                } else {
+                    self.bufferedDeepLink = deepLink
+                }
             }
         }
     }

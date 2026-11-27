@@ -31,9 +31,13 @@ jobs:
             afinfo "$f"
           done
 
+      - name: Run Schema & CI Hygiene Checks
+        run: |
+          python3 scripts/verify_schema_and_ci_hygiene.py
+
       - name: Run Pure Swift SignalEngine Unit & Walk-Forward Tests
         run: |
-          swift test --package-path Packages/SignalEngine --enable-test-discovery
+          swift test --package-path Packages/SignalEngine --parallel -Xswiftc -warnings-as-errors
 
       - name: Install XcodeGen & Generate Confluence.xcodeproj
         run: |
@@ -48,7 +52,11 @@ jobs:
 
       - name: Run iOS App Integration Tests on Simulator
         run: |
-          SIM_UDID=$(xcrun simctl list devices available iPhone --json | jq -r '[.devices[] | .[] | select(.isAvailable==true)] | first.udid')
+          SIM_UDID=$(xcrun simctl list devices available iPhone --json | jq -r '[.devices[] | .[] | select(.isAvailable==true)] | first.udid // empty')
+          if [ -z "$SIM_UDID" ]; then
+            echo "FAIL: No available iPhone Simulator runtime found!"
+            exit 1
+          fi
           echo "Using Simulator UDID: $SIM_UDID"
           xcodebuild test \
             -project Confluence.xcodeproj \
@@ -81,17 +89,23 @@ jobs:
           echo "Verified CFBundleIdentifier: $BUNDLE_ID"
           test "$BUNDLE_ID" = "com.bilal.confluence"
 
-          echo "Running built Info.plist secret leak guard..."
+          echo "Running built bundle secret leak guard..."
           PLIST_XML=$(plutil -convert xml1 -o - "$APP_PATH/Info.plist")
           if echo "$PLIST_XML" | grep -q "ConfluenceDefaultTwelveDataKey"; then
             echo "FAIL: Built Info.plist contains forbidden ConfluenceDefaultTwelveDataKey!"
             exit 1
           fi
-          if echo "$PLIST_XML" | grep -Eq "<string>(AIza[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z_-]{20,}|[0-9a-fA-F]{32,})</string>"; then
+          if echo "$PLIST_XML" | grep -Eq "<string>(AIza[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z_-]{16,}|[0-9a-fA-F]{32,})</string>"; then
             echo "FAIL: Built Info.plist contains a secret/API-key-like string!"
             exit 1
           fi
-          echo "Verified built Info.plist contains zero embedded API keys."
+          while IFS= read -r -d '' cfg; do
+            if grep -Eq "(AIza[0-9A-Za-z_-]{20,}|sk-(or-)?[0-9A-Za-z_-]{16,}|ConfluenceDefaultTwelveDataKey)" "$cfg"; then
+              echo "FAIL: Bundled config file contains secret-like token: $cfg"
+              exit 1
+            fi
+          done < <(find "$APP_PATH" -maxdepth 4 \( -name "*.plist" -o -name "*.json" \) -print0)
+          echo "Verified built bundle contains zero embedded API keys."
 
           for caf in terminal_chime.caf sonar_pulse.caf vault_lock.caf trap_warning.caf news_release_ping.caf; do
             test -f "$APP_PATH/$caf" || { echo "Missing $caf in Confluence.app root!"; exit 1; }
@@ -109,7 +123,13 @@ jobs:
           rm -rf build/Payload Confluence.ipa
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/Confluence.app
+          rm -rf build/Payload/Confluence.app/_CodeSignature build/Payload/Confluence.app/embedded.mobileprovision
           (cd build && zip -qry ../Confluence.ipa Payload)
+          unzip -tq Confluence.ipa
+          if unzip -l Confluence.ipa | grep -Eq "(_CodeSignature/|embedded\.mobileprovision)"; then
+            echo "FAIL: Unsigned IPA unexpectedly contains code signature or provisioning profile!"
+            exit 1
+          fi
           ls -lh Confluence.ipa
 
       - name: Upload Unsigned Confluence.ipa Artifact

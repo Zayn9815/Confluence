@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SignalEngine
 
 public enum AIProviderOption: String, Codable, Sendable, CaseIterable, Identifiable {
@@ -110,7 +111,7 @@ public enum AIProviderError: Error, LocalizedError, Sendable {
 
 /// Shared UTC-day AI call counter enforced atomically across ALL AI providers (Gemini, DeepSeek, OpenRouter).
 public enum AIDailyUsageTracker {
-    private static let lock = NSLock()
+    private static let lock = OSAllocatedUnfairLock()
 
     private static func todayKey(prefix: String = "confluence.ai.calls") -> String {
         var cal = Calendar(identifier: .gregorian)
@@ -130,17 +131,41 @@ public enum AIDailyUsageTracker {
     }
 
     public static func currentCount(suiteName: String? = nil) -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return resolveDefaults(suiteName: suiteName).integer(forKey: todayKey())
+        lock.withLock {
+            resolveDefaults(suiteName: suiteName).integer(forKey: todayKey())
+        }
     }
 
     public static func increment(suiteName: String? = nil) {
-        lock.lock()
-        defer { lock.unlock() }
-        let defaults = resolveDefaults(suiteName: suiteName)
-        let key = todayKey()
-        defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
+        lock.withLock {
+            let defaults = resolveDefaults(suiteName: suiteName)
+            let key = todayKey()
+            defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
+        }
+    }
+
+    /// Atomically reserves a slot if `current < dailyLimit`, preventing TOCTOU overshoots across concurrent calls.
+    public static func tryReserveSlot(dailyLimit: Int, suiteName: String? = nil) -> Bool {
+        lock.withLock {
+            let defaults = resolveDefaults(suiteName: suiteName)
+            let key = todayKey()
+            let current = defaults.integer(forKey: key)
+            guard current < dailyLimit else { return false }
+            defaults.set(current + 1, forKey: key)
+            return true
+        }
+    }
+
+    /// Refunds a previously reserved slot if a network call failed before succeeding.
+    public static func refundSlot(suiteName: String? = nil) {
+        lock.withLock {
+            let defaults = resolveDefaults(suiteName: suiteName)
+            let key = todayKey()
+            let current = defaults.integer(forKey: key)
+            if current > 0 {
+                defaults.set(current - 1, forKey: key)
+            }
+        }
     }
 }
 
@@ -272,8 +297,8 @@ public actor OpenAICompatibleJudgeClient: AIJudgeClient {
         guard !cleanKey.isEmpty else {
             throw NetworkAdapterError.missingAPIKey(provider.displayName)
         }
-        let used = AIDailyUsageTracker.currentCount(suiteName: suiteName)
-        guard used < dailyLimit else {
+        guard AIDailyUsageTracker.tryReserveSlot(dailyLimit: dailyLimit, suiteName: suiteName) else {
+            let used = AIDailyUsageTracker.currentCount(suiteName: suiteName)
             throw NetworkAdapterError.dailyLimitReached("AI (\(used)/\(dailyLimit))")
         }
 
@@ -287,14 +312,19 @@ public actor OpenAICompatibleJudgeClient: AIJudgeClient {
         Snapshot: \(compactSnapshot)
         """
 
-        let text = try await requestChatCompletion(
-            prompt: prompt,
-            apiKey: cleanKey,
-            modelID: modelID,
-            expectJSON: true,
-            maxTokens: 1024
-        )
-        AIDailyUsageTracker.increment(suiteName: suiteName)
+        let text: String
+        do {
+            text = try await requestChatCompletion(
+                prompt: prompt,
+                apiKey: cleanKey,
+                modelID: modelID,
+                expectJSON: true,
+                maxTokens: 1024
+            )
+        } catch {
+            AIDailyUsageTracker.refundSlot(suiteName: suiteName)
+            throw error
+        }
 
         let cleanedJSON = Self.extractJSONObjectString(from: text)
         guard let jsonData = cleanedJSON.data(using: .utf8) else {
@@ -318,20 +348,25 @@ public actor OpenAICompatibleJudgeClient: AIJudgeClient {
         guard !cleanKey.isEmpty else {
             throw NetworkAdapterError.missingAPIKey(provider.displayName)
         }
-        let used = AIDailyUsageTracker.currentCount(suiteName: suiteName)
-        guard used < dailyLimit else {
+        guard AIDailyUsageTracker.tryReserveSlot(dailyLimit: dailyLimit, suiteName: suiteName) else {
+            let used = AIDailyUsageTracker.currentCount(suiteName: suiteName)
             throw NetworkAdapterError.dailyLimitReached("AI (\(used)/\(dailyLimit))")
         }
 
         let prompt = "In 1 crisp sentence (<=22 words), state immediate market impact and whipsaw risk for \(affectedAssets.joined(separator: ", ")): \"\(headline)\""
-        let text = try await requestChatCompletion(
-            prompt: prompt,
-            apiKey: cleanKey,
-            modelID: modelID,
-            expectJSON: false,
-            maxTokens: 256
-        )
-        AIDailyUsageTracker.increment(suiteName: suiteName)
+        let text: String
+        do {
+            text = try await requestChatCompletion(
+                prompt: prompt,
+                apiKey: cleanKey,
+                modelID: modelID,
+                expectJSON: false,
+                maxTokens: 256
+            )
+        } catch {
+            AIDailyUsageTracker.refundSlot(suiteName: suiteName)
+            throw error
+        }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -410,18 +445,68 @@ public actor OpenAICompatibleJudgeClient: AIJudgeClient {
     }
 
     public static func extractOpenAIContent(from data: Data) -> String? {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = root["choices"] as? [[String: Any]],
-              let message = choices.first?["message"] as? [String: Any],
-              let content = message["content"] as? String
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        // Reject HTTP-200 error envelopes (e.g. OpenRouter / proxy JSON error payloads)
+        if root["error"] != nil {
+            return nil
+        }
+        guard let choices = root["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any]
         else { return nil }
-        return content
+
+        if let content = message["content"] as? String {
+            return content
+        }
+        if let parts = message["content"] as? [[String: Any]] {
+            let joined = parts.compactMap { part -> String? in
+                if let text = part["text"] as? String { return text }
+                if let content = part["content"] as? String { return content }
+                return nil
+            }.joined(separator: "\n")
+            return joined.isEmpty ? nil : joined
+        }
+        return nil
     }
 
+    /// Balanced-brace JSON object extractor that respects quoted string literals and escape sequences.
     public static func extractJSONObjectString(from raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let start = trimmed.firstIndex(of: "{"), let end = trimmed.lastIndex(of: "}") {
-            return String(trimmed[start...end])
+        var depth = 0
+        var inString = false
+        var isEscaped = false
+        var startIdx: String.Index? = nil
+
+        var idx = trimmed.startIndex
+        while idx < trimmed.endIndex {
+            let ch = trimmed[idx]
+            if inString {
+                if isEscaped {
+                    isEscaped = false
+                } else if ch == "\\" {
+                    isEscaped = true
+                } else if ch == "\"" {
+                    inString = false
+                }
+            } else {
+                if ch == "\"" {
+                    inString = true
+                } else if ch == "{" {
+                    if depth == 0 {
+                        startIdx = idx
+                    }
+                    depth += 1
+                } else if ch == "}" {
+                    if depth > 0 {
+                        depth -= 1
+                        if depth == 0, let start = startIdx {
+                            return String(trimmed[start...idx])
+                        }
+                    }
+                }
+            }
+            idx = trimmed.index(after: idx)
         }
         return trimmed
     }

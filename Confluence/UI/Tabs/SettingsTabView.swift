@@ -105,7 +105,9 @@ public struct SettingsTabView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .safeAreaPadding(.bottom, 96)
+            .scrollContentBackground(.hidden)
+            .background(palette.canvas)
+            .contentMargins(.bottom, 24, for: .scrollContent)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

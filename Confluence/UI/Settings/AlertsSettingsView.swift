@@ -83,7 +83,7 @@ public struct AlertsSettingsView: View {
                                 } label: {
                                     Text(label)
                                         .font(.caption2.weight(.bold))
-                                        .foregroundStyle(active ? palette.canvas : palette.secondaryInk)
+                                        .foregroundStyle(active ? palette.onAccentInk : palette.secondaryInk)
                                         .frame(width: 30, height: 30)
                                         .background(active ? palette.champagneGold : palette.elevatedSurface, in: Circle())
                                 }
@@ -155,10 +155,24 @@ public struct AlertsSettingsView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
         .navigationTitle("Alerts")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await coordinator.refreshNotificationStatus()
+        }
+        .onChange(of: coordinator.settings.payload.alertRules) { _, _ in
+            Task { await coordinator.reschedulePreNewsCountdownsNow() }
+        }
+        .onChange(of: coordinator.settings.payload.preNewsLead15m) { _, _ in
+            Task { await coordinator.reschedulePreNewsCountdownsNow() }
+        }
+        .onChange(of: coordinator.settings.payload.preNewsLead5m) { _, _ in
+            Task { await coordinator.reschedulePreNewsCountdownsNow() }
+        }
+        .onChange(of: coordinator.settings.payload.calendarPushImpactFilter) { _, _ in
+            Task { await coordinator.reschedulePreNewsCountdownsNow() }
         }
     }
 }
@@ -233,6 +247,8 @@ private struct MarketAlertRuleDetailView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
         .navigationTitle("\(market.displayName) Alerts")
         .navigationBarTitleDisplayMode(.inline)
     }

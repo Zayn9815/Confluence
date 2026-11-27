@@ -211,8 +211,9 @@ public enum BackupArchiveService {
         settingsStore.payload = archive.settings
         if let tvURLString = archive.tvLastChartURL,
            let parsed = URL(string: tvURLString),
+           parsed.scheme?.lowercased() == "https",
            let host = parsed.host?.lowercased(),
-           host.contains("tradingview.com"),
+           (host == "tradingview.com" || host.hasSuffix(".tradingview.com")),
            parsed.path.hasPrefix("/chart") {
             UserDefaults.standard.set(tvURLString, forKey: tvLastChartURLDefaultsKey)
         }

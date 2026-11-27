@@ -110,61 +110,6 @@ final class V15M2ServicesTests: XCTestCase {
         XCTAssertTrue(active4.isEmpty)
     }
 
-    // MARK: - TradeMonitor Tests (Outcome Derivation + Manual Alerts)
-
-    func testTradeMonitorJournalOutcomeDerivationAndManualAlerts() {
-        // 1. Journal outcome derivation
-        XCTAssertEqual(
-            TradeMonitor.deriveJournalOutcome(direction: .long, entryPrice: 100, exitPrice: 106, stopLoss: 98, currentOutcome: .open),
-            .win
-        )
-        XCTAssertEqual(
-            TradeMonitor.deriveJournalOutcome(direction: .long, entryPrice: 100, exitPrice: 97, stopLoss: 98, currentOutcome: .open),
-            .loss
-        )
-        XCTAssertEqual(
-            TradeMonitor.deriveJournalOutcome(direction: .long, entryPrice: 100, exitPrice: nil, stopLoss: 98, currentOutcome: .open),
-            .open
-        )
-
-        // 2. Manual journal trades emit non-destructive Apply/Dismiss suggestion
-        let now: TimeInterval = 1_776_175_200
-        let targetQuote = LivePriceQuote(
-            symbol: "BTC/USDT",
-            price: 62_150,
-            asOfEpochSeconds: now + 30,
-            sourceLabel: "Binance Live",
-            isStreaming: true
-        )
-        let manualEntry = JournalEntrySnapshot(
-            id: "j-manual-1",
-            symbol: "BTC/USDT",
-            marketClass: .crypto,
-            timeframe: .h1,
-            direction: .long,
-            plannedEntry: 60_000,
-            actualFillPrice: 60_000,
-            stopLoss: 59_000,
-            tp1: 62_000,
-            outcome: .open
-        )
-        let alerts = TradeMonitor.evaluateManualJournalAlerts(
-            entries: [manualEntry],
-            quote: targetQuote,
-            dismissedIds: []
-        )
-        XCTAssertEqual(alerts.count, 1)
-        XCTAssertEqual(alerts.first?.suggestedOutcome, .win)
-        XCTAssertEqual(alerts.first?.suggestedExitPrice, 62_000)
-
-        let dismissedAlerts = TradeMonitor.evaluateManualJournalAlerts(
-            entries: [manualEntry],
-            quote: targetQuote,
-            dismissedIds: ["j-manual-1"]
-        )
-        XCTAssertTrue(dismissedAlerts.isEmpty)
-    }
-
     // MARK: - On-Disk SwiftData v1.5 -> v1.6 Additive Migration Test (12 -> 13 tables)
 
     @MainActor

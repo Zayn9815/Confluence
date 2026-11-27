@@ -13,8 +13,14 @@ public actor OKXPositioningAdapter {
     }
 
     public func fetchSnapshot(instId: String, period: String = "1H", forceRefresh: Bool = false) async throws -> OKXDerivativesSnapshot {
-        // Guard against OKX UTC+8 offset bug: coerce "1D" -> "1Dutc"
-        let safePeriod = (period == "1D") ? "1Dutc" : period
+        // Guard against OKX UTC+8 offset bug: normalize >= 6H periods to UTC suffix
+        let safePeriod: String
+        switch period {
+        case "6H", "12H", "1D", "1W", "1M":
+            safePeriod = "\(period)utc"
+        default:
+            safePeriod = period
+        }
         let cacheKey = "\(instId)|\(safePeriod)"
         if !forceRefresh, let entry = cache[cacheKey], Date().timeIntervalSince(entry.fetchedAt) < cacheTTLSeconds {
             return entry.snapshot
@@ -307,15 +313,20 @@ public actor CFTCCOTAdapter {
                 instShort = amS + lmS
             }
 
-            let tuesdayEpoch = date.timeIntervalSince1970
-            // Official CFTC publication is Friday 15:30 ET (~20:30 UTC), i.e., +3d 20.5h after Tuesday
-            let fridayReleaseEpoch = tuesdayEpoch + (3 * 86_400) + (20.5 * 3_600)
+            let reportEpoch = date.timeIntervalSince1970
+            // Official CFTC publication is Friday 15:30 ET (~20:30 UTC), at least +2 days after report date (holiday-safe)
+            let utcCal = MarketHolidayCalendar.utcCalendar
+            var candidate = utcCal.date(byAdding: .day, value: 2, to: date) ?? date.addingTimeInterval(2 * 86_400)
+            while utcCal.component(.weekday, from: candidate) != 6 { // 6 == Friday
+                candidate = utcCal.date(byAdding: .day, value: 1, to: candidate) ?? candidate.addingTimeInterval(86_400)
+            }
+            let fridayReleaseEpoch = candidate.timeIntervalSince1970 + (20.5 * 3_600)
 
             out.append(CFTCCOTRecord(
                 contractCode: code,
                 marketName: name,
                 dataset: dataset,
-                reportDateEpochSeconds: tuesdayEpoch,
+                reportDateEpochSeconds: reportEpoch,
                 publishedAtEpochSeconds: fridayReleaseEpoch,
                 openInterest: oi,
                 institutionalLong: instLong,

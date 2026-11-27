@@ -203,10 +203,9 @@ public enum MacroSurpriseEngine {
             }
             .sorted { $0.scheduledEpochSeconds < $1.scheduledEpochSeconds }
 
-        let maxEvents = min(20, max(1, maxSlots / validLeads.count))
         var slots: [(identifier: String, event: EconomicEvent, leadMinutes: Int, fireEpochSeconds: TimeInterval)] = []
 
-        for ev in eligible.prefix(maxEvents) {
+        for ev in eligible {
             for lead in validLeads {
                 let fireAt = ev.scheduledEpochSeconds - Double(lead * 60)
                 guard fireAt > nowEpochSeconds + 5.0 else { continue }

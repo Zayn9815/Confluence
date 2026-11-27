@@ -1,12 +1,16 @@
 import SwiftUI
+import UserNotifications
 
 /// 4-page first-run onboarding flow with mandatory Risk Disclosure acknowledgement.
 public struct OnboardingFlowView: View {
     public let palette: ConfluencePalette
     public let onComplete: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var page = 0
     @State private var acceptedDisclosure = false
+    @State private var notificationsRequested = false
+    @State private var notificationsGranted = false
 
     public init(palette: ConfluencePalette, onComplete: @escaping () -> Void) {
         self.palette = palette
@@ -39,16 +43,71 @@ public struct OnboardingFlowView: View {
                     ]
                 ).tag(1)
 
-                onboardingPage(
-                    icon: "lock.shield.fill",
-                    accent: palette.macroIceBlue,
-                    title: "Private, Read-Only & Keychain-First",
-                    subtitle: "Confluence works out of the box with free feeds and zero bundled secrets.",
-                    bullets: [
-                        "Optional Twelve Data, Gemini AI, and Finnhub keys are stored strictly in your device's encrypted iOS Keychain.",
-                        "Read-only terminal: never connects to brokers, never executes orders, never requests private trading keys."
-                    ]
-                ).tag(2)
+                VStack(alignment: .leading, spacing: 14) {
+                    Spacer()
+                    Image(systemName: "lock.shield.fill")
+                        .font(.system(size: 42))
+                        .foregroundStyle(palette.macroIceBlue)
+                    Text("Private, Read-Only & Keychain-First")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(palette.primaryInk)
+                    Text("Confluence works out of the box with free feeds and zero bundled secrets.")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondaryInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach([
+                            "Optional Twelve Data, Gemini, DeepSeek, OpenRouter, and Finnhub keys are stored strictly in your device's encrypted iOS Keychain.",
+                            "Read-only terminal: never connects to brokers, never executes orders, never requests private trading keys."
+                        ], id: \.self) { b in
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(palette.macroIceBlue)
+                                    .padding(.top, 2)
+                                Text(b)
+                                    .font(.caption)
+                                    .foregroundStyle(palette.secondaryInk)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .institutionalCard(palette: palette)
+
+                    Button {
+                        Task {
+                            let status = await PreNewsNotificationScheduler.shared.requestAuthorizationIfNeeded()
+                            notificationsRequested = true
+                            notificationsGranted = (status == .authorized || status == .provisional || status == .ephemeral)
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: notificationsGranted ? "bell.badge.fill" : "bell.fill")
+                                .foregroundStyle(notificationsGranted ? palette.longEmerald : palette.champagneGold)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(notificationsGranted ? "Live Signal & Pre-News Alerts Enabled" : "Enable Signal & Pre-News Alerts (Optional)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(palette.primaryInk)
+                                Text(notificationsRequested && !notificationsGranted
+                                     ? "You can enable alerts anytime in iOS Settings -> Confluence."
+                                     : "Receive local alerts for new Strong setups, Trap alerts, and 15m/5m macro countdowns.")
+                                    .font(.caption2)
+                                    .foregroundStyle(palette.secondaryInk)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                        }
+                        .padding(12)
+                        .institutionalCard(palette: palette)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(notificationsGranted)
+
+                    Spacer()
+                }
+                .padding(24)
+                .tag(2)
 
                 VStack(alignment: .leading, spacing: 14) {
                     Spacer()
@@ -82,18 +141,18 @@ public struct OnboardingFlowView: View {
             HStack {
                 if page > 0 {
                     Button("Back") {
-                        withAnimation { page -= 1 }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) { page -= 1 }
                     }
                     .foregroundStyle(palette.secondaryInk)
                 }
                 Spacer()
                 if page < 3 {
                     Button {
-                        withAnimation { page += 1 }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) { page += 1 }
                     } label: {
                         Text("Next")
                             .font(.subheadline.weight(.bold))
-                            .foregroundStyle(palette.canvas)
+                            .foregroundStyle(palette.onAccentInk)
                             .padding(.horizontal, 24)
                             .padding(.vertical, 10)
                             .background(palette.champagneGold, in: Capsule())
@@ -105,7 +164,7 @@ public struct OnboardingFlowView: View {
                     } label: {
                         Text("Enter Confluence")
                             .font(.subheadline.weight(.bold))
-                            .foregroundStyle(palette.canvas)
+                            .foregroundStyle(palette.onAccentInk)
                             .padding(.horizontal, 24)
                             .padding(.vertical, 10)
                             .background(acceptedDisclosure ? palette.champagneGold : palette.tertiaryInk.opacity(0.5), in: Capsule())

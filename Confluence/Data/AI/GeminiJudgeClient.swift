@@ -122,8 +122,8 @@ public actor GeminiJudgeClient: AIJudgeClient {
         guard !cleanKey.isEmpty else {
             throw NetworkAdapterError.missingAPIKey("Gemini")
         }
-        let used = AIDailyUsageTracker.currentCount(suiteName: suiteName)
-        guard used < dailyLimit else {
+        guard AIDailyUsageTracker.tryReserveSlot(dailyLimit: dailyLimit, suiteName: suiteName) else {
+            let used = AIDailyUsageTracker.currentCount(suiteName: suiteName)
             throw NetworkAdapterError.dailyLimitReached("AI (\(used)/\(dailyLimit))")
         }
 
@@ -181,11 +181,15 @@ public actor GeminiJudgeClient: AIJudgeClient {
 
         let res: HTTPResponseData
         do {
-            res = try await sendHandling429(try makeRequest(includeThinking: true))
-        } catch NetworkAdapterError.httpStatus(let code, _) where code == 400 {
-            res = try await sendHandling429(try makeRequest(includeThinking: false))
+            do {
+                res = try await sendHandling429(try makeRequest(includeThinking: true))
+            } catch NetworkAdapterError.httpStatus(let code, _) where code == 400 {
+                res = try await sendHandling429(try makeRequest(includeThinking: false))
+            }
+        } catch {
+            AIDailyUsageTracker.refundSlot(suiteName: suiteName)
+            throw error
         }
-        AIDailyUsageTracker.increment(suiteName: suiteName)
 
         let text = try extractCandidateText(from: res.data)
         let cleaned = OpenAICompatibleJudgeClient.extractJSONObjectString(from: text)
@@ -208,8 +212,10 @@ public actor GeminiJudgeClient: AIJudgeClient {
     ) async throws -> String {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanKey.isEmpty else { throw NetworkAdapterError.missingAPIKey("Gemini") }
-        let used = AIDailyUsageTracker.currentCount(suiteName: suiteName)
-        guard used < dailyLimit else { throw NetworkAdapterError.dailyLimitReached("AI (\(used)/\(dailyLimit))") }
+        guard AIDailyUsageTracker.tryReserveSlot(dailyLimit: dailyLimit, suiteName: suiteName) else {
+            let used = AIDailyUsageTracker.currentCount(suiteName: suiteName)
+            throw NetworkAdapterError.dailyLimitReached("AI (\(used)/\(dailyLimit))")
+        }
 
         let prompt = "In 1 crisp sentence (<=22 words), state immediate market impact and whipsaw risk for \(affectedAssets.joined(separator: ", ")): \"\(headline)\""
 
@@ -239,11 +245,15 @@ public actor GeminiJudgeClient: AIJudgeClient {
 
         let res: HTTPResponseData
         do {
-            res = try await sendHandling429(try makeRequest(includeThinking: true))
-        } catch NetworkAdapterError.httpStatus(let code, _) where code == 400 {
-            res = try await sendHandling429(try makeRequest(includeThinking: false))
+            do {
+                res = try await sendHandling429(try makeRequest(includeThinking: true))
+            } catch NetworkAdapterError.httpStatus(let code, _) where code == 400 {
+                res = try await sendHandling429(try makeRequest(includeThinking: false))
+            }
+        } catch {
+            AIDailyUsageTracker.refundSlot(suiteName: suiteName)
+            throw error
         }
-        AIDailyUsageTracker.increment(suiteName: suiteName)
         return try extractCandidateText(from: res.data).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

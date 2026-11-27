@@ -24,6 +24,8 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
 
     // Category 1 — Appearance & Feedback
     case appearanceMode
+    case terminalThemePreset
+    case liquidGlassIntensity
     case pureBlackBackground
     case colorBlindSafePalette
     case clock24Hour
@@ -92,6 +94,18 @@ public enum SettingHelpKey: String, CaseIterable, Sendable, Identifiable {
                 label: "Color theme",
                 subtitle: "Match your iPhone or lock Dark or Light look.",
                 helpText: "Switches Confluence between System, Dark Mode, and Light Mode. You can also toggle Dark and Light quickly from the top-left button on the Signals tab."
+            )
+        case .terminalThemePreset:
+            return SettingCopy(
+                label: "Color style",
+                subtitle: "Pick an accent and surface palette for cards and charts.",
+                helpText: "Selects your institutional terminal palette across cards, badges, and all chart engines (Champagne Obsidian, Emerald Desk, Midnight Cobalt, or Ivory Institutional)."
+            )
+        case .liquidGlassIntensity:
+            return SettingCopy(
+                label: "Glass transparency",
+                subtitle: "Adjust translucent glass depth on floating bars and badges.",
+                helpText: "Controls how translucent floating bars and glass pills appear (Solid, Subtle, Standard, or Immersive). Automatically falls back to solid surfaces when iOS Reduce Transparency is enabled."
             )
         case .pureBlackBackground:
             return SettingCopy(

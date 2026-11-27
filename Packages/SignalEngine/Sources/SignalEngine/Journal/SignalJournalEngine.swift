@@ -356,7 +356,7 @@ public enum SignalJournalEngine {
             filledAt: filledAt,
             tp1HitAt: nil,
             closedAt: nil,
-            lastEvaluatedAt: now,
+            lastEvaluatedAt: signalBarTs + signal.timeframe.seconds,
             filterReason: resolvedFilterReason,
             matchedStrategyIDs: signal.matchedStrategyIDs.map(\.rawValue)
         )
@@ -458,7 +458,7 @@ public enum SignalJournalEngine {
             filledAt: (immediateFill || alreadyStoppedOut) ? now : nil,
             tp1HitAt: nil,
             closedAt: nil,
-            lastEvaluatedAt: now,
+            lastEvaluatedAt: signalBarTs + timeframe.seconds,
             filterReason: "\(trap.direction.rawValue) · \(trap.triggerKind.rawValue)",
             matchedStrategyIDs: strategyTag.map { [$0] } ?? []
         )
@@ -650,7 +650,7 @@ public enum SignalJournalEngine {
             .filter {
                 $0.isClosed &&
                 $0.openTimeEpochSeconds > current.signalBarTimestamp &&
-                $0.closeTimeEpochSeconds >= current.lastEvaluatedAt &&
+                $0.closeTimeEpochSeconds > current.lastEvaluatedAt &&
                 $0.high.isFinite && $0.low.isFinite && $0.close.isFinite && $0.high >= $0.low
             }
             .sorted { $0.openTimeEpochSeconds < $1.openTimeEpochSeconds }
@@ -730,6 +730,21 @@ public enum SignalJournalEngine {
                 let slHit = (current.direction == .long)
                     ? (bar.low <= current.stopLoss)
                     : (bar.high >= current.stopLoss)
+
+                // Fill-Bar SL-Only invariant: if filledAt lies inside this bar, check SL ONLY (never award TP on fill candle)
+                let isFillBar: Bool = {
+                    guard let filledAt = current.filledAt else { return false }
+                    return filledAt > bar.openTimeEpochSeconds && filledAt <= bar.closeTimeEpochSeconds
+                }()
+                if isFillBar {
+                    if slHit {
+                        applyLoss(&current, closedAt: barClose)
+                    } else {
+                        applyLiveMetrics(&current, markPrice: bar.close)
+                    }
+                    continue
+                }
+
                 let tp1Hit = (current.direction == .long)
                     ? (bar.high >= current.target1)
                     : (bar.low <= current.target1)

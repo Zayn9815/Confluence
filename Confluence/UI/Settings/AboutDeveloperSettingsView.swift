@@ -84,6 +84,8 @@ public struct AboutDeveloperSettingsView: View {
                     .foregroundStyle(palette.secondaryInk)
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
         .navigationTitle("About & Developer")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showLicensesSheet) {
@@ -113,6 +115,8 @@ private struct OpenSourceAttributionSheet: View {
                     licenseRow("Behavioral Finance Foundations", "Carol Osler (Stop-Loss Clustering), Barber & Odean (Attention FOMO), Kahneman & Tversky / Shefrin & Statman (Disposition Effect)")
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(palette.canvas)
             .navigationTitle("Licenses & Attribution")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

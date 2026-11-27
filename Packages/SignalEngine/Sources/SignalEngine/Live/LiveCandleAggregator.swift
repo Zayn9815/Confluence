@@ -30,6 +30,8 @@ public struct LiveCandleAggregator: Sendable, Equatable {
     public private(set) var lastValidPrice: Double?
     public private(set) var lastTickEpochSeconds: TimeInterval?
     public private(set) var minAllowedOpenEpochSeconds: TimeInterval?
+    private var pendingGapReferencePrice: Double?
+    private var pendingGapConfirmCount: Int = 0
 
     public static func defaultMaxTickDeviation(for marketClass: MarketClass) -> Double {
         switch marketClass {
@@ -85,9 +87,27 @@ public struct LiveCandleAggregator: Sendable, Equatable {
         if let ref = lastValidPrice, ref > 0 {
             let deviation = abs(tick.price - ref) / ref
             if deviation > maxTickDeviationFraction {
-                return .rejected(
-                    reason: "Tick deviation \(String(format: "%.2f", deviation * 100))% exceeds guard (\(String(format: "%.2f", maxTickDeviationFraction * 100))%)"
-                )
+                // Require 3 consecutive clustered ticks to confirm a legitimate Sunday/CPI/earnings gap
+                // while still rejecting isolated bad-tick spikes.
+                if let gapRef = pendingGapReferencePrice, gapRef > 0,
+                   abs(tick.price - gapRef) / gapRef <= maxTickDeviationFraction {
+                    pendingGapConfirmCount += 1
+                    pendingGapReferencePrice = tick.price
+                } else {
+                    pendingGapReferencePrice = tick.price
+                    pendingGapConfirmCount = 1
+                }
+                if pendingGapConfirmCount < 3 {
+                    return .rejected(
+                        reason: "Tick deviation \(String(format: "%.2f", deviation * 100))% exceeds guard (\(String(format: "%.2f", maxTickDeviationFraction * 100))%)"
+                    )
+                }
+                // 3-tick gap confirmed: re-anchor reference price cleanly
+                pendingGapReferencePrice = nil
+                pendingGapConfirmCount = 0
+            } else {
+                pendingGapReferencePrice = nil
+                pendingGapConfirmCount = 0
             }
         }
 

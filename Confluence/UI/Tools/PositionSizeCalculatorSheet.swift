@@ -16,6 +16,7 @@ public struct PositionSizeCalculatorSheet: View {
     @State private var riskPercentText: String
     @State private var accountCurrency: AccountCurrency
     @State private var conversionRateText: String
+    @State private var quoteToUSDRateText: String
     @State private var entryText: String
     @State private var stopText: String
     @State private var contractSizeText: String
@@ -38,28 +39,55 @@ public struct PositionSizeCalculatorSheet: View {
         _riskPercentText = State(initialValue: String(format: "%.2f", coordinator.settings.payload.defaultRiskPercent))
         _accountCurrency = State(initialValue: coordinator.settings.payload.defaultAccountCurrency)
         _conversionRateText = State(initialValue: String(format: "%.4f", coordinator.settings.payload.manualUSDToAccountRate))
+        _quoteToUSDRateText = State(initialValue: "")
         _entryText = State(initialValue: PriceFormatHelper.format(activeLevels.entryMid, decimals: dec))
         _stopText = State(initialValue: PriceFormatHelper.format(activeLevels.stopLoss, decimals: dec))
         _contractSizeText = State(initialValue: String(format: "%.2f", spec.contractSize))
         _pointValueText = State(initialValue: String(format: "%.2f", spec.pointValue))
     }
 
+    private func parseDecimal(_ raw: String) -> Double? {
+        let cleaned = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: ",", with: ".")
+        guard let value = Double(cleaned), value.isFinite else { return nil }
+        return value
+    }
+
+    private var fxCrossQuoteCurrency: String? {
+        guard signal.marketClass == .forex else { return nil }
+        let parts = signal.symbol.uppercased().split(separator: "/")
+        guard parts.count == 2 else { return nil }
+        let base = String(parts[0])
+        let quote = String(parts[1])
+        guard base != "USD" && quote != "USD" else { return nil }
+        return quote
+    }
+
     private var computedResult: PositionSizeResult? {
-        guard let bal = Double(balanceText),
-              let riskPct = Double(riskPercentText),
-              let entry = Double(entryText),
-              let stop = Double(stopText) else { return nil }
+        guard let bal = parseDecimal(balanceText),
+              let riskPct = parseDecimal(riskPercentText),
+              let entry = parseDecimal(entryText),
+              let stop = parseDecimal(stopText) else { return nil }
         let rate: Double
         if accountCurrency == .usd {
             rate = 1.0
         } else {
-            guard let parsedRate = Double(conversionRateText), parsedRate.isFinite, parsedRate > 0 else { return nil }
+            guard let parsedRate = parseDecimal(conversionRateText), parsedRate > 0 else { return nil }
             rate = parsedRate
         }
-        guard let cSize = Double(contractSizeText), cSize.isFinite, cSize > 0 else { return nil }
+        let quoteRate: Double?
+        if fxCrossQuoteCurrency != nil {
+            guard let parsedQuote = parseDecimal(quoteToUSDRateText), parsedQuote > 0 else { return nil }
+            quoteRate = parsedQuote
+        } else {
+            quoteRate = nil
+        }
+        guard let cSize = parseDecimal(contractSizeText), cSize > 0 else { return nil }
         let pVal: Double
-        if signal.marketClass == .indices {
-            guard let parsedPV = Double(pointValueText), parsedPV.isFinite, parsedPV > 0 else { return nil }
+        if signal.marketClass == .indices || signal.marketClass == .metals {
+            guard let parsedPV = parseDecimal(pointValueText), parsedPV > 0 else { return nil }
             pVal = parsedPV
         } else {
             pVal = 1.0
@@ -74,6 +102,7 @@ public struct PositionSizeCalculatorSheet: View {
             riskPercent: riskPct,
             accountCurrency: accountCurrency,
             usdToAccountRate: rate,
+            quoteToUSDRate: quoteRate,
             contractSpec: InstrumentContractSpec(contractSize: cSize, pointValue: pVal)
         )
         return PositionSizeCalculator.calculate(input)
@@ -112,7 +141,7 @@ public struct PositionSizeCalculatorSheet: View {
                                 if let rw = res.estimatedReward1Account {
                                     resultPill("TP1 EST.", "+\(accountCurrency.symbolPrefix)\(String(format: "%.2f", rw))", palette.longEmerald)
                                 }
-                                resultPill("NOTIONAL", "$\(String(format: "%.0f", res.estimatedNotionalUSD))", palette.macroIceBlue)
+                                resultPill("NOTIONAL (USD)", "$\(String(format: "%.0f", res.estimatedNotionalUSD))", palette.macroIceBlue)
                             }
 
                             Text(res.formulaSummary)
@@ -128,7 +157,9 @@ public struct PositionSizeCalculatorSheet: View {
                     }
                 } else {
                     Section("Position Size") {
-                        Text("Enter valid positive account balance, risk %, entry, and stop-loss prices (entry != stop loss).")
+                        Text(fxCrossQuoteCurrency != nil
+                             ? "Enter valid positive account balance, risk %, entry/stop prices, and the \(fxCrossQuoteCurrency!) -> USD quote rate."
+                             : "Enter valid positive account balance, risk %, entry, and stop-loss prices (entry != stop loss).")
                             .font(.caption)
                             .foregroundStyle(palette.shortCrimson)
                     }
@@ -146,6 +177,17 @@ public struct PositionSizeCalculatorSheet: View {
                             Text("1 USD = (\(accountCurrency.rawValue))")
                             Spacer()
                             TextField("e.g. 0.92", text: $conversionRateText)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .monospacedDigit()
+                        }
+                    }
+
+                    if let quoteCcy = fxCrossQuoteCurrency {
+                        HStack {
+                            Text("1 \(quoteCcy) = (USD)")
+                            Spacer()
+                            TextField("e.g. 1.27", text: $quoteToUSDRateText)
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .monospacedDigit()
@@ -214,7 +256,7 @@ public struct PositionSizeCalculatorSheet: View {
                                 .multilineTextAlignment(.trailing)
                                 .monospacedDigit()
                         }
-                        if signal.marketClass == .indices {
+                        if signal.marketClass == .indices || signal.marketClass == .metals {
                             HStack {
                                 Text("USD Point Value")
                                 Spacer()
@@ -227,10 +269,12 @@ public struct PositionSizeCalculatorSheet: View {
                     } header: {
                         Text("Broker Contract Spec (\(signal.symbol))")
                     } footer: {
-                        Text("Default: 1.0 contract × $1.00/pt for US500/NAS100 CFDs, 100 oz/lot for XAU/USD. Saved per symbol when you tap Save Defaults.")
+                        Text("Default: 1.0 contract × $1.00/pt for US500/NAS100 CFDs, 100 oz/lot × $1.00/pt for XAU/USD. Saved per symbol when you tap Save Defaults.")
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(palette.canvas)
             .navigationTitle("Position Size Calculator")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -248,18 +292,18 @@ public struct PositionSizeCalculatorSheet: View {
     }
 
     private func persistDefaults() {
-        if let bal = Double(balanceText), bal > 0 {
+        if let bal = parseDecimal(balanceText), bal > 0 {
             coordinator.settings.payload.defaultAccountBalance = bal
         }
-        if let risk = Double(riskPercentText), risk > 0 {
+        if let risk = parseDecimal(riskPercentText), risk > 0 {
             coordinator.settings.payload.defaultRiskPercent = risk
         }
         coordinator.settings.payload.defaultAccountCurrency = accountCurrency
-        if let rate = Double(conversionRateText), rate > 0 {
+        if let rate = parseDecimal(conversionRateText), rate > 0 {
             coordinator.settings.payload.manualUSDToAccountRate = rate
         }
-        if showContractSpecEditor, let cs = Double(contractSizeText), cs > 0 {
-            let pv = Double(pointValueText) ?? 1.0
+        if showContractSpecEditor, let cs = parseDecimal(contractSizeText), cs > 0 {
+            let pv = parseDecimal(pointValueText) ?? 1.0
             coordinator.settings.setContractSpec(
                 InstrumentContractSpec(contractSize: cs, pointValue: max(pv, 1e-6)),
                 for: signal.symbol

@@ -51,7 +51,9 @@ public struct GlossaryView: View {
                 .padding(.vertical, 3)
             }
         }
-        .searchable(text: $searchText, prompt: "Search terms (FVG, Wilson CI, BOS, ATR...)")
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
+        .searchable(text: $searchText, prompt: "Search terms (FVG, Wilson CI, OFI, Journal...)")
         .navigationTitle("Quant & Trading Glossary")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -92,10 +94,13 @@ public struct GlossaryView: View {
         GlossaryTerm(id: "platt", term: "Walk-Forward Platt Scaling", category: "Calibration", definition: "Monotonic logistic calibration mapping raw scores to empirical win probabilities once >= 100 resolved filled trades exist. Display-only; gating always uses the raw score."),
         GlossaryTerm(id: "brier", term: "Brier Score", category: "Calibration", definition: "Mean squared error between predicted probability and actual outcome (0 or 1). 0.000 is perfect; < 0.200 indicates well-calibrated probabilities."),
         GlossaryTerm(id: "wilson", term: "Wilson 95% Confidence Interval", category: "Statistics", definition: "Exact binomial confidence interval showing the plausible range of true win rate given sample size n — preventing over-interpreting small samples."),
-        GlossaryTerm(id: "fillwindow", term: "Entry-Zone Fill Window", category: "Lifecycle", definition: "Maximum closed bars (15m: 16, 1H: 12, 4H: 6, 1D: 3) a signal has to touch [entryLow, entryHigh]. Unfilled signals mark Not Filled and are excluded from Win Rate."),
+        GlossaryTerm(id: "fillwindow", term: "Entry-Zone Fill Window", category: "Lifecycle", definition: "Maximum closed bars (15m: 16, 30m: 12, 1H: 12, 4H: 6, 1D: 3) a signal has to touch [entryLow, entryHigh]. Unfilled signals mark Not Filled and are excluded from Win Rate."),
         GlossaryTerm(id: "fillbar", term: "Fill-Bar SL-Only & Same-Bar Rule", category: "Lifecycle", definition: "Pessimistic anti-bias rule: on the fill bar itself only SL is checked (TP checks start on the next bar); on any later bar hitting both SL and TP, SL resolves first."),
         GlossaryTerm(id: "causal", term: "Prefix Invariance (Anti-Repainting)", category: "Engineering", definition: "Guarantee that every detector outputs the exact same result at closed bar t whether given bars 0...t or future bars 0...N. Open forming bars are always dropped."),
         GlossaryTerm(id: "offset", term: "Broker Price Offset", category: "Workflow", definition: "User-calibrated additive difference between your broker's quote and Confluence's feed (e.g., CFD vs futures basis). Display/Copy only; never alters engine stats."),
-        GlossaryTerm(id: "pearson", term: "Rolling Pearson Correlation (ρ)", category: "Portfolio", definition: "Linear correlation (-1.0 to +1.0) of aligned closed-bar log returns between two active signals, highlighting overlapping risk exposure.")
+        GlossaryTerm(id: "pearson", term: "Rolling Pearson Correlation (ρ)", category: "Portfolio", definition: "Linear correlation (-1.0 to +1.0) of aligned closed-bar log returns between two active signals, highlighting overlapping risk exposure."),
+        GlossaryTerm(id: "oficvd", term: "Order Flow Imbalance (OFI) & CVD", category: "Order Flow", definition: "Crypto-only microstructure metrics measuring distance-weighted bid vs ask depth imbalance (OFI) and aggressive market buy minus sell trade flow (Cumulative Volume Delta), plus resting liquidity walls."),
+        GlossaryTerm(id: "journal3", term: "3-Section Automatic Signal Journal", category: "Lifecycle", definition: "Zero-click audit journal automatically tracking every Strong Signal, Weak & Filtered setup, and Behavioral Trap Alert using identical causal fill-window and fill-bar SL-only resolution rules."),
+        GlossaryTerm(id: "aijudge", term: "Multi-Provider AI Review Assistant", category: "AI Review", definition: "Optional second-opinion reviewer supporting Google Gemini, DeepSeek, and OpenRouter (with per-provider iOS Keychain storage and shared daily cap). Code always owns all numeric trade levels and hard risk gates.")
     ]
 }

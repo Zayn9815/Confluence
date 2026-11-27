@@ -86,8 +86,8 @@
         "null"
       ],
       "enum": [
-        "bullTrap",
-        "bearTrap",
+        "BULL TRAP",
+        "BEAR TRAP",
         null
       ]
     },

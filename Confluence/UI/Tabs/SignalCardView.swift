@@ -109,12 +109,18 @@ private struct SignalMiniChartLeafView: View {
             overlays: overlays,
             palette: palette,
             height: height,
-            livePrice: throttledLivePrice ?? latestPrice
+            livePrice: throttledLivePrice
         )
+        .equatable()
+        .onAppear {
+            if throttledLivePrice == nil, let latestPrice {
+                throttledLivePrice = latestPrice
+            }
+        }
         .onChange(of: latestPrice) { _, newPrice in
             guard let newPrice else { return }
             let now = Date().timeIntervalSince1970
-            if miniThrottle.shouldEmit(at: now) {
+            if throttledLivePrice == nil || miniThrottle.shouldEmit(at: now) {
                 throttledLivePrice = newPrice
             }
         }
@@ -254,7 +260,7 @@ public struct SignalCardView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
+                    ConfluenceFlowLayout(horizontalSpacing: 6, verticalSpacing: 4) {
                         badgePill(signal.marketClass.displayName.uppercased(), color: palette.secondaryInk, fill: palette.elevatedSurface)
                         badgePill(signal.timeframe.displayLabel, color: palette.primaryInk, fill: palette.elevatedSurface)
                         directionOrTrapBadge
@@ -264,6 +270,7 @@ public struct SignalCardView: View {
                             .font(.headline.weight(.bold))
                             .foregroundStyle(palette.primaryInk)
                             .lineLimit(1)
+                            .layoutPriority(1)
                         SignalLivePriceLeafView(
                             symbol: signal.symbol,
                             marketClass: signal.marketClass,
@@ -274,13 +281,14 @@ public struct SignalCardView: View {
                     }
                     HStack(spacing: 5) {
                         Text(signal.strengthBreakdown?.strengthLabel ?? signal.tier.displayName)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(palette.color(for: signal.tier))
+                            .lineLimit(1)
                         Text("·")
-                            .font(.system(size: 10))
+                            .font(.caption2)
                             .foregroundStyle(palette.tertiaryInk)
                         Text(formattedGeneratedStamp(epochSeconds: signal.generatedAtEpochSeconds))
-                            .font(.system(size: 10, weight: .medium).monospacedDigit())
+                            .font(.caption2.weight(.medium).monospacedDigit())
                             .foregroundStyle(palette.secondaryInk)
                             .lineLimit(1)
                             .minimumScaleFactor(0.85)
@@ -319,7 +327,7 @@ public struct SignalCardView: View {
                         SignalMiniChartLeafView(
                             symbol: signal.symbol,
                             candles: signal.recentCandles,
-                            levels: signal.levels,
+                            levels: activeLevels,
                             overlays: signal.overlays,
                             palette: palette,
                             height: density == .compact ? 84 : 108,
@@ -337,54 +345,66 @@ public struct SignalCardView: View {
                 .buttonStyle(.plain)
             }
 
-            // 4. 2x3 Numeric Trade Grid (Code owns ALL numbers; semantic emerald for TP1 & TP2)
+            // 4. Visual Risk-Reward Ladder + 2x3 Numeric Trade Grid (Compact shows full-anchor ladder only; Standard shows compact rail + full 2x3 grid)
             if let lv = activeLevels {
                 let levelDec = PriceFormatHelper.decimals(for: signal.symbol, marketClass: signal.marketClass, referencePrice: lv.entryMid)
-                LazyVGrid(columns: gridCols, spacing: 8) {
-                    entryZoneCell(
-                        low: PriceFormatHelper.format(lv.entryLow, decimals: levelDec),
-                        high: PriceFormatHelper.format(lv.entryHigh, decimals: levelDec),
-                        mid: PriceFormatHelper.format(lv.entryMid, decimals: levelDec)
-                    )
-                    metricCell(
-                        title: "STOP LOSS",
-                        value: PriceFormatHelper.format(lv.stopLoss, decimals: levelDec),
-                        sub: "-\(String(format: "%.2f", lv.riskPercent))% Risk",
-                        accent: palette.shortCrimson
-                    )
-                    metricCell(
-                        title: "R:R RATIO",
-                        value: "1:\(String(format: "%.2f", lv.riskRewardRatio))",
-                        sub: lv.isTP2Enabled ? "Target 2 1:\(String(format: "%.1f", lv.tp2RiskRewardRatio))" : "Target 1 Only",
-                        accent: palette.primaryInk
-                    )
-                    metricCell(
-                        title: "TARGET 1",
-                        value: PriceFormatHelper.format(lv.tp1, decimals: levelDec),
-                        sub: "+\(String(format: "%.2f", lv.reward1Percent))%",
-                        accent: palette.longEmerald
-                    )
-                    if lv.isTP2Enabled {
+                SignalRiskRewardLadderView(
+                    symbol: signal.symbol,
+                    marketClass: signal.marketClass,
+                    direction: signal.direction,
+                    levels: lv,
+                    livePriceService: livePriceService,
+                    palette: palette,
+                    showFullAnchors: density == .compact
+                )
+
+                if density != .compact {
+                    LazyVGrid(columns: gridCols, spacing: 8) {
+                        entryZoneCell(
+                            low: PriceFormatHelper.format(lv.entryLow, decimals: levelDec),
+                            high: PriceFormatHelper.format(lv.entryHigh, decimals: levelDec),
+                            mid: PriceFormatHelper.format(lv.entryMid, decimals: levelDec)
+                        )
                         metricCell(
-                            title: "TARGET 2",
-                            value: PriceFormatHelper.format(lv.tp2, decimals: levelDec),
-                            sub: "+\(String(format: "%.2f", lv.reward2Percent))%",
+                            title: "STOP LOSS",
+                            value: PriceFormatHelper.format(lv.stopLoss, decimals: levelDec),
+                            sub: "-\(String(format: "%.2f", lv.riskPercent))% Risk",
+                            accent: palette.shortCrimson
+                        )
+                        metricCell(
+                            title: "R:R RATIO",
+                            value: "1:\(String(format: "%.2f", lv.riskRewardRatio))",
+                            sub: lv.isTP2Enabled ? "Target 2 1:\(String(format: "%.1f", lv.tp2RiskRewardRatio))" : "Target 1 Only",
+                            accent: palette.primaryInk
+                        )
+                        metricCell(
+                            title: "TARGET 1",
+                            value: PriceFormatHelper.format(lv.tp1, decimals: levelDec),
+                            sub: "+\(String(format: "%.2f", lv.reward1Percent))%",
                             accent: palette.longEmerald
                         )
-                    } else {
+                        if lv.isTP2Enabled {
+                            metricCell(
+                                title: "TARGET 2",
+                                value: PriceFormatHelper.format(lv.tp2, decimals: levelDec),
+                                sub: "+\(String(format: "%.2f", lv.reward2Percent))%",
+                                accent: palette.longEmerald
+                            )
+                        } else {
+                            metricCell(
+                                title: "TARGET 2",
+                                value: "Disabled",
+                                sub: "Settings -> Rules",
+                                accent: palette.tertiaryInk
+                            )
+                        }
                         metricCell(
-                            title: "TARGET 2",
-                            value: "Disabled",
-                            sub: "Settings -> Rules",
-                            accent: palette.tertiaryInk
+                            title: "CONFLUENCE",
+                            value: "\(signal.alignedStrategies.count) Signals",
+                            sub: isBrokerAdjusted ? "\(signal.dataProvider) + Offset" : signal.dataProvider,
+                            accent: palette.secondaryInk
                         )
                     }
-                    metricCell(
-                        title: "CONFLUENCE",
-                        value: "\(signal.alignedStrategies.count) Signals",
-                        sub: isBrokerAdjusted ? "\(signal.dataProvider) + Offset" : signal.dataProvider,
-                        accent: palette.secondaryInk
-                    )
                 }
             }
 
@@ -399,16 +419,17 @@ public struct SignalCardView: View {
                             .foregroundStyle(palette.primaryInk)
                         if !isExpanded {
                             Text(compactPreviewLine)
-                                .font(.system(size: 10))
+                                .font(.caption2)
                                 .foregroundStyle(palette.secondaryInk)
                                 .lineLimit(1)
                         }
                     }
                     Spacer()
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.caption2.weight(.bold))
                         .foregroundStyle(palette.champagneGold)
                         .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                        .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: isExpanded)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
@@ -424,7 +445,7 @@ public struct SignalCardView: View {
             // 6. Expanded In-Place Institutional Details
             if isExpanded {
                 expandedDetailContent(decimals: dec)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(density == .compact ? 12 : 15)
@@ -504,7 +525,7 @@ public struct SignalCardView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                if signal.isMarketClosedSnapshot {
+                if signal.isMarketClosedSnapshot, signal.marketClass == .crypto, signal.orderFlowSummary != nil {
                     let reasonText = signal.marketClosedReason ?? "Last Bar"
                     badgePill("Market Closed · \(reasonText)", color: palette.trapAmber, fill: palette.trapAmber.opacity(0.14))
                 }

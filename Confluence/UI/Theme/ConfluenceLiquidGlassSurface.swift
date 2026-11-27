@@ -1,42 +1,65 @@
 import SwiftUI
 
-/// SDK-safe iOS 26+ Liquid Glass surface modifier with clean `.ultraThinMaterial` + hairline border fallback.
+/// SDK-safe iOS 26+ Liquid Glass surface modifier with Reduce Transparency & Solid-mode opaque fallback,
+/// palette-aware glass border/tint, and clean `.ultraThinMaterial` rendering on iOS 17–25.
 public struct ConfluenceLiquidGlassSurface: ViewModifier {
-    let cornerRadius: CGFloat
-    let borderColor: Color
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.confluencePalette) private var palette
 
-    public init(cornerRadius: CGFloat = 12, borderColor: Color = Color.white.opacity(0.18)) {
+    let cornerRadius: CGFloat
+    let borderColorOverride: Color?
+
+    public init(cornerRadius: CGFloat = 12, borderColor: Color? = nil) {
         self.cornerRadius = cornerRadius
-        self.borderColor = borderColor
+        self.borderColorOverride = borderColor
+    }
+
+    private var effectiveBorder: Color {
+        borderColorOverride ?? palette.glassBorder
     }
 
     public func body(content: Content) -> some View {
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if reduceTransparency || palette.glassIntensity == .off {
             content
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .background(palette.glassOpaqueFallback, in: shape)
+                .overlay(shape.strokeBorder(effectiveBorder, lineWidth: 0.75))
         } else {
-            fallbackSurface(content)
+            #if compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                content
+                    .background(palette.glassTint, in: shape)
+                    .glassEffect(.regular, in: shape)
+                    .overlay(shape.strokeBorder(effectiveBorder, lineWidth: 0.75))
+            } else {
+                translucentMaterialSurface(content, shape: shape)
+            }
+            #else
+            translucentMaterialSurface(content, shape: shape)
+            #endif
         }
-        #else
-        fallbackSurface(content)
-        #endif
     }
 
-    private func fallbackSurface(_ content: Content) -> some View {
-        content
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(borderColor, lineWidth: 0.75)
-            )
+    private func translucentMaterialSurface(_ content: Content, shape: RoundedRectangle) -> some View {
+        let material: Material = {
+            switch palette.glassIntensity {
+            case .off: return .regularMaterial
+            case .subtle: return .regularMaterial
+            case .standard: return .thinMaterial
+            case .immersive: return .ultraThinMaterial
+            }
+        }()
+        return content
+            .background(material, in: shape)
+            .background(palette.glassTint, in: shape)
+            .overlay(shape.strokeBorder(effectiveBorder, lineWidth: 0.75))
     }
 }
 
 public extension View {
     func confluenceLiquidGlass(
         cornerRadius: CGFloat = 12,
-        borderColor: Color = Color.white.opacity(0.18)
+        borderColor: Color? = nil
     ) -> some View {
         modifier(ConfluenceLiquidGlassSurface(cornerRadius: cornerRadius, borderColor: borderColor))
     }

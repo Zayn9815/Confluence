@@ -144,7 +144,7 @@ public enum PositionSizeCalculator {
 
     public static func calculate(_ input: PositionSizeInput) -> PositionSizeResult? {
         guard input.accountBalance.isFinite, input.accountBalance > 0,
-              input.riskPercent.isFinite, input.riskPercent > 0,
+              input.riskPercent.isFinite, input.riskPercent > 0, input.riskPercent <= 100.0,
               input.entryPrice.isFinite, input.entryPrice > 0,
               input.stopLossPrice.isFinite, input.stopLossPrice > 0,
               input.contractSpec.contractSize.isFinite, input.contractSpec.contractSize > 0,
@@ -153,17 +153,19 @@ public enum PositionSizeCalculator {
         else { return nil }
 
         let stopDist = abs(input.entryPrice - input.stopLossPrice)
-        guard stopDist > 1e-12 else { return nil }
+        guard stopDist.isFinite, stopDist > 1e-12 else { return nil }
 
         let riskAccount = input.accountBalance * (input.riskPercent / 100.0)
         let fxRate: Double = (input.accountCurrency == .usd) ? 1.0 : input.usdToAccountRate
         let riskUSD = riskAccount / fxRate
+        guard riskAccount.isFinite, riskUSD.isFinite, riskUSD > 0 else { return nil }
 
         let isLong = input.entryPrice > input.stopLossPrice
         let reward1Account: Double? = input.tp1Price.flatMap { tp1 in
             guard tp1.isFinite, tp1 > 0, isLong ? (tp1 > input.entryPrice) : (tp1 < input.entryPrice) else { return nil }
             let rr = abs(tp1 - input.entryPrice) / stopDist
-            return riskAccount * rr
+            let val = riskAccount * rr
+            return val.isFinite ? val : nil
         }
 
         let upper = input.symbol.uppercased()
@@ -176,7 +178,7 @@ public enum PositionSizeCalculator {
             let lotUnits = max(spec.contractSize, 1.0)
             let pipValueUSD: Double
             let note: String
-            if upper.hasSuffix("/USD") || upper.hasSuffix("USD") && !upper.hasPrefix("USD") {
+            if upper.hasSuffix("/USD") || (upper.hasSuffix("USD") && !upper.hasPrefix("USD")) {
                 pipValueUSD = lotUnits * pipSize
                 note = "Quote USD (\(String(format: "$%.2f", pipValueUSD))/pip per lot)"
             } else if upper.hasPrefix("USD/") || upper.hasPrefix("USD") {
@@ -200,6 +202,7 @@ public enum PositionSizeCalculator {
                     ?? (upper.contains("JPY") ? (1.0 / 150.0) : 1.0)
                 notionalUSD = units * input.entryPrice * quoteToUSD
             }
+            guard stopPips.isFinite, lots.isFinite, units.isFinite, notionalUSD.isFinite else { return nil }
             return PositionSizeResult(
                 riskAmountAccount: riskAccount,
                 riskAmountUSD: riskUSD,
@@ -217,9 +220,12 @@ public enum PositionSizeCalculator {
 
         case .metals:
             let ozPerLot = max(spec.contractSize, 1.0)
-            let ounces = riskUSD / stopDist
-            let lots = ounces / ozPerLot
-            let notionalUSD = ounces * input.entryPrice
+            let pointVal = max(spec.pointValue, 1e-6)
+            let dollarPerLotPerDollar = ozPerLot * pointVal
+            let lots = riskUSD / max(stopDist * dollarPerLotPerDollar, 1e-12)
+            let ounces = lots * ozPerLot
+            let notionalUSD = lots * dollarPerLotPerDollar * input.entryPrice
+            guard lots.isFinite, ounces.isFinite, notionalUSD.isFinite else { return nil }
             return PositionSizeResult(
                 riskAmountAccount: riskAccount,
                 riskAmountUSD: riskUSD,
@@ -231,7 +237,7 @@ public enum PositionSizeCalculator {
                 secondaryUnitLabel: "Troy Oz",
                 estimatedNotionalUSD: notionalUSD,
                 estimatedReward1Account: reward1Account,
-                formulaSummary: "Risk $\(String(format: "%.2f", riskUSD)) ÷ $\(String(format: "%.2f", stopDist))/oz · \(Int(ozPerLot.rounded())) oz/lot",
+                formulaSummary: "Risk $\(String(format: "%.2f", riskUSD)) ÷ $\(String(format: "%.2f", stopDist * pointVal))/oz · \(Int(ozPerLot.rounded())) oz/lot",
                 disclaimer: standardDisclaimer
             )
 
@@ -256,6 +262,7 @@ public enum PositionSizeCalculator {
             let dollarPerPoint = max(spec.contractSize, 1e-6) * max(spec.pointValue, 1e-6)
             let contracts = riskUSD / max(stopDist * dollarPerPoint, 1e-12)
             let notionalUSD = contracts * input.entryPrice * dollarPerPoint
+            guard contracts.isFinite, notionalUSD.isFinite else { return nil }
             return PositionSizeResult(
                 riskAmountAccount: riskAccount,
                 riskAmountUSD: riskUSD,
@@ -273,6 +280,8 @@ public enum PositionSizeCalculator {
 
         case .crypto:
             let units = riskUSD / stopDist
+            let notionalUSD = units * input.entryPrice
+            guard units.isFinite, notionalUSD.isFinite else { return nil }
             let baseTicker = upper.split(separator: "/").first.map(String.init) ?? upper
             return PositionSizeResult(
                 riskAmountAccount: riskAccount,
@@ -283,7 +292,7 @@ public enum PositionSizeCalculator {
                 primaryUnitLabel: baseTicker,
                 secondaryQuantity: nil,
                 secondaryUnitLabel: nil,
-                estimatedNotionalUSD: units * input.entryPrice,
+                estimatedNotionalUSD: notionalUSD,
                 estimatedReward1Account: reward1Account,
                 formulaSummary: "Risk $\(String(format: "%.2f", riskUSD)) ÷ $\(String(format: "%.4f", stopDist))/\(baseTicker)",
                 disclaimer: standardDisclaimer
@@ -291,6 +300,8 @@ public enum PositionSizeCalculator {
 
         case .stocks:
             let shares = riskUSD / stopDist
+            let notionalUSD = shares * input.entryPrice
+            guard shares.isFinite, notionalUSD.isFinite else { return nil }
             return PositionSizeResult(
                 riskAmountAccount: riskAccount,
                 riskAmountUSD: riskUSD,
@@ -300,7 +311,7 @@ public enum PositionSizeCalculator {
                 primaryUnitLabel: "Shares",
                 secondaryQuantity: nil,
                 secondaryUnitLabel: nil,
-                estimatedNotionalUSD: shares * input.entryPrice,
+                estimatedNotionalUSD: notionalUSD,
                 estimatedReward1Account: reward1Account,
                 formulaSummary: "Risk $\(String(format: "%.2f", riskUSD)) ÷ $\(String(format: "%.2f", stopDist))/share",
                 disclaimer: standardDisclaimer

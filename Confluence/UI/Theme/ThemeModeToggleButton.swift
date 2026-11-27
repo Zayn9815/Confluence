@@ -4,6 +4,7 @@ import UIKit
 /// Clean circular Dark/Light theme toggle button (`moon.fill` in Light mode, `sun.max.fill` in Dark mode)
 /// with light haptic feedback and instant persistence via `AppSettingsStore`.
 public struct ThemeModeToggleButton: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public let isDark: Bool
     public let hapticsEnabled: Bool
     public let palette: ConfluencePalette
@@ -27,8 +28,12 @@ public struct ThemeModeToggleButton: View {
                 let gen = UIImpactFeedbackGenerator(style: .light)
                 gen.impactOccurred()
             }
-            withAnimation(.easeInOut(duration: 0.22)) {
+            if reduceMotion {
                 action()
+            } else {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    action()
+                }
             }
         } label: {
             Image(systemName: isDark ? "sun.max.fill" : "moon.fill")

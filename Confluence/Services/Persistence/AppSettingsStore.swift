@@ -72,6 +72,8 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     // Section 1 — Appearance, Accessibility & Time Display
     public var appearanceMode: AppearanceMode = .dark
     public var usePureBlackAMOLED: Bool = false
+    public var terminalThemePreset: TerminalThemePreset = .champagneObsidian
+    public var liquidGlassIntensity: LiquidGlassIntensity = .standard
     public var useColorBlindSafePalette: Bool = false
     public var use24HourTime: Bool = false
     public var useUTCTimeZone: Bool = false
@@ -162,7 +164,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
     public init() {}
 
     enum CodingKeys: String, CodingKey {
-        case appearanceMode, usePureBlackAMOLED, useColorBlindSafePalette, use24HourTime, useUTCTimeZone
+        case appearanceMode, usePureBlackAMOLED, terminalThemePreset, liquidGlassIntensity, useColorBlindSafePalette, use24HourTime, useUTCTimeZone
         case cardDensity, showMiniCharts, showAdvancedSettings, hasCompletedOnboarding
         case inAppSignalSoundEnabled, pushNotificationSoundEnabled, soundPreset
         case trapAlertSoundEnabled, preNewsCountdownSoundEnabled, newsReleaseImpactSoundEnabled
@@ -232,6 +234,8 @@ public struct PersistedSettingsPayload: Codable, Sendable {
             usePureBlackAMOLED = (legacyPreset == "AMOLED Vault" || legacyDarkPreset == "AMOLED Vault")
         }
 
+        terminalThemePreset = (try? c.decodeIfPresent(TerminalThemePreset.self, forKey: .terminalThemePreset)) ?? d.terminalThemePreset
+        liquidGlassIntensity = (try? c.decodeIfPresent(LiquidGlassIntensity.self, forKey: .liquidGlassIntensity)) ?? d.liquidGlassIntensity
         useColorBlindSafePalette = (try? c.decodeIfPresent(Bool.self, forKey: .useColorBlindSafePalette)) ?? d.useColorBlindSafePalette
         use24HourTime = (try? c.decodeIfPresent(Bool.self, forKey: .use24HourTime)) ?? d.use24HourTime
         useUTCTimeZone = (try? c.decodeIfPresent(Bool.self, forKey: .useUTCTimeZone)) ?? d.useUTCTimeZone
@@ -333,6 +337,7 @@ public struct PersistedSettingsPayload: Codable, Sendable {
 @Observable
 public final class AppSettingsStore {
     private static let storageKey = "com.bilal.confluence.settings.v1"
+    private let defaults: UserDefaults
 
     public var payload: PersistedSettingsPayload {
         didSet {
@@ -340,16 +345,17 @@ public final class AppSettingsStore {
         }
     }
 
-    public init() {
-        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let data = defaults.data(forKey: Self.storageKey),
            var decoded = try? JSONDecoder().decode(PersistedSettingsPayload.self, from: data) {
-            if let storedEngineRaw = UserDefaults.standard.string(forKey: ChartEngineOption.appStorageKey) {
+            if let storedEngineRaw = defaults.string(forKey: ChartEngineOption.appStorageKey) {
                 decoded.chartEngine = ChartEngineOption.fromStoredRawValue(storedEngineRaw)
             }
             self.payload = decoded
         } else {
             var initial = PersistedSettingsPayload()
-            if let storedEngineRaw = UserDefaults.standard.string(forKey: ChartEngineOption.appStorageKey) {
+            if let storedEngineRaw = defaults.string(forKey: ChartEngineOption.appStorageKey) {
                 initial.chartEngine = ChartEngineOption.fromStoredRawValue(storedEngineRaw)
             }
             self.payload = initial
@@ -357,9 +363,9 @@ public final class AppSettingsStore {
     }
 
     private func save() {
-        UserDefaults.standard.set(payload.chartEngine.rawValue, forKey: ChartEngineOption.appStorageKey)
+        defaults.set(payload.chartEngine.rawValue, forKey: ChartEngineOption.appStorageKey)
         if let data = try? JSONEncoder().encode(payload) {
-            UserDefaults.standard.set(data, forKey: Self.storageKey)
+            defaults.set(data, forKey: Self.storageKey)
         }
     }
 
@@ -380,6 +386,7 @@ public final class AppSettingsStore {
     }
 
     public func setBrokerOffset(_ offset: Double, for symbol: String) {
+        guard offset.isFinite else { return }
         if abs(offset) < 1e-12 {
             payload.brokerPriceOffsets.removeValue(forKey: symbol)
         } else {

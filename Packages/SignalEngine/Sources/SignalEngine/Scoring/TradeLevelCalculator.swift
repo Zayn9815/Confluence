@@ -38,7 +38,8 @@ public enum TradeLevelCalculator {
         case .d1: entryZoneScale = 1.15
         }
 
-        // Entry Zone anchored around current close or active FVG/OB edge
+        let lastBarIndex = max(0, candles.count - 1)
+        // Entry Zone anchored around current close or nearby fresh unmitigated FVG
         let entryLow: Double
         let entryHigh: Double
         if mode == .fixedPercent {
@@ -49,8 +50,10 @@ public enum TradeLevelCalculator {
             if let fvg = ict.fvgs.last(where: {
                 $0.direction == .long
                 && $0.isUnmitigated
+                && (lastBarIndex - $0.formedAtIndex) <= 24
                 && $0.top <= close * 1.005
                 && $0.bottom <= close + safeATR * 0.15 * entryZoneScale
+                && (close - $0.top) <= safeATR * 1.5
             }) {
                 entryLow = min(close, max(fvg.bottom, close - safeATR * 0.6 * entryZoneScale))
                 entryHigh = min(max(fvg.top, close), close + safeATR * 0.15 * entryZoneScale)
@@ -62,8 +65,10 @@ public enum TradeLevelCalculator {
             if let fvg = ict.fvgs.last(where: {
                 $0.direction == .short
                 && $0.isUnmitigated
+                && (lastBarIndex - $0.formedAtIndex) <= 24
                 && $0.bottom >= close * 0.995
                 && $0.top >= close - safeATR * 0.15 * entryZoneScale
+                && ($0.bottom - close) <= safeATR * 1.5
             }) {
                 entryLow = max(min(fvg.bottom, close), close - safeATR * 0.15 * entryZoneScale)
                 entryHigh = max(close, min(fvg.top, close + safeATR * 0.6 * entryZoneScale))
@@ -146,16 +151,25 @@ public enum TradeLevelCalculator {
 
         let stopLoss: Double
         let atrBuffer = safeATR * atrBufferMult
+        let maxAnchorDist = safeATR * 2.5
         if direction == .long {
-            let recentSwingLow = ict.swings.reversed().first(where: { !$0.isHigh && $0.price.isFinite && $0.price < entryMid })?.price
-            let recentOBLow = ict.orderBlocks.reversed().first(where: { $0.direction == .long && $0.bottom.isFinite && $0.bottom < entryMid })?.bottom
-            let structuralAnchor = [recentSwingLow, recentOBLow, lastBar.low].compactMap { $0 }.max() ?? lastBar.low
+            let recentSwingLow = ict.swings.reversed().first(where: {
+                !$0.isHigh && $0.price.isFinite && $0.price < entryMid && (entryMid - $0.price) <= maxAnchorDist
+            })?.price
+            let recentOBLow = ict.orderBlocks.reversed().first(where: {
+                $0.direction == .long && $0.isUnmitigated && $0.bottom.isFinite && $0.bottom < entryMid && (entryMid - $0.bottom) <= maxAnchorDist
+            })?.bottom
+            let structuralAnchor = [recentSwingLow, recentOBLow, lastBar.low].compactMap { $0 }.min() ?? lastBar.low
             let rawSL = structuralAnchor - atrBuffer
             stopLoss = max(min(rawSL, entryMid - safeATR * 0.65), entryMid * 0.05)
         } else {
-            let recentSwingHigh = ict.swings.reversed().first(where: { $0.isHigh && $0.price.isFinite && $0.price > entryMid })?.price
-            let recentOBHigh = ict.orderBlocks.reversed().first(where: { $0.direction == .short && $0.top.isFinite && $0.top > entryMid })?.top
-            let structuralAnchor = [recentSwingHigh, recentOBHigh, lastBar.high].compactMap { $0 }.min() ?? lastBar.high
+            let recentSwingHigh = ict.swings.reversed().first(where: {
+                $0.isHigh && $0.price.isFinite && $0.price > entryMid && ($0.price - entryMid) <= maxAnchorDist
+            })?.price
+            let recentOBHigh = ict.orderBlocks.reversed().first(where: {
+                $0.direction == .short && $0.isUnmitigated && $0.top.isFinite && $0.top > entryMid && ($0.top - entryMid) <= maxAnchorDist
+            })?.top
+            let structuralAnchor = [recentSwingHigh, recentOBHigh, lastBar.high].compactMap { $0 }.max() ?? lastBar.high
             let rawSL = structuralAnchor + atrBuffer
             stopLoss = max(rawSL, entryMid + safeATR * 0.65)
         }
@@ -320,11 +334,13 @@ public enum TradeLevelCalculator {
         if direction == .long {
             let rawSL = min(trap.extremePrice - atrBuffer, entryMid - safeATR * 0.65)
             let floorSL = max(entryMid * (1.0 - maxSLFraction), entryMid * 0.05)
-            stopLoss = min(entryMid - safeATR * 0.35, max(rawSL, floorSL))
+            let tightened = min(entryMid - safeATR * 0.35, max(rawSL, floorSL))
+            stopLoss = max(tightened, floorSL)
         } else {
             let rawSL = max(trap.extremePrice + atrBuffer, entryMid + safeATR * 0.65)
             let capSL = entryMid * (1.0 + maxSLFraction)
-            stopLoss = max(entryMid + safeATR * 0.35, min(rawSL, capSL))
+            let tightened = max(entryMid + safeATR * 0.35, min(rawSL, capSL))
+            stopLoss = min(tightened, capSL)
         }
 
         let riskDistance = abs(entryMid - stopLoss)

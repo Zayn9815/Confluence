@@ -173,8 +173,9 @@ public enum CausalICTDetector {
         // NOTE: structural primitives (swings, FVG/OB zones, sweeps, EQ) are always computed because
         // Stop loss / Target anchoring, trap detection and chart overlays depend on them. Only the
         // scored StrategyContributions below are hard-gated per `StrategyID`.
+        let safeWing = max(1, swingWing)
         let lastIdx = min(endIndex ?? (candles.count - 1), candles.count - 1)
-        guard lastIdx >= max(swingWing * 2 + 2, 10) else {
+        guard lastIdx >= max(safeWing * 2 + 2, 10) else {
             return ICTAnalysis(
                 swings: [],
                 structureBreaks: [],
@@ -190,21 +191,21 @@ public enum CausalICTDetector {
             )
         }
 
-        // 1. Causal Swing Highs & Lows (confirmed strictly at p + swingWing <= lastIdx)
+        // 1. Causal Swing Highs & Lows (confirmed strictly at p + safeWing <= lastIdx)
         var swings: [SwingPivot] = []
-        let maxPivotIdx = lastIdx - swingWing
-        if maxPivotIdx >= swingWing {
-            for p in swingWing...maxPivotIdx {
+        let maxPivotIdx = lastIdx - safeWing
+        if maxPivotIdx >= safeWing {
+            for p in safeWing...maxPivotIdx {
                 let candidateHigh = candles[p].high
                 let candidateLow = candles[p].low
                 var isHigh = true
                 var isLow = true
-                for k in (p - swingWing)...(p + swingWing) where k != p {
+                for k in (p - safeWing)...(p + safeWing) where k != p {
                     if candles[k].high >= candidateHigh { isHigh = false }
                     if candles[k].low <= candidateLow { isLow = false }
                     if !isHigh && !isLow { break }
                 }
-                let confirmedAt = p + swingWing
+                let confirmedAt = p + safeWing
                 if isHigh {
                     swings.append(SwingPivot(index: p, confirmedAtIndex: confirmedAt, price: candidateHigh, isHigh: true))
                 }
@@ -258,6 +259,8 @@ public enum CausalICTDetector {
         var activeLow: SwingPivot?
         var brokenHighSwingIndices = Set<Int>()
         var brokenLowSwingIndices = Set<Int>()
+        var sweptHighSwingIndices = Set<Int>()
+        var sweptLowSwingIndices = Set<Int>()
         var swingCursor = 0
 
         for i in 0...lastIdx {
@@ -268,10 +271,12 @@ public enum CausalICTDetector {
             }
 
             let bar = candles[i]
+            var didEmitBreakOnBar = false
 
-            // Check Liquidity Sweep of active swing high (wick above, close below)
-            if let sh = activeHigh, sh.confirmedAtIndex < i {
-                if bar.high > sh.price && bar.close < sh.price {
+            // Check Liquidity Sweep & bullish BOS/MSS of active swing high
+            if let sh = activeHigh, sh.confirmedAtIndex < i, !brokenHighSwingIndices.contains(sh.index) {
+                if bar.high > sh.price && bar.close < sh.price && !sweptHighSwingIndices.contains(sh.index) {
+                    sweptHighSwingIndices.insert(sh.index)
                     sweeps.append(
                         LiquiditySweep(
                             reversalDirection: .short,
@@ -282,9 +287,9 @@ public enum CausalICTDetector {
                         )
                     )
                 }
-                // Check closed-candle bullish BOS / MSS
-                if bar.close > sh.price && !brokenHighSwingIndices.contains(sh.index) {
+                if bar.close > sh.price {
                     brokenHighSwingIndices.insert(sh.index)
+                    didEmitBreakOnBar = true
                     let kind: StructureBreakKind = (trendBias == .short) ? .mss : .bos
                     structureBreaks.append(
                         StructureBreak(kind: kind, direction: .long, brokenLevel: sh.price, breakBarIndex: i, brokenSwingIndex: sh.index)
@@ -298,9 +303,10 @@ public enum CausalICTDetector {
                 }
             }
 
-            // Check Liquidity Sweep of active swing low (wick below, close above)
-            if let sl = activeLow, sl.confirmedAtIndex < i {
-                if bar.low < sl.price && bar.close > sl.price {
+            // Check Liquidity Sweep & bearish BOS/MSS of active swing low
+            if let sl = activeLow, sl.confirmedAtIndex < i, !brokenLowSwingIndices.contains(sl.index) {
+                if bar.low < sl.price && bar.close > sl.price && !sweptLowSwingIndices.contains(sl.index) {
+                    sweptLowSwingIndices.insert(sl.index)
                     sweeps.append(
                         LiquiditySweep(
                             reversalDirection: .long,
@@ -311,8 +317,7 @@ public enum CausalICTDetector {
                         )
                     )
                 }
-                // Check closed-candle bearish BOS / MSS
-                if bar.close < sl.price && !brokenLowSwingIndices.contains(sl.index) {
+                if !didEmitBreakOnBar && bar.close < sl.price {
                     brokenLowSwingIndices.insert(sl.index)
                     let kind: StructureBreakKind = (trendBias == .long) ? .mss : .bos
                     structureBreaks.append(

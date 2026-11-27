@@ -39,12 +39,20 @@ public struct OHLCVFetchResult: Sendable {
     public let providerName: String
     public let latencyMs: Double
     public let proxySymbolUsed: String?
+    public let serverDateEpochSeconds: TimeInterval?
 
-    public init(candles: [Candle], providerName: String, latencyMs: Double, proxySymbolUsed: String? = nil) {
+    public init(
+        candles: [Candle],
+        providerName: String,
+        latencyMs: Double,
+        proxySymbolUsed: String? = nil,
+        serverDateEpochSeconds: TimeInterval? = nil
+    ) {
         self.candles = candles
         self.providerName = providerName
         self.latencyMs = latencyMs
         self.proxySymbolUsed = proxySymbolUsed
+        self.serverDateEpochSeconds = serverDateEpochSeconds
     }
 }
 
@@ -89,7 +97,7 @@ public struct CryptoOHLCVRouter: Sendable {
         let order: [CryptoVenue]
         switch primary {
         case .auto, .binanceVision:
-            order = [.binanceVision, .okx, .kraken, .bybit]
+            order = [.binanceVision, .okx, .bybit, .kraken]
         case .okx:
             order = [.okx, .binanceVision, .bybit, .kraken]
         case .bybit:

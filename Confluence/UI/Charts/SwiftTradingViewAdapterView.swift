@@ -165,6 +165,7 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
     public let palette: ConfluencePalette
     public let isDark: Bool
     public let resetTrigger: Int
+    public let showMovingAverages: Bool
     public let onCrosshairChange: (ChartCrosshairReadout?) -> Void
 
     @State private var visibleCount: Double = 60.0
@@ -203,6 +204,7 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
         palette: ConfluencePalette,
         isDark: Bool,
         resetTrigger: Int = 0,
+        showMovingAverages: Bool = true,
         onCrosshairChange: @escaping (ChartCrosshairReadout?) -> Void
     ) {
         self.candles = candles
@@ -214,6 +216,7 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
         self.palette = palette
         self.isDark = isDark
         self.resetTrigger = resetTrigger
+        self.showMovingAverages = showMovingAverages
         self.onCrosshairChange = onCrosshairChange
     }
 
@@ -331,7 +334,7 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
                             let yTop = max(0, min(pricePlotHeight, yFor(zone.top)))
                             let yBot = max(0, min(pricePlotHeight, yFor(zone.bottom)))
                             let rect = CGRect(x: 0, y: min(yTop, yBot), width: plotWidth, height: max(2, abs(yBot - yTop)))
-                            let fillColor: Color = (zone.direction == .long ? palette.longEmerald : palette.shortCrimson)
+                            let fillColor: Color = (zone.direction == .long ? palette.chart.bullCandle.color : palette.chart.bearCandle.color)
                                 .opacity(zone.kind == .orderBlock ? 0.14 : 0.08)
                             context.fill(Path(rect), with: .color(fillColor))
                         }
@@ -340,7 +343,7 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
                         let bodyWidth = max(2.0, min(14.0, stepX * 0.66))
                         for (idx, bar) in visibleSlice.enumerated() {
                             let cx = (CGFloat(idx) + 0.5) * stepX
-                            let color = bar.isBullish ? palette.longEmerald : palette.shortCrimson
+                            let color = bar.isBullish ? palette.chart.bullCandle.color : palette.chart.bearCandle.color
 
                             let hiY = max(0, min(pricePlotHeight, yFor(bar.high)))
                             let loY = max(0, min(pricePlotHeight, yFor(bar.low)))
@@ -372,32 +375,34 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
                             }
                         }
 
-                        // 5. Moving Averages (MA20 gold, MA50 muted slate) on top pane
-                        func drawPriceCurve(_ values: [Double?], color: Color) {
-                            var path = Path()
-                            var started = false
-                            for (i, val) in values.enumerated() {
-                                guard let val, val.isFinite else { continue }
-                                let y = yFor(val)
-                                guard y >= -20, y <= pricePlotHeight + 20 else {
-                                    started = false
-                                    continue
+                        // 5. Moving Averages (MA20 / MA50) on top pane
+                        if showMovingAverages {
+                            func drawPriceCurve(_ values: [Double?], color: Color) {
+                                var path = Path()
+                                var started = false
+                                for (i, val) in values.enumerated() {
+                                    guard let val, val.isFinite else { continue }
+                                    let y = yFor(val)
+                                    guard y >= -20, y <= pricePlotHeight + 20 else {
+                                        started = false
+                                        continue
+                                    }
+                                    let pt = CGPoint(x: (CGFloat(i) + 0.5) * stepX, y: max(0, min(pricePlotHeight, y)))
+                                    if !started {
+                                        path.move(to: pt)
+                                        started = true
+                                    } else {
+                                        path.addLine(to: pt)
+                                    }
                                 }
-                                let pt = CGPoint(x: (CGFloat(i) + 0.5) * stepX, y: max(0, min(pricePlotHeight, y)))
-                                if !started {
-                                    path.move(to: pt)
-                                    started = true
-                                } else {
-                                    path.addLine(to: pt)
-                                }
+                                context.stroke(path, with: .color(color.opacity(0.88)), lineWidth: 1.2)
                             }
-                            context.stroke(path, with: .color(color.opacity(0.88)), lineWidth: 1.2)
+                            drawPriceCurve(prepared.ma20, color: palette.chart.ema20.color)
+                            drawPriceCurve(prepared.ma50, color: palette.chart.ema50.color)
                         }
-                        drawPriceCurve(prepared.ma20, color: palette.champagneGold)
-                        drawPriceCurve(prepared.ma50, color: palette.macroIceBlue)
 
                         // 6. Volume MA(5) & MA(10) curves on bottom pane
-                        if prepared.maxVolume > 0 {
+                        if showMovingAverages && prepared.maxVolume > 0 {
                             let usableVolH = max(4.0, volumeHeight - 16.0)
                             func drawVolCurve(_ values: [Double?], color: Color) {
                                 var path = Path()
@@ -416,12 +421,12 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
                                 }
                                 context.stroke(path, with: .color(color.opacity(0.85)), lineWidth: 1.0)
                             }
-                            drawVolCurve(prepared.volMA5, color: palette.champagneGold)
-                            drawVolCurve(prepared.volMA10, color: palette.macroIceBlue)
+                            drawVolCurve(prepared.volMA5, color: palette.chart.ema20.color)
+                            drawVolCurve(prepared.volMA10, color: palette.chart.ema50.color)
                         }
 
                         // 7. Signal, Trap & Wall Horizontal Lines with Right-Axis Colored Pills
-                        func drawLevel(_ price: Double?, label: String, color: Color, dash: [CGFloat]) {
+                        func drawLevel(_ price: Double?, label: String, color: Color, ink: Color, dash: [CGFloat]) {
                             guard let price, price.isFinite, price >= lowBound, price <= highBound else { return }
                             let y = yFor(price)
                             var line = Path()
@@ -438,30 +443,30 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
                             context.fill(Path(roundedRect: tagRect, cornerRadius: 3), with: .color(color))
                             let tagText = Text("\(label) \(pricePrecision.format(price))")
                                 .font(.system(size: 7.5, weight: .bold).monospacedDigit())
-                                .foregroundStyle(.white)
+                                .foregroundStyle(ink)
                             context.draw(tagText, at: CGPoint(x: tagRect.midX, y: tagRect.midY), anchor: .center)
                         }
 
                         for trap in overlayModel.traps where trap.isActionable {
-                            drawLevel(trap.price, label: "TRAP", color: palette.trapAmber, dash: [4, 3])
+                            drawLevel(trap.price, label: "TRAP", color: palette.chart.trap.color, ink: palette.onAccentInk, dash: [4, 3])
                         }
                         if overlayModel.marketClass == .crypto, let of = overlayModel.orderFlowSummary {
                             if of.bidWallConfirmed {
-                                drawLevel(of.bidWallPrice, label: "BID", color: palette.longEmerald.opacity(0.85), dash: [2, 3])
+                                drawLevel(of.bidWallPrice, label: "BID", color: palette.chart.tp1.color.opacity(0.88), ink: palette.onDestructiveInk, dash: [2, 3])
                             }
                             if of.askWallConfirmed {
-                                drawLevel(of.askWallPrice, label: "ASK", color: palette.shortCrimson.opacity(0.85), dash: [2, 3])
+                                drawLevel(of.askWallPrice, label: "ASK", color: palette.chart.stopLoss.color.opacity(0.88), ink: palette.onDestructiveInk, dash: [2, 3])
                             }
                         }
-                        drawLevel(overlayModel.entryPrice, label: "E", color: palette.champagneGold, dash: [5, 3])
-                        drawLevel(overlayModel.stopLoss, label: "SL", color: palette.shortCrimson, dash: [])
-                        drawLevel(overlayModel.takeProfit1, label: "T1", color: palette.longEmerald, dash: [])
+                        drawLevel(overlayModel.entryPrice, label: "E", color: palette.chart.entry.color, ink: palette.onAccentInk, dash: [5, 3])
+                        drawLevel(overlayModel.stopLoss, label: "SL", color: palette.chart.stopLoss.color, ink: palette.onDestructiveInk, dash: [])
+                        drawLevel(overlayModel.takeProfit1, label: "T1", color: palette.chart.tp1.color, ink: palette.onDestructiveInk, dash: [])
                         if overlayModel.isTP2Enabled {
-                            drawLevel(overlayModel.takeProfit2, label: "T2", color: palette.longEmerald, dash: [3, 3])
+                            drawLevel(overlayModel.takeProfit2, label: "T2", color: palette.chart.tp2.color, ink: palette.onDestructiveInk, dash: [3, 3])
                         }
                         if let lp = overlayModel.livePrice {
-                            let liveColor = lp >= refClose ? palette.longEmerald : palette.shortCrimson
-                            drawLevel(lp, label: "LIVE", color: liveColor, dash: [2, 2])
+                            let liveColor = lp >= refClose ? palette.chart.bullCandle.color : palette.chart.bearCandle.color
+                            drawLevel(lp, label: "LIVE", color: liveColor, ink: palette.onDestructiveInk, dash: [2, 2])
                         }
 
                         // 7b. Trade Replay Entry / Exit Markers
