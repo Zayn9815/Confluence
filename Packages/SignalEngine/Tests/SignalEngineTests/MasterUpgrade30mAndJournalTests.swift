@@ -256,7 +256,7 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
         // Hit TP2 (107.0) -> WIN (TP2)
         t1 = SignalJournalEngine.evaluateLiveTick(entry: t1, livePrice: 107.5, now: created + 2_400)
         XCTAssertEqual(t1.status, .winTP2)
-        XCTAssertEqual(t1.realizedR ?? 0, 3.5, accuracy: 1e-6)
+        XCTAssertEqual(t1.realizedR ?? 0, 3.425, accuracy: 1e-6)
 
         // 3. Locked WIN pullback to SL/breakeven MUST lock as .winTP1 and NEVER flip to .loss
         guard var pullbackTrade = SignalJournalEngine.createEntry(from: longSig, section: .strongSignals, currentPrice: 100.0, now: created) else {
@@ -270,7 +270,7 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
         pullbackTrade = SignalJournalEngine.evaluateLiveTick(entry: pullbackTrade, livePrice: 96.0, now: created + 1_200)
         XCTAssertEqual(pullbackTrade.status, .winTP1)
         XCTAssertNotEqual(pullbackTrade.status, .loss)
-        XCTAssertEqual(pullbackTrade.realizedR ?? 0, 2.0, accuracy: 1e-6)
+        XCTAssertEqual(pullbackTrade.realizedR ?? 0, 1.925, accuracy: 1e-6)
 
         // 4. Runner 2x-expiry lock (30m pending = 6h, runner = 12h)
         guard var runnerExp = SignalJournalEngine.createEntry(from: longSig, section: .strongSignals, currentPrice: 100.0, now: created) else {
@@ -312,7 +312,7 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
             now: barOpen + 3_600
         )
         XCTAssertEqual(reconciledLoss.status, .loss)
-        XCTAssertEqual(reconciledLoss.realizedR, -1.0)
+        XCTAssertEqual(reconciledLoss.realizedR ?? 0, -1.075, accuracy: 1e-6)
 
         //    - Same-candle TP2 + breakeven pullback while .winTrackingTP2 -> conservative .winTP1 (never .loss)
         guard var trackingReconcile = SignalJournalEngine.createEntry(from: longSig, section: .strongSignals, currentPrice: 100.0, now: created) else {
@@ -386,10 +386,11 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
         XCTAssertEqual(shortBehind.status, .live)
         XCTAssertEqual(shortBehind.liveRMultiple, -0.50, accuracy: 1e-6)
 
-        // Reaching SL (71.51) MUST count as .loss (-1.0R)
+        // Reaching SL (71.51) MUST count as .loss (-1.0R net of stocks defaultRoundTripCostBps)
+        let shortBehindCostR = (MarketClass.stocks.defaultRoundTripCostBps / 100.0) / ((0.10 / 71.41) * 100.0)
         shortBehind = SignalJournalEngine.evaluateLiveTick(entry: shortBehind, livePrice: 71.51, now: created + 240)
         XCTAssertEqual(shortBehind.status, .loss)
-        XCTAssertEqual(shortBehind.realizedR ?? 0, -1.0, accuracy: 1e-9)
+        XCTAssertEqual(shortBehind.realizedR ?? 0, -1.0 - shortBehindCostR, accuracy: 1e-6)
         XCTAssertTrue(shortBehind.status.isCountedLoss)
 
         // 2. SHORT filled behind entry at 71.41 -> hits TP1 (70.90) -> exact R anchored to 71.41 (5.10R)
@@ -404,7 +405,7 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
         }
         shortWin = SignalJournalEngine.evaluateLiveTick(entry: shortWin, livePrice: 70.90, now: created + 600)
         XCTAssertEqual(shortWin.status, .winTrackingTP2)
-        XCTAssertEqual(shortWin.realizedR ?? 0, 5.10, accuracy: 1e-6)
+        XCTAssertEqual(shortWin.realizedR ?? 0, 5.10 - shortBehindCostR, accuracy: 1e-6)
         shortWin = SignalJournalEngine.evaluateLiveTick(entry: shortWin, livePrice: 71.35, now: created + 900)
         XCTAssertEqual(shortWin.status, .winTrackingTP2, "Pullback above entryMid 71.33 but below actual fill 71.41 must keep runner open")
         shortWin = SignalJournalEngine.evaluateLiveTick(entry: shortWin, livePrice: 71.41, now: created + 1_200)
@@ -433,9 +434,10 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
         XCTAssertEqual(longBehind.status, .live)
         XCTAssertEqual(longBehind.fillPrice ?? 0, 99.0, accuracy: 1e-9)
         XCTAssertEqual(longBehind.liveRMultiple, 0.0, accuracy: 1e-9)
+        let longBehindCostR = (MarketClass.crypto.defaultRoundTripCostBps / 100.0) / ((1.0 / 99.0) * 100.0)
         longBehind = SignalJournalEngine.evaluateLiveTick(entry: longBehind, livePrice: 98.0, now: created + 300)
         XCTAssertEqual(longBehind.status, .loss)
-        XCTAssertEqual(longBehind.realizedR ?? 0, -1.0, accuracy: 1e-9)
+        XCTAssertEqual(longBehind.realizedR ?? 0, -1.0 - longBehindCostR, accuracy: 1e-6)
 
         // 4. SHORT .pending (price ahead of entry toward TP1 at 71.15):
         //    - Stays .pending while below entry (71.25)
@@ -463,9 +465,10 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
         XCTAssertEqual(filledBehindTick.fillPrice ?? 0, 71.41, accuracy: 1e-9)
         XCTAssertEqual(filledBehindTick.liveRMultiple, 0.0, accuracy: 1e-9)
 
+        let shortMidCostR = (MarketClass.stocks.defaultRoundTripCostBps / 100.0) / ((0.18 / 71.33) * 100.0)
         let gappedPastSLTick = SignalJournalEngine.evaluateLiveTick(entry: shortPendingBase, livePrice: 71.55, now: created + 120)
         XCTAssertEqual(gappedPastSLTick.status, .loss, "Jumping from pending past SL must fill and count as .loss, not .expired")
-        XCTAssertEqual(gappedPastSLTick.realizedR ?? 0, -1.0, accuracy: 1e-9)
+        XCTAssertEqual(gappedPastSLTick.realizedR ?? 0, -1.0 - shortMidCostR, accuracy: 1e-6)
 
         // 5. LONG .pending (price ahead at 101.0) dropping straight behind entry (99.0) or past SL (97.5)
         guard let longPendingBase = SignalJournalEngine.createEntry(
@@ -504,7 +507,7 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
             now: barOpen + 10_800
         )
         XCTAssertEqual(reconciledLossAfterBehindFill.status, .loss)
-        XCTAssertEqual(reconciledLossAfterBehindFill.realizedR ?? 0, -1.0, accuracy: 1e-9)
+        XCTAssertEqual(reconciledLossAfterBehindFill.realizedR ?? 0, -1.0 - shortBehindCostR, accuracy: 1e-6)
 
         let behindBarImmediateSL = makeBar(openTime: barOpen + 3_600, step: 3_600, open: 71.41, high: 71.55, low: 71.38, close: 71.52)
         let reconciledImmediateSL = SignalJournalEngine.reconcile(
@@ -554,7 +557,7 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
             now: created
         )
         XCTAssertEqual(alreadyBreached?.status, .loss)
-        XCTAssertEqual(alreadyBreached?.realizedR ?? 0, -1.0, accuracy: 1e-9)
+        XCTAssertEqual(alreadyBreached?.realizedR ?? 0, -1.0 - shortMidCostR, accuracy: 1e-6)
     }
 
     // MARK: - 3. OrderFlowNarrativeBuilder Plain-English Verdict, Wall Map & REST Honesty
