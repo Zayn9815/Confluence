@@ -39,14 +39,13 @@
   - Killzones anchor strictly to `Europe/London` (London `07:00–10:00`), `America/New_York` (NY `07:00–10:00`, London Close `10:00–12:00`), and `UTC` (Asian `00:00–07:00`, yielding `06:00 UTC` to London during BST).
   - Algorithmic NYSE full holidays + 13:00 ET early closes (Gregorian Easter / Good Friday + weekend observance rules). Index CFDs (`US500`, `NAS100`) and Metals (`XAU/USD`) treat Good Friday, Christmas, and New Year's Day as closed, and US early closes as closed/limited after 13:00 ET.
 - **Signal Fill Lifecycle & Pessimistic Same-Bar Resolution (`PassiveOutcomeEvaluator`):**
-  - Signals start `.pending` and must intersect `[entryLow, entryHigh]` within the timeframe fill window (`15m: 16`, `1H: 12`, `4H: 6`, `1D: 3` bars). Pre-fill close beyond SL or TP1 touch without fill marks `.invalidated`; fill-window expiry marks `.notFilled`. Both are excluded from the headline Win Rate denominator.
+  - Signals start `.pending` and must intersect `[entryLow, entryHigh]` within the timeframe fill window (`15m: 16`, `30m: 12`, `1H: 12`, `4H: 6`, `1D: 3` bars). Pre-fill close beyond SL or TP1 touch without fill marks `.invalidated`; fill-window expiry marks `.notFilled`. Both are excluded from the headline Win Rate denominator.
   - **Fill-Bar Rule:** On the fill bar itself, check **SL only** (pessimistic). TP1/TP2 checks begin strictly on the **next closed bar**.
   - **Same-Bar Post-Fill Rule:** If a subsequent bar touches both SL and TP, resolve pessimistically as **SL first** (unless TP1 was already hit on a strictly earlier bar).
   - Pre-v1.4 records lacking `lifecycleStatus` decode as `legacy-immediate-fill` and are excluded from the fixed v1.4 headline Win Rate (`CalibrationFilterConfig.headlineFixed`).
-- **Paper-Only Demo Wallet (`DemoWalletEngine`):**
-  - Strictly paper-only simulation — never executes real brokerage orders and never invents bid/ask spreads.
-  - Market orders are blocked when quote age > 60s (unless explicit stale override) or when `SessionCalendar` reports the market closed (Limit order suggested instead).
-  - The same pessimistic **fill-bar SL-only** and **same-bar SL-first** rules apply to Demo Wallet closed-bar reconciliation.
+- **Automatic Signal Journal (`SignalJournalEngine`):**
+  - 100% automatic tracking across 3 sections (`Strong Signals`, `Weak & Filtered`, `Trap Alerts`) with zero manual trade placement.
+  - Applies the same causal fill-window, **fill-bar SL-only**, and pessimistic **same-bar SL-first** rules as `PassiveOutcomeEvaluator`, preserving the locked-WIN runner invariant after TP1.
 - **Score Honesty & Display-Only Calibration (`ConfidenceCalibrator`):**
   - Raw confluence scores (`0–100`) are labeled `Score` (not win probability) until `N >= 100` resolved filled trades activate walk-forward Platt scaling.
   - The `minimumConfidencePercent` gate ALWAYS evaluates the **RAW score**; calibrated probability is strictly display-only.
@@ -59,10 +58,10 @@
 - Pinned dependencies in `project.yml`:
   - `EmergeTools/Pow` pinned to commit `1b4b1dda28c50b95f0872927ee2226fe8b58950e` (fixes Swift 6.1+ `.pi` ambiguity in `1.0.5`).
   - `exyte/PopupView` from `5.0.9`.
-  - `tradingview/LightweightChartsIOS` from `5.2.0` (product `LightweightCharts`, Apache 2.0 attribution required in Settings -> About).
+  - `DGCharts` (`ChartsOrg/Charts`) and `CandleKit` (`CandleKit` + `CandleKitCore`) for native full-screen candlestick rendering.
   - Keychain storage uses native Swift 6 `Security.framework` (`KeychainStore`) — zero external dependency, no `unsafeFlags`.
   - Scan loading skeletons use native SwiftUI `NativeShimmerModifier` (honors `@Environment(\.accessibilityReduceMotion)` — zero third-party shimmer dependency).
-- **Battery:** Foreground-only live price sockets (`LivePriceService` disconnects on `scenePhase != .active`, max 8 symbols LRU, Twelve Data strictly excluded), zero continuous idle animations, `LazyVStack` on feeds, pure SwiftUI `Canvas` for Signal Card mini-charts (throttled <= 1 Hz), `LightweightCharts` & `TradingViewWidgetView` instantiated lazily ONLY on full-screen sheet with clean teardown.
+- **Battery:** Foreground-only live price sockets (`LivePriceService` disconnects on `scenePhase != .active`, max 8 symbols LRU, Twelve Data strictly excluded), zero continuous idle animations, `LazyVStack` on feeds, pure SwiftUI `Canvas` for Signal Card mini-charts (throttled <= 1 Hz), `CandleKit`, `DGCharts`, `SwiftTradingViewAdapterView`, and `TradingViewWebAdapterView` instantiated lazily ONLY on full-screen sheet with clean teardown.
 - **Audio:** Custom `.caf` files live at the root of `Confluence.app`. Use `AVAudioSession.Category.ambient` with `.mixWithOthers` so hardware mute switch is always respected.
 
 ## 5. Verification Checklist Before Shipping
