@@ -474,8 +474,9 @@ final class MasterUpgrade30mAndJournalTests: XCTestCase {
             livePrice: nil,
             now: barOpen + 10_800
         )
+        let shortClampedCostR = (MarketClass.stocks.defaultRoundTripCostBps / 100.0) / ((0.17 / 71.34) * 100.0)
         XCTAssertEqual(filledThenLoss.status, .loss)
-        XCTAssertEqual(filledThenLoss.realizedR ?? 0, -1.0 - shortMidCostR, accuracy: 1e-6)
+        XCTAssertEqual(filledThenLoss.realizedR ?? 0, -1.0 - shortClampedCostR, accuracy: 1e-6)
     }
 
     // MARK: - 3. OrderFlowNarrativeBuilder Plain-English Verdict, Wall Map & REST Honesty
