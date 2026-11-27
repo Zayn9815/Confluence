@@ -163,7 +163,6 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
     public let timeframe: Timeframe
     public let pricePrecision: ChartPricePrecision
     public let palette: ConfluencePalette
-    public let isDark: Bool
     public let resetTrigger: Int
     public let onCrosshairChange: (ChartCrosshairReadout?) -> Void
 
@@ -201,7 +200,6 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
         timeframe: Timeframe,
         pricePrecision: ChartPricePrecision,
         palette: ConfluencePalette,
-        isDark: Bool,
         resetTrigger: Int = 0,
         onCrosshairChange: @escaping (ChartCrosshairReadout?) -> Void
     ) {
@@ -212,7 +210,6 @@ public struct SwiftTradingViewAdapterView: ConfluenceChartAdapter {
         self.timeframe = timeframe
         self.pricePrecision = pricePrecision
         self.palette = palette
-        self.isDark = isDark
         self.resetTrigger = resetTrigger
         self.onCrosshairChange = onCrosshairChange
     }

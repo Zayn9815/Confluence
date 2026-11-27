@@ -143,7 +143,6 @@ public protocol ConfluenceChartAdapter: View {
     var timeframe: Timeframe { get }
     var pricePrecision: ChartPricePrecision { get }
     var palette: ConfluencePalette { get }
-    var isDark: Bool { get }
     var resetTrigger: Int { get }
     var onCrosshairChange: (ChartCrosshairReadout?) -> Void { get }
 }

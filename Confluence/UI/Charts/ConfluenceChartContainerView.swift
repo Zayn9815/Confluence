@@ -15,9 +15,9 @@ public struct ConfluenceChartContainerView: View {
     public let pricePrecision: ChartPricePrecision
     public let timeframe: Timeframe
     public let palette: ConfluencePalette
-    public let isDark: Bool
     @Binding public var tradingViewPreferDesktop: Bool
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var crosshairReadout: ChartCrosshairReadout? = nil
 
     public init(
@@ -31,7 +31,6 @@ public struct ConfluenceChartContainerView: View {
         pricePrecision: ChartPricePrecision,
         timeframe: Timeframe,
         palette: ConfluencePalette,
-        isDark: Bool,
         tradingViewPreferDesktop: Binding<Bool> = .constant(false)
     ) {
         self.selectedEngine = selectedEngine
@@ -44,7 +43,6 @@ public struct ConfluenceChartContainerView: View {
         self.pricePrecision = pricePrecision
         self.timeframe = timeframe
         self.palette = palette
-        self.isDark = isDark
         self._tradingViewPreferDesktop = tradingViewPreferDesktop
     }
 
@@ -71,7 +69,6 @@ public struct ConfluenceChartContainerView: View {
                     timeframe: timeframe,
                     pricePrecision: pricePrecision,
                     palette: palette,
-                    isDark: isDark,
                     resetTrigger: fitRequestToken,
                     onCrosshairChange: { readout in
                         crosshairReadout = readout
@@ -88,7 +85,6 @@ public struct ConfluenceChartContainerView: View {
                     timeframe: timeframe,
                     pricePrecision: pricePrecision,
                     palette: palette,
-                    isDark: isDark,
                     resetTrigger: fitRequestToken,
                     onCrosshairChange: { readout in
                         crosshairReadout = readout
@@ -105,7 +101,6 @@ public struct ConfluenceChartContainerView: View {
                     timeframe: timeframe,
                     pricePrecision: pricePrecision,
                     palette: palette,
-                    isDark: isDark,
                     resetTrigger: fitRequestToken,
                     onCrosshairChange: { readout in
                         crosshairReadout = readout
@@ -118,7 +113,7 @@ public struct ConfluenceChartContainerView: View {
                     symbol: symbol,
                     timeframe: timeframe,
                     palette: palette,
-                    isDark: isDark,
+                    isDark: colorScheme == .dark,
                     preferDesktop: $tradingViewPreferDesktop
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

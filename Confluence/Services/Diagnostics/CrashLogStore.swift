@@ -65,6 +65,21 @@ private final class MetricKitSubscriberBridge: NSObject, MXMetricManagerSubscrib
     }
 }
 
+// MARK: - Shared App Version & Build Helper
+
+public enum ConfluenceAppInfo {
+    public nonisolated static let fallbackVersion = "1.6.0"
+    public nonisolated static let fallbackBuild = "6"
+
+    public nonisolated static var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? fallbackVersion
+    }
+
+    public nonisolated static var build: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? fallbackBuild
+    }
+}
+
 // MARK: - Native Crash Log Store
 
 @MainActor
@@ -85,11 +100,11 @@ public final class CrashLogStore {
     }
 
     public var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.0"
+        ConfluenceAppInfo.version
     }
 
     public var appBuild: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "4"
+        ConfluenceAppInfo.build
     }
 
     /// Starts native MetricKit diagnostic ingestion, imports any pending crash breadcrumbs from
@@ -269,8 +284,8 @@ public final class CrashLogStore {
 
     public nonisolated static func parseMetricKitDiagnosticJSON(
         _ data: Data,
-        fallbackVersion: String = "1.3.0",
-        fallbackBuild: String = "4"
+        fallbackVersion: String = ConfluenceAppInfo.fallbackVersion,
+        fallbackBuild: String = ConfluenceAppInfo.fallbackBuild
     ) -> [CrashLogSnapshot] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return []

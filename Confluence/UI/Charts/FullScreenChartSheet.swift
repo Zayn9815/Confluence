@@ -471,7 +471,6 @@ public struct FullScreenChartSheet: View {
                             pricePrecision: prec,
                             timeframe: session.timeframe,
                             palette: palette,
-                            isDark: colorScheme == .dark,
                             tradingViewPreferDesktop: Binding(
                                 get: { coordinator?.settings.payload.tradingViewPreferDesktop ?? false },
                                 set: { newVal in

@@ -12,7 +12,7 @@ public struct SettingsTabView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
+        ConfluenceAppInfo.version
     }
 
     private var themeSummary: String {

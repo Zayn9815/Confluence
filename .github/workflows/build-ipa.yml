@@ -2,7 +2,7 @@ name: Build Unsigned Confluence IPA
 
 on:
   push:
-    branches: ["main", "feat/**"]
+    branches: ["main", "feat/**", "upgrade/**"]
     tags: ["v*"]
   pull_request:
     branches: ["main"]
@@ -33,7 +33,7 @@ jobs:
 
       - name: Run Pure Swift SignalEngine Unit & Walk-Forward Tests
         run: |
-          swift test --package-path Packages/SignalEngine --enable-test-discovery
+          swift test --package-path Packages/SignalEngine -Xswiftc -warnings-as-errors
 
       - name: Install XcodeGen & Generate Confluence.xcodeproj
         run: |

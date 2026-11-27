@@ -16,7 +16,6 @@ public struct DGChartsAdapterView: ConfluenceChartAdapter {
     public let timeframe: Timeframe
     public let pricePrecision: ChartPricePrecision
     public let palette: ConfluencePalette
-    public let isDark: Bool
     public let resetTrigger: Int
     public let onCrosshairChange: (ChartCrosshairReadout?) -> Void
 
@@ -31,7 +30,6 @@ public struct DGChartsAdapterView: ConfluenceChartAdapter {
         timeframe: Timeframe,
         pricePrecision: ChartPricePrecision,
         palette: ConfluencePalette,
-        isDark: Bool,
         resetTrigger: Int = 0,
         onCrosshairChange: @escaping (ChartCrosshairReadout?) -> Void
     ) {
@@ -42,7 +40,6 @@ public struct DGChartsAdapterView: ConfluenceChartAdapter {
         self.timeframe = timeframe
         self.pricePrecision = pricePrecision
         self.palette = palette
-        self.isDark = isDark
         self.resetTrigger = resetTrigger
         self.onCrosshairChange = onCrosshairChange
     }
@@ -56,7 +53,7 @@ public struct DGChartsAdapterView: ConfluenceChartAdapter {
                 replayMarkers: replayMarkers,
                 timeframe: timeframe,
                 pricePrecision: pricePrecision,
-                isDark: isDark,
+                palette: palette,
                 yScaleMultiplier: yScaleMultiplier,
                 resetTrigger: resetTrigger,
                 onCrosshairChange: onCrosshairChange
@@ -145,7 +142,7 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
     let replayMarkers: [ChartReplayMarker]
     let timeframe: Timeframe
     let pricePrecision: ChartPricePrecision
-    let isDark: Bool
+    let palette: ConfluencePalette
     let yScaleMultiplier: Double
     let resetTrigger: Int
     let onCrosshairChange: (ChartCrosshairReadout?) -> Void
@@ -155,7 +152,6 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
         var bars: [Candle] = []
         var lastSeriesKey: String = ""
         var lastOverlayKey: String = ""
-        var lastThemeDark: Bool?
         var lastResetTrigger: Int = 0
         var yScaleMultiplier: Double = 1.0
         weak var chartView: CandleStickChartView?
@@ -275,8 +271,7 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
         chart.rightAxis.drawLimitLinesBehindDataEnabled = false
         chart.rightAxis.valueFormatter = coord.yFormatter
 
-        applyTheme(to: chart, isDark: isDark)
-        coord.lastThemeDark = isDark
+        applyTheme(to: chart, palette: palette)
         updateDataAndOverlays(on: chart, coordinator: coord, forceViewportReset: true)
         return chart
     }
@@ -287,10 +282,7 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
         coord.onCrosshairChange = onCrosshairChange
         coord.yFormatter.precision = pricePrecision
 
-        if coord.lastThemeDark != isDark {
-            coord.lastThemeDark = isDark
-            applyTheme(to: uiView, isDark: isDark)
-        }
+        applyTheme(to: uiView, palette: palette)
 
         let scaleChanged = abs(coord.yScaleMultiplier - yScaleMultiplier) > 1e-4
         coord.yScaleMultiplier = yScaleMultiplier
@@ -318,16 +310,10 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
         uiView.delegate = nil
     }
 
-    private func applyTheme(to chart: CandleStickChartView, isDark: Bool) {
-        let bg = isDark
-            ? UIColor(red: 11.0 / 255.0, green: 13.0 / 255.0, blue: 17.0 / 255.0, alpha: 1.0)
-            : UIColor(red: 244.0 / 255.0, green: 245.0 / 255.0, blue: 247.0 / 255.0, alpha: 1.0)
-        let ink = isDark
-            ? UIColor(red: 156.0 / 255.0, green: 167.0 / 255.0, blue: 186.0 / 255.0, alpha: 1.0)
-            : UIColor(red: 71.0 / 255.0, green: 85.0 / 255.0, blue: 105.0 / 255.0, alpha: 1.0)
-        let grid = isDark
-            ? UIColor(red: 27.0 / 255.0, green: 34.0 / 255.0, blue: 48.0 / 255.0, alpha: 0.7)
-            : UIColor(red: 226.0 / 255.0, green: 232.0 / 255.0, blue: 240.0 / 255.0, alpha: 0.85)
+    private func applyTheme(to chart: CandleStickChartView, palette: ConfluencePalette) {
+        let bg = UIColor(palette.canvas)
+        let ink = UIColor(palette.secondaryInk)
+        let grid = UIColor(palette.border).withAlphaComponent(0.75)
 
         chart.backgroundColor = bg
         chart.gridBackgroundColor = bg
@@ -386,16 +372,12 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
         dataSet.drawValuesEnabled = false
         dataSet.shadowColorSameAsCandle = true
         dataSet.shadowWidth = 1.0
-        dataSet.decreasingColor = isDark
-            ? UIColor(red: 239.0 / 255.0, green: 68.0 / 255.0, blue: 68.0 / 255.0, alpha: 1.0)
-            : UIColor(red: 185.0 / 255.0, green: 28.0 / 255.0, blue: 28.0 / 255.0, alpha: 1.0)
+        dataSet.decreasingColor = UIColor(palette.shortCrimson)
         dataSet.decreasingFilled = true
-        dataSet.increasingColor = isDark
-            ? UIColor(red: 16.0 / 255.0, green: 185.0 / 255.0, blue: 129.0 / 255.0, alpha: 1.0)
-            : UIColor(red: 21.0 / 255.0, green: 128.0 / 255.0, blue: 61.0 / 255.0, alpha: 1.0)
+        dataSet.increasingColor = UIColor(palette.longEmerald)
         dataSet.increasingFilled = true
-        dataSet.neutralColor = UIColor(red: 148.0 / 255.0, green: 163.0 / 255.0, blue: 184.0 / 255.0, alpha: 1.0)
-        dataSet.highlightColor = UIColor(red: 222.0 / 255.0, green: 184.0 / 255.0, blue: 83.0 / 255.0, alpha: 0.75)
+        dataSet.neutralColor = UIColor(palette.macroIceBlue)
+        dataSet.highlightColor = UIColor(palette.champagneGold).withAlphaComponent(0.75)
 
         chart.data = CandleChartData(dataSet: dataSet)
 
@@ -420,10 +402,11 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
                 rightAxis.addLimitLine(line)
             }
 
-            let goldColor = UIColor(red: 222.0 / 255.0, green: 184.0 / 255.0, blue: 83.0 / 255.0, alpha: 1.0)
-            let crimsonColor = UIColor(red: 239.0 / 255.0, green: 68.0 / 255.0, blue: 68.0 / 255.0, alpha: 1.0)
-            let emeraldColor = UIColor(red: 16.0 / 255.0, green: 185.0 / 255.0, blue: 129.0 / 255.0, alpha: 1.0)
-            let amberColor = UIColor(red: 245.0 / 255.0, green: 158.0 / 255.0, blue: 11.0 / 255.0, alpha: 1.0)
+            let goldColor = UIColor(palette.champagneGold)
+            let crimsonColor = UIColor(palette.shortCrimson)
+            let emeraldColor = UIColor(palette.longEmerald)
+            let mutedSlateColor = UIColor(palette.macroIceBlue)
+            let amberColor = UIColor(palette.trapAmber)
 
             addLimit(overlayModel.entryPrice, label: "ENTRY", color: goldColor, dashed: true)
             addLimit(overlayModel.stopLoss, label: "SL", color: crimsonColor, dashed: false)
@@ -431,7 +414,10 @@ private struct DGChartsCandlestickRepresentable: UIViewRepresentable {
             if overlayModel.isTP2Enabled {
                 addLimit(overlayModel.takeProfit2, label: "TP2", color: emeraldColor, dashed: true)
             }
-            if let trap = overlayModel.primaryTrap {
+            if let be = overlayModel.breakevenPrice {
+                addLimit(be, label: "BE", color: mutedSlateColor, dashed: true)
+            }
+            for trap in overlayModel.traps where trap.isActionable {
                 addLimit(trap.price, label: trap.label, color: amberColor, dashed: true)
             }
             if overlayModel.marketClass == .crypto, let of = overlayModel.orderFlowSummary {

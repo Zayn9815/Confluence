@@ -23,7 +23,7 @@ public struct DataDiagnosticsAboutSettingsView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
+        ConfluenceAppInfo.version
     }
 
     public var body: some View {

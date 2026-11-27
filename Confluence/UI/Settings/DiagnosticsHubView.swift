@@ -11,11 +11,11 @@ public struct DiagnosticsHubView: View {
     @State private var showResetConfirmation: Bool = false
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.0"
+        ConfluenceAppInfo.version
     }
 
     private var appBuild: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "4"
+        ConfluenceAppInfo.build
     }
 
     public var body: some View {

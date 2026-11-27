@@ -16,7 +16,6 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
     public let timeframe: Timeframe
     public let pricePrecision: ChartPricePrecision
     public let palette: ConfluencePalette
-    public let isDark: Bool
     public let resetTrigger: Int
     public let onCrosshairChange: (ChartCrosshairReadout?) -> Void
 
@@ -29,7 +28,6 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
         timeframe: Timeframe,
         pricePrecision: ChartPricePrecision,
         palette: ConfluencePalette,
-        isDark: Bool,
         resetTrigger: Int = 0,
         onCrosshairChange: @escaping (ChartCrosshairReadout?) -> Void
     ) {
@@ -39,9 +37,17 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
         self.timeframe = timeframe
         self.pricePrecision = pricePrecision
         self.palette = palette
-        self.isDark = isDark
         self.resetTrigger = resetTrigger
         self.onCrosshairChange = onCrosshairChange
+    }
+
+    private func drawingColor(from color: Color, opacity: Double) -> DrawingColor {
+        var r: CGFloat = 0.5
+        var g: CGFloat = 0.5
+        var b: CGFloat = 0.5
+        var a: CGFloat = 1.0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        return DrawingColor(red: Double(r), green: Double(g), blue: Double(b), opacity: opacity)
     }
 
     private var mappedCandles: [CandleKitCore.Candle] {
@@ -83,11 +89,11 @@ public struct CandleKitAdapterView: ConfluenceChartAdapter {
             ))
         }
 
-        let gold = DrawingColor(red: 0.871, green: 0.722, blue: 0.325, opacity: 0.95)
-        let crimson = DrawingColor(red: 0.937, green: 0.267, blue: 0.267, opacity: 0.95)
-        let emerald = DrawingColor(red: 0.063, green: 0.725, blue: 0.506, opacity: 0.95)
-        let mutedSlate = DrawingColor(red: 0.580, green: 0.639, blue: 0.722, opacity: 0.90)
-        let amber = DrawingColor(red: 0.961, green: 0.620, blue: 0.043, opacity: 0.90)
+        let gold = drawingColor(from: palette.champagneGold, opacity: 0.95)
+        let crimson = drawingColor(from: palette.shortCrimson, opacity: 0.95)
+        let emerald = drawingColor(from: palette.longEmerald, opacity: 0.95)
+        let mutedSlate = drawingColor(from: palette.macroIceBlue, opacity: 0.90)
+        let amber = drawingColor(from: palette.trapAmber, opacity: 0.90)
 
         if let entry = overlayModel.entryPrice {
             addLine(price: entry, color: gold, lineWidth: 1.5, dash: [6, 4])

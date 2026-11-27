@@ -9,11 +9,11 @@ public struct AboutDeveloperSettingsView: View {
     private let projectRepositoryURL = URL(string: "https://github.com/Zayn9815/Confluence")!
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
+        ConfluenceAppInfo.version
     }
 
     private var appBuild: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "5"
+        ConfluenceAppInfo.build
     }
 
     public var body: some View {

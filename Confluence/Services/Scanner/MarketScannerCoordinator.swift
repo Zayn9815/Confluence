@@ -82,6 +82,7 @@ public final class MarketScannerCoordinator {
     public var isNotificationInboxPresented: Bool = false
     public var pendingDeepLink: NavigationDeepLink?
     public var highlightedSignalFingerprint: String?
+    public var highlightedNewsEventID: String?
 
     // Scanning, Quota & Diagnostics state
     public var isScanning: Bool = false
@@ -458,13 +459,11 @@ public final class MarketScannerCoordinator {
     }
 
     public func exportBackupArchiveURL() -> URL? {
-        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
-        return BackupArchiveService.exportBackupFile(settings: settings.payload, store: store, appVersion: ver)
+        BackupArchiveService.exportBackupFile(settings: settings.payload, store: store, appVersion: ConfluenceAppInfo.version)
     }
 
     public func exportBackupJSONString() -> String? {
-        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5.0"
-        return BackupArchiveService.exportBackupJSONString(settings: settings.payload, store: store, appVersion: ver)
+        BackupArchiveService.exportBackupJSONString(settings: settings.payload, store: store, appVersion: ConfluenceAppInfo.version)
     }
 
     public func importBackupArchive(from data: Data, mode: BackupImportMode) throws -> BackupImportSummary {

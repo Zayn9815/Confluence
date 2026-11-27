@@ -113,39 +113,66 @@ public struct NewsCalendarTabView: View {
             }
             .padding(.horizontal, 14)
 
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    // Source & Pre-News queue status banner
-                    HStack {
-                        Text("Feed: \(coordinator.calendarSourceLabel)")
-                            .font(.caption2)
-                            .foregroundStyle(palette.tertiaryInk)
-                        Spacer()
-                        Text("\(coordinator.scheduledPreNewsCount) pre-news alerts queued")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(palette.champagneGold)
-                    }
-                    .padding(.horizontal, 4)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        // Source & Pre-News queue status banner
+                        HStack {
+                            Text("Feed: \(coordinator.calendarSourceLabel)")
+                                .font(.caption2)
+                                .foregroundStyle(palette.tertiaryInk)
+                            Spacer()
+                            Text("\(coordinator.scheduledPreNewsCount) pre-news alerts queued")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(palette.champagneGold)
+                        }
+                        .padding(.horizontal, 4)
 
-                    if filteredCalendar.isEmpty {
-                        emptyCard(
-                            icon: "calendar.badge.clock",
-                            title: "No Macro Events Loaded",
-                            body: "Tap refresh to fetch live scheduled economic releases from biquote.io (with cached Forex Factory fallback)."
-                        )
-                    } else {
-                        let nowEpoch = Date().timeIntervalSince1970
-                        ForEach(filteredCalendar) { ev in
-                            calendarEventCard(ev, nowEpoch: nowEpoch)
+                        if filteredCalendar.isEmpty {
+                            emptyCard(
+                                icon: "calendar.badge.clock",
+                                title: "No Macro Events Loaded",
+                                body: "Tap refresh to fetch live scheduled economic releases from biquote.io (with cached Forex Factory fallback)."
+                            )
+                        } else {
+                            let nowEpoch = Date().timeIntervalSince1970
+                            ForEach(filteredCalendar) { ev in
+                                calendarEventCard(ev, nowEpoch: nowEpoch)
+                                    .id(ev.id)
+                            }
                         }
                     }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 16)
                 }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 16)
+                .safeAreaPadding(.bottom, 96)
+                .refreshable {
+                    await coordinator.scanAllMarkets()
+                }
+                .onAppear {
+                    if let targetID = coordinator.highlightedNewsEventID {
+                        scrollToHighlightedNews(targetID, proxy: proxy)
+                    }
+                }
+                .onChange(of: coordinator.highlightedNewsEventID) { _, newID in
+                    if let targetID = newID {
+                        scrollToHighlightedNews(targetID, proxy: proxy)
+                    }
+                }
             }
-            .safeAreaPadding(.bottom, 96)
-            .refreshable {
-                await coordinator.scanAllMarkets()
+        }
+    }
+
+    private func scrollToHighlightedNews(_ eventID: String, proxy: ScrollViewProxy) {
+        subTab = .calendar
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            withAnimation(.easeInOut(duration: 0.35)) {
+                proxy.scrollTo(eventID, anchor: .top)
+            }
+            try? await Task.sleep(for: .seconds(2.2))
+            if coordinator.highlightedNewsEventID == eventID {
+                coordinator.highlightedNewsEventID = nil
             }
         }
     }
@@ -160,6 +187,7 @@ public struct NewsCalendarTabView: View {
             }
         }()
 
+        let isHighlighted = (coordinator.highlightedNewsEventID == ev.id)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -259,6 +287,10 @@ public struct NewsCalendarTabView: View {
         }
         .padding(12)
         .institutionalCard(palette: palette)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(palette.champagneGold, lineWidth: isHighlighted ? 1.8 : 0)
+        )
         .contentShape(Rectangle())
         .onTapGesture {
             selectedAnalysisTarget = .event(ev)

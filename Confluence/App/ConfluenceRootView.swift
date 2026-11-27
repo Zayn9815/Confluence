@@ -88,8 +88,9 @@ public struct ConfluenceRootView: View {
             case .signal(let fingerprint, _, _, _):
                 selectedTab = 0
                 coordinator.highlightedSignalFingerprint = fingerprint
-            case .news:
+            case .news(let eventID):
                 selectedTab = 1
+                coordinator.highlightedNewsEventID = eventID
                 coordinator.pendingDeepLink = nil
             }
         }
