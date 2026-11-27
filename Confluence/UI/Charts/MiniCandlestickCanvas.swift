@@ -13,15 +13,14 @@ public struct MiniCandlestickCanvas: View, Equatable {
     let height: CGFloat
     let livePrice: Double?
 
-    public static func == (lhs: MiniCandlestickCanvas, rhs: MiniCandlestickCanvas) -> Bool {
+    nonisolated public static func == (lhs: MiniCandlestickCanvas, rhs: MiniCandlestickCanvas) -> Bool {
         lhs.height == rhs.height &&
         lhs.livePrice == rhs.livePrice &&
         lhs.levels == rhs.levels &&
         lhs.overlays == rhs.overlays &&
         lhs.candles.count == rhs.candles.count &&
         lhs.candles.last == rhs.candles.last &&
-        lhs.palette.isLight == rhs.palette.isLight &&
-        lhs.palette.isPureBlackAMOLED == rhs.palette.isPureBlackAMOLED &&
+        lhs.palette.chart == rhs.palette.chart &&
         lhs.palette.themePreset == rhs.palette.themePreset
     }
 

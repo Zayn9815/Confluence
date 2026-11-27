@@ -41,7 +41,7 @@ public final class LiveOrderFlowService {
     }
 
     private var streamTask: Task<Void, Never>?
-    private nonisolated(unsafe) var powerModeObserver: NSObjectProtocol?
+    @ObservationIgnored private nonisolated(unsafe) var powerModeObserver: NSObjectProtocol?
     private var isLowPowerMode: Bool = ProcessInfo.processInfo.isLowPowerModeEnabled
     private var lastPublishTime: TimeInterval = 0
     private var sessionGeneration: UInt64 = 0
