@@ -70,8 +70,6 @@ public struct OrderBlock: Codable, Sendable, Equatable, Hashable {
     /// Causally valid only starting from the BOS/MSS break candle index.
     public let validFromIndex: Int
     public let mitigatedAtIndex: Int?
-    /// Nil when OTC volume is unavailable.
-    public let relativeVolume: Double?
 
     public init(
         direction: TradeDirection,
@@ -79,8 +77,7 @@ public struct OrderBlock: Codable, Sendable, Equatable, Hashable {
         bottom: Double,
         originBarIndex: Int,
         validFromIndex: Int,
-        mitigatedAtIndex: Int?,
-        relativeVolume: Double?
+        mitigatedAtIndex: Int?
     ) {
         self.direction = direction
         self.top = top
@@ -88,7 +85,6 @@ public struct OrderBlock: Codable, Sendable, Equatable, Hashable {
         self.originBarIndex = originBarIndex
         self.validFromIndex = validFromIndex
         self.mitigatedAtIndex = mitigatedAtIndex
-        self.relativeVolume = relativeVolume
     }
 
     public var isUnmitigated: Bool { mitigatedAtIndex == nil }
@@ -387,7 +383,7 @@ public enum CausalICTDetector {
                     name: "ICT \(recentBreak.kind.rawValue)",
                     group: .ictSmc,
                     direction: recentBreak.direction,
-                    weight: weights[id] ?? (recentBreak.kind == .mss ? 1.20 : 1.05),
+                    weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: recentBreak.kind == .mss ? .ictMss : .ictBos),
                     historicalWinRate: 0.58,
                     detail: "\(recentBreak.kind.rawValue) \(recentBreak.direction.rawValue.uppercased()) closed past swing level \(priceFmt.format(recentBreak.brokenLevel))."
                 )
@@ -409,7 +405,7 @@ public enum CausalICTDetector {
                     name: "Liquidity Sweep",
                     group: .ictSmc,
                     direction: recentSweep.reversalDirection,
-                    weight: weights[id] ?? 1.25,
+                    weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .ictLiquiditySweep),
                     historicalWinRate: 0.61,
                     detail: "Swept liquidity at \(priceFmt.format(recentSweep.sweptLevel)) and reclaimed inside range."
                 )
@@ -451,7 +447,7 @@ public enum CausalICTDetector {
                     name: fvg.direction == .long ? "Bullish FVG" : "Bearish FVG",
                     group: .ictSmc,
                     direction: fvg.direction,
-                    weight: weights[id] ?? 1.0,
+                    weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .ictFvg),
                     historicalWinRate: 0.57,
                     detail: "Active \(fvg.direction.rawValue) Fair Value Gap [\(priceFmt.format(fvg.bottom)) - \(priceFmt.format(fvg.top))]."
                 )
@@ -489,7 +485,7 @@ public enum CausalICTDetector {
                     name: ob.direction == .long ? "Bullish Order Block" : "Bearish Order Block",
                     group: .ictSmc,
                     direction: ob.direction,
-                    weight: weights[id] ?? 1.10,
+                    weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .ictOrderBlock),
                     historicalWinRate: 0.59,
                     detail: "Institutional \(ob.direction.rawValue) OB [\(priceFmt.format(ob.bottom)) - \(priceFmt.format(ob.top))]."
                 )
@@ -508,7 +504,7 @@ public enum CausalICTDetector {
                             name: "Discount (<50% EQ)",
                             group: .ictSmc,
                             direction: .long,
-                            weight: weights[id] ?? 0.85,
+                            weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .ictDiscountEq),
                             historicalWinRate: 0.55,
                             detail: "Price trading in discount below 50% equilibrium (\(priceFmt.format(eq)))."
                         )
@@ -524,7 +520,7 @@ public enum CausalICTDetector {
                             name: "Premium (>50% EQ)",
                             group: .ictSmc,
                             direction: .short,
-                            weight: weights[id] ?? 0.85,
+                            weight: weights[id] ?? ConfluenceScorer.defaultBaseWeight(for: .ictPremiumEq),
                             historicalWinRate: 0.55,
                             detail: "Price trading in premium above 50% equilibrium (\(priceFmt.format(eq)))."
                         )
@@ -585,29 +581,13 @@ public enum CausalICTDetector {
             }
         }
 
-        // Optional relative volume (nil if OTC volume unavailable)
-        let rvol: Double?
-        if let v = obBar.volume {
-            let lookbackStart = max(0, origin - 20)
-            let vols = candles[lookbackStart..<origin].compactMap(\.volume)
-            if !vols.isEmpty {
-                let avg = vols.reduce(0, +) / Double(vols.count)
-                rvol = avg > 0 ? v / avg : nil
-            } else {
-                rvol = nil
-            }
-        } else {
-            rvol = nil
-        }
-
         return OrderBlock(
             direction: direction,
             top: obBar.high,
             bottom: obBar.low,
             originBarIndex: origin,
             validFromIndex: breakIndex,
-            mitigatedAtIndex: mitigated,
-            relativeVolume: rvol
+            mitigatedAtIndex: mitigated
         )
     }
 }

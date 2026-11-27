@@ -94,7 +94,7 @@ public enum SignalEngine {
         // Compute causal positioning assessment (OKX for Crypto, CFTC COT for FX/Gold/Indices/CME BTC)
         var positioning: PositioningAssessment? = nil
         if let okx = okxDerivatives, config.enabledStrategies.contains(.positioningOkx) {
-            positioning = PositioningAnalyzer.analyzeOKX(snapshot: okx, candles: entrySeries.candles, timeframe: timeframe)
+            positioning = PositioningAnalyzer.analyzeOKX(snapshot: okx, candles: entrySeries.candles, timeframe: timeframe, isLiveEvaluation: isLiveEvaluation)
         }
         if positioning == nil, !cftcCOTRecords.isEmpty, config.enabledStrategies.contains(.positioningCot) {
             positioning = PositioningAnalyzer.analyzeCFTCCOT(records: cftcCOTRecords, asOfEpochSeconds: serverNowEpochSeconds)
@@ -213,8 +213,8 @@ public enum SignalEngine {
         let htfICT: ICTAnalysis?
         let htfBias: TradeDirection
         if htfCandles.count >= 25 {
-            let hICT = CausalICTDetector.analyze(candles: htfCandles, weights: config.historicalReliabilityWeights)
-            let hMom = TrendMomentumDetector.analyze(candles: htfCandles, weights: config.historicalReliabilityWeights)
+            let hICT = CausalICTDetector.analyze(candles: htfCandles, weights: config.historicalReliabilityWeights, enabled: enabled)
+            let hMom = TrendMomentumDetector.analyze(candles: htfCandles, weights: config.historicalReliabilityWeights, enabled: enabled)
             htfICT = hICT
             htfBias = hICT.currentStructureBias != .neutral ? hICT.currentStructureBias : hMom.htfTrendDirection
         } else {
