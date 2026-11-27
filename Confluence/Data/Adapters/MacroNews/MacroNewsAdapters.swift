@@ -390,9 +390,11 @@ public actor BreakingNewsService {
 
     private func fetchFinnhubNews(apiKey: String?) async -> [BreakingNewsItem] {
         guard let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty,
-              let url = URL(string: "https://finnhub.io/api/v1/news?category=general&token=\(key)"),
-              let res = try? await http.send(URLRequest(url: url), maxRetries: 1)
+              let url = URL(string: "https://finnhub.io/api/v1/news?category=general")
         else { return [] }
+        var req = URLRequest(url: url)
+        req.setValue(key, forHTTPHeaderField: "X-Finnhub-Token")
+        guard let res = try? await http.send(req, maxRetries: 1) else { return [] }
 
         struct FHItem: Decodable {
             let id: Int
