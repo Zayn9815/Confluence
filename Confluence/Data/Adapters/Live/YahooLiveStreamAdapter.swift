@@ -156,15 +156,9 @@ public actor YahooLiveStreamAdapter {
     private let session: URLSession
     private var webSocketTask: URLSessionWebSocketTask?
     private var receiveLoopTask: Task<Void, Never>?
-    private var subscribedYahooSymbols: [String] = []
-    private var isConnectedFlag: Bool = false
 
     public init(session: URLSession = .shared) {
         self.session = session
-    }
-
-    public var isConnected: Bool {
-        isConnectedFlag
     }
 
     public func connect(
@@ -175,14 +169,12 @@ public actor YahooLiveStreamAdapter {
         disconnect()
         let cleaned = Array(Set(yahooSymbols.filter { !$0.isEmpty })).sorted()
         guard !cleaned.isEmpty else { return }
-        subscribedYahooSymbols = cleaned
 
         var request = URLRequest(url: Self.endpointURL)
         request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
         let ws = session.webSocketTask(with: request)
         self.webSocketTask = ws
         ws.resume()
-        self.isConnectedFlag = true
 
         let subPayload: [String: Any] = ["subscribe": cleaned]
         if let data = try? JSONSerialization.data(withJSONObject: subPayload),
@@ -200,8 +192,6 @@ public actor YahooLiveStreamAdapter {
         receiveLoopTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
-        isConnectedFlag = false
-        subscribedYahooSymbols = []
     }
 
     private func runReceiveLoop(
@@ -232,7 +222,6 @@ public actor YahooLiveStreamAdapter {
             } catch {
                 guard self.webSocketTask === ws else { return }
                 if !Task.isCancelled {
-                    isConnectedFlag = false
                     await onDisconnect(error.localizedDescription)
                 }
                 return
